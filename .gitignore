@@ -1,0 +1,37 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyc
+.venv/
+venv/
+*.egg-info/
+dist/
+*.log
+*.sqlite
+.db
+
+# ===== Environment =====
+.env
+.env.local
+.env.*.local
+
+# ===== Node / Vite =====
+node_modules/
+dist/
+*.tsbuildinfo
+build-output.log
+
+# ===== IDE =====
+.idea/
+.vscode/
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# ===== Project-specific =====
+1.txt
+后端数据库全流程说明.md

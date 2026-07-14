@@ -1,0 +1,147 @@
+# routes/public.py - 公开接口（无需登录）
+from flask import Blueprint, request, jsonify
+from db import get_db_connection
+import datetime
+
+public_bp = Blueprint('public', __name__)
+
+
+@public_bp.route('/tasks', methods=['GET'])
+def get_all_tasks():
+    """公开任务大厅：所有人可查看，支持按状态筛选"""
+    status_filter = request.args.get('status')  # pending / accepted / in_progress / completed / all
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"code": 500, "message": "数据库连接失败"})
+
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                SELECT
+                    o.order_id,
+                    e.name AS elder_name,
+                    o.service_type,
+                    o.service_time,
+                    o.service_hours,
+                    COALESCE(o.address, e.address) AS address_preview,
+                    o.status,
+                    o.created_at,
+                    CASE WHEN o.volunteer_id IS NOT NULL THEN u.real_name ELSE NULL END AS volunteer_name
+                FROM orders o
+                JOIN elders e ON o.elder_id = e.elder_id
+                LEFT JOIN users u ON o.volunteer_id = u.user_id
+                WHERE o.status != 'cancelled'
+            """
+            params = []
+
+            if status_filter and status_filter != 'all':
+                sql += " AND o.status = %s"
+                params.append(status_filter)
+
+            sql += " ORDER BY o.created_at DESC"
+
+            cursor.execute(sql, tuple(params))
+            orders = cursor.fetchall()
+
+            for o in orders:
+                if isinstance(o.get('service_time'), datetime.datetime):
+                    o['service_time'] = o['service_time'].strftime('%Y-%m-%d %H:%M')
+                if isinstance(o.get('created_at'), datetime.datetime):
+                    o['created_at'] = o['created_at'].strftime('%Y-%m-%d %H:%M')
+
+            # 统计各状态数量
+            cursor.execute("""
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(CASE WHEN status = 'pending' THEN 1 END) AS pending_count,
+                    COUNT(CASE WHEN status IN ('accepted', 'in_progress') THEN 1 END) AS in_progress_count,
+                    COUNT(CASE WHEN status = 'completed' THEN 1 END) AS completed_count
+                FROM orders
+                WHERE status != 'cancelled'
+            """)
+            stats = cursor.fetchone()
+
+            return jsonify({
+                "code": 200,
+                "message": "获取任务列表成功",
+                "data": {
+                    "tasks": orders,
+                    "stats": {
+                        "total": stats['total'],
+                        "pending": stats['pending_count'],
+                        "in_progress": stats['in_progress_count'],
+                        "completed": stats['completed_count']
+                    }
+                }
+            })
+    except Exception as e:
+        return jsonify({"code": 500, "message": f"获取任务列表失败: {str(e)}"})
+    finally:
+        conn.close()
+
+
+@public_bp.route('/tasks/<int:order_id>/delete', methods=['POST'])
+def delete_completed_task(order_id):
+    """定量删除已完成的任务（仅管理员可操作）"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"code": 500, "message": "数据库连接失败"})
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT status FROM orders WHERE order_id = %s", (order_id,))
+            order = cursor.fetchone()
+
+            if not order:
+                return jsonify({"code": 404, "message": "任务不存在"})
+
+            if order['status'] != 'completed':
+                return jsonify({"code": 400, "message": "只能删除已完成的任务"})
+
+            # 先删除关联的评价和时长审核记录
+            cursor.execute("DELETE FROM reviews WHERE order_id = %s", (order_id,))
+            cursor.execute("DELETE FROM volunteer_hour_reviews WHERE order_id = %s", (order_id,))
+            cursor.execute("DELETE FROM orders WHERE order_id = %s", (order_id,))
+            conn.commit()
+
+            return jsonify({"code": 200, "message": "任务删除成功"})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"code": 500, "message": f"删除失败: {str(e)}"})
+    finally:
+        conn.close()
+
+
+@public_bp.route('/tasks/batch-delete', methods=['POST'])
+def batch_delete_completed_tasks():
+    """批量删除已完成的任务（定量删除）"""
+    data = request.get_json()
+    order_ids = data.get('order_ids', [])
+
+    if not order_ids:
+        return jsonify({"code": 400, "message": "请选择要删除的任务"})
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"code": 500, "message": "数据库连接失败"})
+
+    try:
+        with conn.cursor() as cursor:
+            deleted_count = 0
+            for oid in order_ids:
+                cursor.execute("SELECT status FROM orders WHERE order_id = %s", (oid,))
+                order = cursor.fetchone()
+                if order and order['status'] == 'completed':
+                    cursor.execute("DELETE FROM reviews WHERE order_id = %s", (oid,))
+                    cursor.execute("DELETE FROM volunteer_hour_reviews WHERE order_id = %s", (oid,))
+                    cursor.execute("DELETE FROM orders WHERE order_id = %s", (oid,))
+                    deleted_count += 1
+
+            conn.commit()
+            return jsonify({"code": 200, "message": f"成功删除 {deleted_count} 个已完成任务"})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"code": 500, "message": f"批量删除失败: {str(e)}"})
+    finally:
+        conn.close()

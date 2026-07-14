@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Source Han Sans SC', 'Noto Sans SC', system-ui, sans-serif;
+  color: #1e293b;
+  background: #f8fafc;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Elder mode: larger text and icons for elderly users */
+.elder-mode {
+  font-size: 18px;
+}
+.elder-mode .ant-typography {
+  font-size: 1.15em;
+}
+.elder-mode .ant-card {
+  font-size: 18px;
+}
+.elder-mode .ant-btn {
+  font-size: 18px;
+  height: auto;
+  min-height: 48px;
+  padding: 8px 24px;
+}
+.elder-mode .ant-form-item-label > label {
+  font-size: 18px;
+}
+.elder-mode .ant-input,
+.elder-mode .ant-input-number {
+  font-size: 18px;
+}
+.elder-mode .ant-list-item {
+  font-size: 18px;
+}
+.elder-mode .ant-descriptions-item-label,
+.elder-mode .ant-descriptions-item-content {
+  font-size: 18px;
+}
+.elder-mode .ant-tag {
+  font-size: 16px;
+}
+.elder-mode .ant-statistic-title {
+  font-size: 16px;
+}
+.elder-mode .ant-statistic-content {
+  font-size: 24px;
+}
+.elder-mode .ant-modal .ant-form-item-label > label {
+  font-size: 18px;
+}
+.elder-mode .ant-modal .ant-rate {
+  font-size: 28px;
+}

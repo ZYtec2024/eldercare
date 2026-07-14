@@ -1,0 +1,448 @@
+import type { ReactNode } from 'react'
+import {
+  AlertOutlined,
+  DashboardOutlined,
+  ExclamationCircleOutlined,
+  FileTextOutlined,
+  HeartOutlined,
+  HomeOutlined,
+  LinkOutlined,
+  MedicineBoxOutlined,
+  TeamOutlined,
+  TrophyOutlined,
+  UserOutlined,
+} from '@ant-design/icons'
+import { matchPath } from 'react-router-dom'
+
+import {
+  AdminAlertsPage,
+  AdminDashboardPage,
+  AdminHomePage,
+  AdminHourReviewsPage,
+  AdminUsersPage,
+  BindElderPage,
+  ElderCheckinPage,
+  ElderDashboardPage,
+  ElderDetailPage,
+  ElderServicesPage,
+  ElderSosPage,
+  FamilyAlertsPage,
+  FamilyDashboardPage,
+  FamilyOrdersPage,
+  ForgotPasswordPage,
+  HealthKnowledgePage,
+  HomePage,
+  LoginPage,
+  ProfilePage,
+  PublicTaskHallPage,
+  RegisterPage,
+  VolunteerDashboardPage,
+  VolunteerLeaderboardPage,
+  VolunteerProfilePage,
+  VolunteerTaskDetailPage,
+  VolunteerTasksPage,
+} from '@/routes/lazy-pages'
+import type { Role } from '@/types/domain'
+import type { AppRouteDefinition } from '@/types/routes'
+import { getDefaultRoute } from './role-defaults'
+
+const iconMap: Record<string, ReactNode> = {
+  home: <HomeOutlined />,
+  dashboard: <DashboardOutlined />,
+  heart: <HeartOutlined />,
+  document: <FileTextOutlined />,
+  team: <TeamOutlined />,
+  alert: <AlertOutlined />,
+  emergency: <ExclamationCircleOutlined />,
+  user: <UserOutlined />,
+  connect: <LinkOutlined />,
+  service: <MedicineBoxOutlined />,
+  honor: <TrophyOutlined />,
+}
+
+export const allRoles: Role[] = ['family', 'elder', 'volunteer', 'admin']
+
+const taskHallNavigationRoles: Role[] = ['family', 'elder', 'admin']
+
+export const appRoutes: AppRouteDefinition[] = [
+  {
+    key: 'public-home',
+    path: '/',
+    roles: allRoles,
+    title: '智慧伴老平台',
+    description: '',
+    showInNavigation: false,
+    isPublic: true,
+    element: HomePage,
+  },
+  {
+    key: 'auth-login',
+    path: '/login',
+    roles: allRoles,
+    title: '登录',
+    description: '',
+    showInNavigation: false,
+    isPublic: true,
+    element: LoginPage,
+  },
+  {
+    key: 'auth-register',
+    path: '/register',
+    roles: allRoles,
+    title: '注册',
+    description: '',
+    showInNavigation: false,
+    isPublic: true,
+    element: RegisterPage,
+  },
+  {
+    key: 'auth-forgot-password',
+    path: '/forgot-password',
+    roles: allRoles,
+    title: '找回密码',
+    description: '',
+    showInNavigation: false,
+    isPublic: true,
+    element: ForgotPasswordPage,
+  },
+  {
+    key: 'health-knowledge',
+    path: '/health-knowledge',
+    roles: allRoles,
+    title: '健康知识手册',
+    description: '',
+    showInNavigation: false,
+    isPublic: true,
+    element: HealthKnowledgePage,
+  },
+  {
+    key: 'public-task-hall',
+    path: '/task-hall',
+    roles: allRoles,
+    title: '任务大厅',
+    description: '',
+    showInNavigation: false,
+    isPublic: true,
+    element: PublicTaskHallPage,
+  },
+  {
+    key: 'profile',
+    path: '/profile',
+    roles: allRoles,
+    title: '个人信息',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 99,
+    navigation: { label: '个人信息', description: '', iconKey: 'user' },
+    element: ProfilePage,
+  },
+  // ── Family ──
+  {
+    key: 'family-dashboard',
+    path: '/family/dashboard',
+    roles: ['family'],
+    title: '家属首页',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 10,
+    navigation: { label: '家属首页', description: '', iconKey: 'home' },
+    element: FamilyDashboardPage,
+  },
+  {
+    key: 'family-elder-detail',
+    path: '/family/elders/:elderId',
+    roles: ['family'],
+    title: '长辈详情',
+    description: '',
+    showInNavigation: false,
+    element: ElderDetailPage,
+  },
+  {
+    key: 'family-bind-elder',
+    path: '/family/bind-elder',
+    roles: ['family'],
+    title: '绑定长辈',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 20,
+    isHomeAction: true,
+    navigation: { label: '绑定长辈', description: '', iconKey: 'connect' },
+    element: BindElderPage,
+  },
+  {
+    key: 'family-orders',
+    path: '/family/orders',
+    roles: ['family'],
+    title: '服务管理',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 30,
+    isHomeAction: true,
+    navigation: { label: '服务管理', description: '', iconKey: 'service' },
+    element: FamilyOrdersPage,
+  },
+  {
+    key: 'family-alerts',
+    path: '/family/alerts',
+    roles: ['family'],
+    title: '异常告警',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 35,
+    navigation: { label: '异常告警', description: '', iconKey: 'alert' },
+    element: FamilyAlertsPage,
+  },
+  // ── Elder ──
+  {
+    key: 'elder-dashboard',
+    path: '/elder/dashboard',
+    roles: ['elder'],
+    title: '我的首页',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 10,
+    navigation: { label: '我的首页', description: '', iconKey: 'home' },
+    element: ElderDashboardPage,
+  },
+  {
+    key: 'elder-checkin',
+    path: '/elder/checkin',
+    roles: ['elder'],
+    title: '健康打卡',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 20,
+    isHomeAction: true,
+    navigation: { label: '健康打卡', description: '', iconKey: 'heart' },
+    element: ElderCheckinPage,
+  },
+  {
+    key: 'elder-services',
+    path: '/elder/services',
+    roles: ['elder'],
+    title: '我的服务',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 30,
+    isHomeAction: true,
+    navigation: { label: '我的服务', description: '', iconKey: 'service' },
+    element: ElderServicesPage,
+  },
+  {
+    key: 'elder-sos',
+    path: '/elder/sos',
+    roles: ['elder'],
+    title: '紧急求助',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 40,
+    isHomeAction: true,
+    navigation: { label: '紧急求助', description: '', iconKey: 'emergency' },
+    element: ElderSosPage,
+  },
+  // ── Volunteer ──
+  {
+    key: 'volunteer-home',
+    path: '/volunteer/home',
+    roles: ['volunteer'],
+    title: '志愿者首页',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 5,
+    navigation: { label: '志愿者首页', description: '', iconKey: 'home' },
+    element: VolunteerDashboardPage,
+  },
+  {
+    key: 'volunteer-tasks',
+    path: '/volunteer/tasks',
+    roles: ['volunteer'],
+    title: '我的任务',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 10,
+    navigation: { label: '我的任务', description: '', iconKey: 'dashboard' },
+    element: VolunteerTasksPage,
+  },
+  {
+    key: 'volunteer-task-detail',
+    path: '/volunteer/tasks/:taskId',
+    roles: ['volunteer'],
+    title: '任务详情',
+    description: '',
+    showInNavigation: false,
+    element: VolunteerTaskDetailPage,
+  },
+  {
+    key: 'volunteer-profile',
+    path: '/volunteer/profile',
+    roles: ['volunteer'],
+    title: '我的成就',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 20,
+    navigation: { label: '我的成就', description: '', iconKey: 'user' },
+    element: VolunteerProfilePage,
+  },
+  {
+    key: 'family-honor-wall',
+    path: '/family/honor-wall',
+    roles: ['family'],
+    title: '荣誉墙',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 40,
+    isHomeAction: true,
+    navigation: { label: '荣誉墙', description: '', iconKey: 'honor' },
+    element: VolunteerLeaderboardPage,
+  },
+  {
+    key: 'volunteer-leaderboard',
+    path: '/volunteer/leaderboard',
+    roles: ['volunteer'],
+    title: '荣誉墙',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 30,
+    isHomeAction: true,
+    navigation: { label: '荣誉墙', description: '', iconKey: 'honor' },
+    element: VolunteerLeaderboardPage,
+  },
+  {
+    key: 'admin-honor-wall',
+    path: '/admin/honor-wall',
+    roles: ['admin'],
+    title: '荣誉墙',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 40,
+    isHomeAction: true,
+    navigation: { label: '荣誉墙', description: '', iconKey: 'honor' },
+    element: VolunteerLeaderboardPage,
+  },
+  // ── Admin ──
+  {
+    key: 'admin-home',
+    path: '/admin/home',
+    roles: ['admin'],
+    title: '管理首页',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 5,
+    navigation: { label: '管理首页', description: '', iconKey: 'home' },
+    element: AdminHomePage,
+  },
+  {
+    key: 'admin-dashboard',
+    path: '/admin/dashboard',
+    roles: ['admin'],
+    title: '总览看板',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 10,
+    navigation: { label: '总览看板', description: '', iconKey: 'dashboard' },
+    element: AdminDashboardPage,
+  },
+  {
+    key: 'admin-users',
+    path: '/admin/users',
+    roles: ['admin'],
+    title: '用户管理',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 20,
+    navigation: { label: '用户管理', description: '', iconKey: 'team' },
+    element: AdminUsersPage,
+  },
+  {
+    key: 'admin-hour-reviews',
+    path: '/admin/hour-reviews',
+    roles: ['admin'],
+    title: '时长审核',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 25,
+    navigation: { label: '时长审核', description: '', iconKey: 'alert' },
+    element: AdminHourReviewsPage,
+  },
+  {
+    key: 'admin-alerts',
+    path: '/admin/alerts',
+    roles: ['admin'],
+    title: '告警中心',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 30,
+    navigation: { label: '告警中心', description: '', iconKey: 'alert' },
+    element: AdminAlertsPage,
+  },
+]
+
+export function getNavigationForRole(role: Role) {
+  const navigationItems = appRoutes
+    .filter(
+      (route) => !route.isPublic && route.showInNavigation && route.roles.includes(role),
+    )
+    .sort(
+      (left, right) =>
+        (left.navigationOrder ?? Number.MAX_SAFE_INTEGER) -
+        (right.navigationOrder ?? Number.MAX_SAFE_INTEGER),
+    )
+    .map((route) => ({
+      key: route.key,
+      label: route.navigation?.label ?? route.title,
+      path: route.path,
+      icon: iconMap[route.navigation?.iconKey ?? 'home'],
+      description: route.description,
+      order:
+        route.path === '/task-hall'
+          ? 98
+          : route.path === '/profile'
+            ? 99
+            : route.navigationOrder ?? Number.MAX_SAFE_INTEGER,
+    }))
+
+  if (taskHallNavigationRoles.includes(role)) {
+    navigationItems.push({
+      key: 'public-task-hall-nav',
+      label: '任务大厅',
+      path: '/task-hall',
+      icon: iconMap.service,
+      description: '查看公益服务任务',
+      order: 98,
+    })
+  }
+
+  return navigationItems
+    .sort((left, right) => left.order - right.order)
+    .map(({ order, ...item }) => item)
+}
+
+export function getRouteDefinition(pathname: string) {
+  return appRoutes.find((route) =>
+    matchPath({ path: route.path, end: true }, pathname),
+  )
+}
+
+export function getHomeActions(role: Role) {
+  return appRoutes
+    .filter(
+      (route) =>
+        !route.isPublic &&
+        route.roles.includes(role) &&
+        route.isHomeAction &&
+        route.path !== getDefaultRoute(role),
+    )
+    .sort(
+      (left, right) =>
+        (left.navigationOrder ?? Number.MAX_SAFE_INTEGER) -
+        (right.navigationOrder ?? Number.MAX_SAFE_INTEGER),
+    )
+    .slice(0, 3)
+    .map((route) => ({
+      key: route.key,
+      label: route.navigation?.label ?? route.title,
+      path: route.path,
+      icon: iconMap[route.navigation?.iconKey ?? 'home'],
+      description: route.description,
+    }))
+}
