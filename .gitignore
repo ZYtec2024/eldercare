@@ -35,3 +35,8 @@ Thumbs.db
 # ===== Project-specific =====
 1.txt
 后端数据库全流程说明.md
+
+# ===== Docker =====
+.codebuddy/
+
+.workbuddy/
