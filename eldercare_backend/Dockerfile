@@ -9,9 +9,8 @@ RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua
 # 复制源码与启动脚本
 COPY . .
 
-# 给启动脚本加执行权限
-RUN chmod +x entrypoint.sh
+RUN sed -i 's/\r$//' entrypoint.sh
 
 EXPOSE 5000
 
-CMD ["./entrypoint.sh"]
+CMD ["sh", "entrypoint.sh"]

@@ -6,9 +6,9 @@ from psycopg2.extras import RealDictCursor
 DB_CONFIG = {
     'host': os.getenv('DB_HOST', '127.0.0.1'),
     'port': int(os.getenv('DB_PORT', '5432')),
-    'user': os.getenv('DB_USER', 'postgres'),
-    'password': os.getenv('DB_PASSWORD', 'root'),
-    'dbname': os.getenv('DB_NAME', 'elderly_care_system'),
+    'user': os.getenv('DB_USER', 'gaussdb'),
+    'password': os.getenv('DB_PASSWORD', 'Enmo@123'),
+    'dbname': os.getenv('DB_NAME', 'omm'),
     'cursor_factory': RealDictCursor,
 }
 

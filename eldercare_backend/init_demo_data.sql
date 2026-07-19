@@ -4,6 +4,8 @@
 -- 数据库名: elderly_care_system
 -- ============================================================
 
+SET search_path TO public;
+
 DROP TABLE IF EXISTS volunteer_award_requests CASCADE;
 DROP TABLE IF EXISTS volunteer_hour_reviews CASCADE;
 DROP TABLE IF EXISTS volunteer_likes CASCADE;
@@ -397,7 +399,7 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS trg_health_alert ON health_records;
 CREATE TRIGGER trg_health_alert
 AFTER INSERT ON health_records
-FOR EACH ROW EXECUTE FUNCTION fn_health_alert();
+FOR EACH ROW EXECUTE PROCEDURE fn_health_alert();
 
 -- ============================================================
 -- 数据概览：

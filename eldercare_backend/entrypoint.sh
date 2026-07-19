@@ -9,14 +9,17 @@ import os
 import time
 
 host = os.getenv('DB_HOST', 'db')
-password = os.getenv('DB_PASSWORD', 'root')
+port = int(os.getenv('DB_PORT', '5432'))
+user = os.getenv('DB_USER', 'gaussdb')
+password = os.getenv('DB_PASSWORD', 'Enmo@123')
+dbname = os.getenv('DB_NAME', 'omm')
 
 for _ in range(30):
     try:
         conn = psycopg2.connect(
-            host=host, port=5432,
-            user='postgres', password=password,
-            dbname='elderly_care_system'
+            host=host, port=port,
+            user=user, password=password,
+            dbname=dbname
         )
         conn.close()
         print('✓ 数据库已就绪')

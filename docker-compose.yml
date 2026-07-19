@@ -1,24 +1,18 @@
 services:
-  # ===== PostgreSQL 数据库 =====
+  # ===== openGauss 数据库 =====
   db:
-    image: postgres:16
+    image: enmotech/opengauss:latest
     container_name: eldercare-db
+    privileged: true
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: root
-      POSTGRES_DB: elderly_care_system
+      GS_PASSWORD: Enmo@123
     volumes:
       # 首次启动自动导入演示数据
       - ./eldercare_backend/init_demo_data.sql:/docker-entrypoint-initdb.d/init.sql
       # 持久化数据（容器重启不丢失）
-      - pgdata:/var/lib/postgresql/data
+      - ogdata:/var/lib/opengauss
     ports:
       - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d elderly_care_system"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
 
   # ===== Flask 后端 =====
   backend:
@@ -27,12 +21,11 @@ services:
     environment:
       DB_HOST: db
       DB_PORT: "5432"
-      DB_USER: postgres
-      DB_PASSWORD: root
-      DB_NAME: elderly_care_system
+      DB_USER: gaussdb
+      DB_PASSWORD: Enmo@123
+      DB_NAME: omm
     depends_on:
-      db:
-        condition: service_healthy
+      - db
     ports:
       - "5000:5000"
     healthcheck:
@@ -40,7 +33,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 15s
+      start_period: 90s
 
   # ===== 前端（Nginx + React） =====
   frontend:
@@ -53,4 +46,4 @@ services:
       - "3000:80"
 
 volumes:
-  pgdata:
+  ogdata:

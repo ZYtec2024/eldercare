@@ -39,7 +39,7 @@
 | MSW | 2.12 | Mock Service Worker（无后端演示） |
 
 ### 数据库
-- **PostgreSQL / openGauss**，数据库名 `elderly_care_system`
+- **openGauss / PostgreSQL 兼容模式**，Docker 运行时由 `db` 服务提供，后端默认连接 `omm` 库
 - 11 张核心表 + 2 个视图 + 1 个触发器
 
 ---
@@ -109,6 +109,8 @@ docker compose up -d --build
 
 首次启动会自动建表并导入演示数据，约 30 秒后就绪。
 
+Docker 模式下的实际运行链路是：openGauss 数据库 + Flask 后端 + Nginx 托管的前端静态资源。前端不会在 Docker 镜像里启用 MSW mock，mock 只用于本地开发态。
+
 | 服务 | 地址 |
 |------|------|
 | 前端 | `http://localhost:3000` |
@@ -130,15 +132,14 @@ cd eldercare_backend
 pip install -r requirements.txt
 
 # 初始化数据库（Docker 一键方案，Windows PowerShell）
-docker run --name eldercare-pg -e POSTGRES_PASSWORD=root -p 5432:5432 -d postgres:16
-docker exec eldercare-pg psql -U postgres -c "CREATE DATABASE elderly_care_system;"
-Get-Content -Encoding UTF8 init_demo_data.sql -Raw | docker exec -i eldercare-pg psql -U postgres -d elderly_care_system
+docker run --name eldercare-og -e GS_PASSWORD=Enmo@123 -p 5432:5432 -d enmotech/opengauss:latest
+Get-Content -Encoding UTF8 init_demo_data.sql -Raw | docker exec -i eldercare-og gsql -U gaussdb -d postgres -p 5432
 
 # 启动服务（默认监听 0.0.0.0:5000）
 python app.py
 ```
 
-> 数据库连接配置见 `db.py`，默认 `host=127.0.0.1, port=5432, user=postgres, password=root`。
+> 数据库连接配置见 `db.py`，默认 `host=127.0.0.1, port=5432, user=gaussdb, password=Enmo@123, dbname=omm`。
 
 ### 前端启动
 
@@ -156,10 +157,10 @@ npm run dev
 
 | 模式 | 配置 | 说明 |
 |------|------|------|
-| Mock 模式（默认） | `VITE_MOCK=true` | 前端独立运行，MSW 拦截 API，无需后端 |
-| 真后端模式 | `VITE_MOCK=false` | 前端代理 `/api` 到后端 `localhost:5000` |
+| Mock 模式（本地开发默认） | `VITE_MOCK=true` | 仅本地 `npm run dev` 时启用，MSW 拦截 API，无需后端 |
+| 真后端模式 | `VITE_MOCK=false` | 本地前端直连后端 `localhost:5000` |
 
-> 配置项在 `frontend/.env.development` 中修改。
+> 配置项在本地开发环境的 `frontend/.env.development` 中修改；Docker 构建不读取这个文件。
 
 ### 演示账号
 
@@ -174,6 +175,10 @@ Docker 模式与真后端模式使用同一套数据库账号：
 | 志愿者 | `vol_huangxin` | `pass123` | 黄鑫（待审核） |
 
 > 仅 Mock 模式（`VITE_MOCK=true`）使用另一套账号：`admin01`/`123456`、`family01`/`123456` 等，详见 `frontend/src/mocks/fixtures/shared.ts`。
+
+> 已验证（2026-07-19）：`admin`、`zhangsan`、`elder_zhang`、`vol_wangjiaming` 可正常登录；`vol_huangxin` 登录后状态为 `pending_review`。
+
+> 说明：这些账号是 openGauss 数据库中的真实账号数据，前端页面本身不直接连数据库。
 
 ---
 
