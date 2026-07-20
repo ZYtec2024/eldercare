@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Button, Card, Empty, Form, Input, InputNumber, Select, DatePicker, Typography, App, List, Tag, Popconfirm, Modal } from 'antd'
+import { Button, Card, Empty, Form, Input, InputNumber, Select, DatePicker, Typography, App, List, Tag, Popconfirm, Modal, Rate } from 'antd'
 import { LikeOutlined, LikeFilled } from '@ant-design/icons'
 import { PlusOutlined } from '@ant-design/icons'
 
 import { useSession } from '@/features/auth/useSession'
-import { fetchFamilyElders, createFamilyServiceRequest, fetchFamilyOrders, cancelFamilyOrder, confirmFamilyOrderHours } from '@/services/adapters/family-adapter'
+import { fetchFamilyElders, createFamilyServiceRequest, fetchFamilyOrders, cancelFamilyOrder, confirmFamilyOrderHours, reviewFamilyOrder } from '@/services/adapters/family-adapter'
 import { likeVolunteer } from '@/services/adapters/volunteer-adapter'
 import type { ElderSummary, ServiceRequestCard } from '@/types/domain'
 
@@ -26,9 +26,12 @@ export default function FamilyOrdersPage() {
   const [showForm, setShowForm] = useState(false)
   const [confirmTarget, setConfirmTarget] = useState<ServiceRequestCard | null>(null)
   const [confirming, setConfirming] = useState(false)
+  const [reviewTarget, setReviewTarget] = useState<ServiceRequestCard | null>(null)
+  const [reviewing, setReviewing] = useState(false)
   const [likedOrders, setLikedOrders] = useState<Set<number>>(new Set())
   const [form] = Form.useForm()
   const [confirmForm] = Form.useForm()
+  const [reviewForm] = Form.useForm()
 
   const load = () => {
     if (!session) return
@@ -75,8 +78,9 @@ export default function FamilyOrdersPage() {
   }
 
   const handleCancel = async (orderId: number) => {
+    if (!session) return
     try {
-      await cancelFamilyOrder(orderId)
+      await cancelFamilyOrder(orderId, session.userId)
       message.success('订单已撤销')
       load()
     } catch (err: any) {
@@ -115,6 +119,17 @@ export default function FamilyOrdersPage() {
     } catch (err: any) {
       message.error(err?.message || '点赞失败')
     }
+  }
+
+  const handleReview = async () => {
+    if (!session || !reviewTarget) return
+    const values = await reviewForm.validateFields()
+    setReviewing(true)
+    try {
+      await reviewFamilyOrder({ orderId: reviewTarget.requestId, familyUserId: session.userId, rating: values.rating, comment: values.comment })
+      message.success('评价已提交，志愿者评分已更新')
+      setReviewTarget(null); reviewForm.resetFields(); load()
+    } catch (err: any) { message.error(err?.message || '评价提交失败') } finally { setReviewing(false) }
   }
 
   return (
@@ -182,7 +197,7 @@ export default function FamilyOrdersPage() {
             const isLiked = likedOrders.has(item.requestId)
             const actions: React.ReactNode[] = []
 
-            if (item.status === 'pending') {
+            if (item.status === 'pending' || item.status === 'accepted') {
               actions.push(
                 <Popconfirm
                   key="cancel"
@@ -235,6 +250,7 @@ export default function FamilyOrdersPage() {
                   {isLiked ? '已点赞' : '点赞志愿者'}
                 </Button>,
               )
+              actions.push(<Button key="review" size="small" onClick={() => { setReviewTarget(item); reviewForm.setFieldsValue({ rating: 5, comment: '' }) }}>评价服务</Button>)
             }
 
             return (
@@ -283,6 +299,9 @@ export default function FamilyOrdersPage() {
             <Input.TextArea rows={3} placeholder="可填写时长说明" />
           </Form.Item>
         </Form>
+      </Modal>
+      <Modal title="评价志愿服务" open={!!reviewTarget} onCancel={() => { setReviewTarget(null); reviewForm.resetFields() }} onOk={handleReview} confirmLoading={reviewing} okText="提交评价">
+        <Form form={reviewForm} layout="vertical"><Form.Item name="rating" label="服务评分" rules={[{ required: true }]}><Rate /></Form.Item><Form.Item name="comment" label="评价内容"><Input.TextArea rows={3} placeholder="写下本次服务体验" /></Form.Item></Form>
       </Modal>
     </div>
   )

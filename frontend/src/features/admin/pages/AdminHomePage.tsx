@@ -1,6 +1,7 @@
 import { Card, Typography } from 'antd'
 import {
   DashboardOutlined,
+  DeploymentUnitOutlined,
   TeamOutlined,
   AlertOutlined,
   TrophyOutlined,
@@ -8,6 +9,13 @@ import {
 import { useNavigate } from 'react-router-dom'
 
 const features = [
+  {
+    icon: <DeploymentUnitOutlined className="text-5xl text-cyan-600" />,
+    title: '实时调度指挥台',
+    desc: '查看宝山区共享地图上的50位老人和20名志愿者，观察A*路线、模拟路况、SOS重规划、候选队列、疲劳度及技能硬匹配评分。',
+    path: '/admin/dispatch-board',
+    color: 'border-cyan-200 bg-cyan-50/50',
+  },
   {
     icon: <DashboardOutlined className="text-5xl text-blue-600" />,
     title: '总览看板',

@@ -16,18 +16,23 @@ import { matchPath } from 'react-router-dom'
 
 import {
   AdminAlertsPage,
+  AdminDispatchBoardPage,
+  AdminRegionsPage,
   AdminDashboardPage,
   AdminHomePage,
   AdminHourReviewsPage,
   AdminUsersPage,
   BindElderPage,
+  ConversationPage,
   ElderCheckinPage,
   ElderDashboardPage,
+  ElderDispatchPage,
   ElderDetailPage,
   ElderServicesPage,
   ElderSosPage,
   FamilyAlertsPage,
   FamilyDashboardPage,
+  FamilyLiveTrackingPage,
   FamilyOrdersPage,
   ForgotPasswordPage,
   HealthKnowledgePage,
@@ -37,6 +42,7 @@ import {
   PublicTaskHallPage,
   RegisterPage,
   VolunteerDashboardPage,
+  VolunteerDispatchPage,
   VolunteerLeaderboardPage,
   VolunteerProfilePage,
   VolunteerTaskDetailPage,
@@ -62,7 +68,7 @@ const iconMap: Record<string, ReactNode> = {
 
 export const allRoles: Role[] = ['family', 'elder', 'volunteer', 'admin']
 
-const taskHallNavigationRoles: Role[] = ['family', 'elder', 'admin']
+const taskHallNavigationRoles: Role[] = ['family', 'admin']
 
 export const appRoutes: AppRouteDefinition[] = [
   {
@@ -136,6 +142,17 @@ export const appRoutes: AppRouteDefinition[] = [
     navigation: { label: '个人信息', description: '', iconKey: 'user' },
     element: ProfilePage,
   },
+  {
+    key: 'conversations',
+    path: '/conversations',
+    roles: allRoles,
+    title: '我的消息',
+    description: '和家人、社区、志愿者沟通',
+    showInNavigation: true,
+    navigationOrder: 25,
+    navigation: { label: '我的消息', description: '', iconKey: 'document' },
+    element: ConversationPage,
+  },
   // ── Family ──
   {
     key: 'family-dashboard',
@@ -192,6 +209,18 @@ export const appRoutes: AppRouteDefinition[] = [
     navigation: { label: '异常告警', description: '', iconKey: 'alert' },
     element: FamilyAlertsPage,
   },
+  {
+    key: 'family-live-tracking',
+    path: '/family/live-tracking',
+    roles: ['family'],
+    title: '实时守护',
+    description: '仅在服务期间查看绑定老人和志愿者的实时状态',
+    showInNavigation: true,
+    navigationOrder: 33,
+    isHomeAction: true,
+    navigation: { label: '实时守护', description: '', iconKey: 'dashboard' },
+    element: FamilyLiveTrackingPage,
+  },
   // ── Elder ──
   {
     key: 'elder-dashboard',
@@ -217,28 +246,40 @@ export const appRoutes: AppRouteDefinition[] = [
     element: ElderCheckinPage,
   },
   {
-    key: 'elder-services',
-    path: '/elder/services',
-    roles: ['elder'],
-    title: '我的服务',
-    description: '',
-    showInNavigation: true,
-    navigationOrder: 30,
-    isHomeAction: true,
-    navigation: { label: '我的服务', description: '', iconKey: 'service' },
-    element: ElderServicesPage,
-  },
-  {
     key: 'elder-sos',
     path: '/elder/sos',
     roles: ['elder'],
     title: '紧急求助',
     description: '',
     showInNavigation: true,
-    navigationOrder: 40,
+    navigationOrder: 15,
     isHomeAction: true,
     navigation: { label: '紧急求助', description: '', iconKey: 'emergency' },
     element: ElderSosPage,
+  },
+  {
+    key: 'elder-services',
+    path: '/elder/services',
+    roles: ['elder'],
+    title: '谁在帮我',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 30,
+    isHomeAction: true,
+    navigation: { label: '谁在帮我', description: '', iconKey: 'service' },
+    element: ElderServicesPage,
+  },
+  {
+    key: 'elder-dispatch',
+    path: '/elder/dispatch',
+    roles: ['elder'],
+    title: '请人帮忙',
+    description: '告诉系统需要什么帮助，安排志愿者',
+    showInNavigation: true,
+    navigationOrder: 35,
+    isHomeAction: true,
+    navigation: { label: '请人帮忙', description: '', iconKey: 'service' },
+    element: ElderDispatchPage,
   },
   // ── Volunteer ──
   {
@@ -251,6 +292,17 @@ export const appRoutes: AppRouteDefinition[] = [
     navigationOrder: 5,
     navigation: { label: '志愿者首页', description: '', iconKey: 'home' },
     element: VolunteerDashboardPage,
+  },
+  {
+    key: 'volunteer-dispatch',
+    path: '/volunteer/dispatch',
+    roles: ['volunteer'],
+    title: '智能推荐接单',
+    description: '查看技能匹配的实时推荐订单',
+    showInNavigation: true,
+    navigationOrder: 8,
+    navigation: { label: '智能推荐接单', description: '', iconKey: 'service' },
+    element: VolunteerDispatchPage,
   },
   {
     key: 'volunteer-tasks',
@@ -330,6 +382,28 @@ export const appRoutes: AppRouteDefinition[] = [
     navigationOrder: 5,
     navigation: { label: '管理首页', description: '', iconKey: 'home' },
     element: AdminHomePage,
+  },
+  {
+    key: 'admin-dispatch-board',
+    path: '/admin/dispatch-board',
+    roles: ['admin'],
+    title: '实时调度指挥台',
+    description: 'A*路线、候选评分和并发调度看板',
+    showInNavigation: true,
+    navigationOrder: 15,
+    navigation: { label: '实时调度指挥台', description: '', iconKey: 'dashboard' },
+    element: AdminDispatchBoardPage,
+  },
+  {
+    key: 'admin-regions',
+    path: '/admin/regions',
+    roles: ['admin'],
+    title: '区域管理',
+    description: '总管理员按省市区添加官方多边形调度区域',
+    showInNavigation: true,
+    navigationOrder: 16,
+    navigation: { label: '区域管理', description: '', iconKey: 'dashboard' },
+    element: AdminRegionsPage,
   },
   {
     key: 'admin-dashboard',

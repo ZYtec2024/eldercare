@@ -15,11 +15,15 @@ export default function VolunteerLeaderboardPage() {
   const [likedVolunteerIds, setLikedVolunteerIds] = useState<Set<number>>(new Set())
 
   useEffect(() => {
-    fetchVolunteerLeaderboard()
+    if (!session) {
+      setLoading(false)
+      return
+    }
+    fetchVolunteerLeaderboard({ viewerUserId: session.userId })
       .then(setData)
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [])
+  }, [session?.userId])
 
   const handleLike = async (item: VolunteerProfile) => {
     if (!session || !item.userId) return

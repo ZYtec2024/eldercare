@@ -20,7 +20,7 @@ export class HttpRequestError extends Error {
 
 export const http = axios.create({
   baseURL: '/api',
-  timeout: 5000,
+  timeout: 20000,
 })
 
 http.interceptors.response.use(

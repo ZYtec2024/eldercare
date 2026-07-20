@@ -6,10 +6,167 @@ import datetime
 
 admin_bp = Blueprint('admin', __name__)
 
-# 1. 获取用户列表 (带分页与角色筛选)
+
+def _admin_regions(cursor, raw_admin_user_id):
+    """Return (admin_id, is_global, regions, error_response).
+
+    Admin pages in this legacy API receive the logged-in id explicitly.  The
+    database scope, rather than a UI-selected district, is the authority.
+    """
+    try:
+        admin_user_id = int(raw_admin_user_id)
+    except (TypeError, ValueError):
+        return None, False, set(), (jsonify({"code": 400, "message": "缺少管理员身份"}), 400)
+
+    cursor.execute("SELECT role FROM users WHERE user_id = %s", (admin_user_id,))
+    account = cursor.fetchone()
+    if not account or account.get('role') != 'admin':
+        return None, False, set(), (jsonify({"code": 403, "message": "仅管理员可访问"}), 403)
+
+    cursor.execute("SELECT region_adcode FROM admin_region_scope WHERE admin_user_id = %s", (admin_user_id,))
+    scopes = {str(row['region_adcode']) for row in cursor.fetchall()}
+    if '*' in scopes:
+        return admin_user_id, True, set(), None
+    if not scopes:
+        return None, False, set(), (jsonify({"code": 403, "message": "该管理员未分配区县管理范围"}), 403)
+    return admin_user_id, False, scopes, None
+
+
+def _user_regions(cursor, user_id):
+    """Resolve a user's operational regions, including families bound to elders."""
+    cursor.execute(
+        """
+        SELECT region_adcode FROM elders WHERE user_id = %s
+        UNION
+        SELECT service_region_adcode AS region_adcode
+        FROM volunteer_location_state WHERE volunteer_id = %s
+        UNION
+        SELECT e.region_adcode
+        FROM user_elder_relation rel
+        JOIN elders e ON e.elder_id = rel.elder_id
+        WHERE rel.family_user_id = %s
+        """,
+        (user_id, user_id, user_id),
+    )
+    return {str(row['region_adcode']) for row in cursor.fetchall() if row.get('region_adcode')}
+
+
+def _scope_allows_user(cursor, user_id, is_global, regions):
+    return is_global or bool(_user_regions(cursor, user_id) & regions)
+
+
+def _region_user_filter_sql():
+    """SQL fragment: users who operate in the given region tuple (%s x3)."""
+    return """u.user_id IN (
+        SELECT user_id FROM elders WHERE region_adcode IN %s
+        UNION SELECT volunteer_id FROM volunteer_location_state WHERE service_region_adcode IN %s
+        UNION SELECT rel.family_user_id FROM user_elder_relation rel
+              JOIN elders e ON e.elder_id = rel.elder_id WHERE e.region_adcode IN %s
+    )"""
+
+
+def _enrich_admin_users(cursor, users):
+    """Attach district and elder-binding context for admin CRM views."""
+    if not users:
+        return []
+    user_ids = tuple(int(row['user_id']) for row in users)
+    placeholders = ','.join(['%s'] * len(user_ids))
+
+    elder_by_user: dict[int, dict] = {}
+    cursor.execute(
+        f"""SELECT e.user_id, e.elder_id, e.name, e.address, e.region_adcode,
+                   COALESCE(ar.name, e.region_adcode) AS region_name
+            FROM elders e
+            LEFT JOIN administrative_regions ar ON ar.adcode = e.region_adcode
+            WHERE e.user_id IN ({placeholders})""",
+        user_ids,
+    )
+    for row in cursor.fetchall():
+        elder_by_user[int(row['user_id'])] = {
+            'elder_id': int(row['elder_id']),
+            'name': row['name'],
+            'address': row.get('address') or '',
+            'region_adcode': row.get('region_adcode'),
+            'region_name': row.get('region_name') or row.get('region_adcode') or '',
+        }
+
+    family_elders: dict[int, list[dict]] = {}
+    cursor.execute(
+        f"""SELECT rel.family_user_id, e.elder_id, e.name, e.region_adcode,
+                   COALESCE(ar.name, e.region_adcode) AS region_name
+            FROM user_elder_relation rel
+            JOIN elders e ON e.elder_id = rel.elder_id
+            LEFT JOIN administrative_regions ar ON ar.adcode = e.region_adcode
+            WHERE rel.family_user_id IN ({placeholders})
+            ORDER BY e.elder_id""",
+        user_ids,
+    )
+    for row in cursor.fetchall():
+        family_elders.setdefault(int(row['family_user_id']), []).append({
+            'elder_id': int(row['elder_id']),
+            'name': row['name'],
+            'region_adcode': row.get('region_adcode'),
+            'region_name': row.get('region_name') or row.get('region_adcode') or '',
+        })
+
+    volunteer_region: dict[int, dict] = {}
+    cursor.execute(
+        f"""SELECT v.volunteer_id, v.service_region_adcode AS region_adcode,
+                   COALESCE(ar.name, v.service_region_adcode) AS region_name
+            FROM volunteer_location_state v
+            LEFT JOIN administrative_regions ar ON ar.adcode = v.service_region_adcode
+            WHERE v.volunteer_id IN ({placeholders})""",
+        user_ids,
+    )
+    for row in cursor.fetchall():
+        volunteer_region[int(row['volunteer_id'])] = {
+            'region_adcode': row.get('region_adcode'),
+            'region_name': row.get('region_name') or row.get('region_adcode') or '',
+        }
+
+    enriched = []
+    for row in users:
+        item = dict(row)
+        uid = int(item['user_id'])
+        role = item.get('role')
+        region_adcodes: list[str] = []
+        region_names: list[str] = []
+        related_elders: list[dict] = []
+        address = ''
+
+        if role == 'elder' and uid in elder_by_user:
+            profile = elder_by_user[uid]
+            address = profile['address']
+            if profile.get('region_adcode'):
+                region_adcodes = [str(profile['region_adcode'])]
+                region_names = [profile['region_name']]
+        elif role == 'family':
+            related_elders = family_elders.get(uid, [])
+            for elder in related_elders:
+                code = str(elder.get('region_adcode') or '')
+                if code and code not in region_adcodes:
+                    region_adcodes.append(code)
+                    region_names.append(elder.get('region_name') or code)
+        elif role == 'volunteer' and uid in volunteer_region:
+            profile = volunteer_region[uid]
+            if profile.get('region_adcode'):
+                region_adcodes = [str(profile['region_adcode'])]
+                region_names = [profile['region_name']]
+
+        item['region_adcodes'] = region_adcodes
+        item['region_names'] = region_names
+        item['related_elders'] = related_elders
+        item['address'] = address
+        enriched.append(item)
+    return enriched
+
+
+# 1. 获取用户列表 (带分页与角色 / 区县筛选)
 @admin_bp.route('/users/list', methods=['GET'])
 def get_user_list():
-    role = request.args.get('role') 
+    role = request.args.get('role')
+    keyword = (request.args.get('keyword') or '').strip()
+    requested_region = (request.args.get('region_adcode') or '').strip()
     page = int(request.args.get('page', 1))
     limit = int(request.args.get('limit', 10))
     offset = (page - 1) * limit
@@ -17,7 +174,26 @@ def get_user_list():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            # 动态构建 SQL 与分页 (LIMIT OFFSET)
+            _, is_global, regions, error = _admin_regions(cursor, request.args.get('admin_user_id'))
+            if error:
+                return error
+
+            filter_regions = None
+            if requested_region:
+                if is_global or requested_region in regions:
+                    filter_regions = {requested_region}
+                else:
+                    return jsonify({"code": 403, "message": "无权查看该区县用户"}), 403
+            elif not is_global:
+                filter_regions = set(regions)
+
+            region_filter = ""
+            scope_params = []
+            if filter_regions is not None:
+                scoped = tuple(filter_regions)
+                region_filter = _region_user_filter_sql()
+                scope_params = [scoped, scoped, scoped]
+
             base_sql = """
                 SELECT
                     u.user_id,
@@ -33,25 +209,35 @@ def get_user_list():
                 FROM users u
                 LEFT JOIN volunteers_profile vp ON u.user_id = vp.user_id
             """
-            count_sql = "SELECT COUNT(*) AS total FROM users"
+            count_sql = "SELECT COUNT(*) AS total FROM users u"
             params = []
 
+            if region_filter:
+                base_sql += " WHERE " + region_filter
+                count_sql += " WHERE " + region_filter
+
             if role:
-                base_sql += " WHERE u.role = %s"
-                count_sql += " WHERE role = %s"
+                base_sql += " AND u.role = %s" if region_filter else " WHERE u.role = %s"
+                count_sql += " AND u.role = %s" if region_filter else " WHERE u.role = %s"
                 params.append(role)
 
-            cursor.execute(count_sql, tuple(params))
+            if keyword:
+                clause = "(u.username ILIKE %s OR u.real_name ILIKE %s OR u.phone ILIKE %s)"
+                base_sql += " AND " + clause if (region_filter or role) else " WHERE " + clause
+                count_sql += " AND " + clause if (region_filter or role) else " WHERE " + clause
+                params.extend([f"%{keyword}%", f"%{keyword}%", f"%{keyword}%"])
+
+            cursor.execute(count_sql, tuple(scope_params + params))
             total_count = cursor.fetchone()['total']
 
             base_sql += " ORDER BY u.created_at DESC LIMIT %s OFFSET %s"
             params.extend([limit, offset])
 
-            cursor.execute(base_sql, tuple(params))
-            users = cursor.fetchall()
+            cursor.execute(base_sql, tuple(scope_params + params))
+            users = _enrich_admin_users(cursor, cursor.fetchall())
 
             return jsonify({
-                "code": 200, "message": "获取成功", 
+                "code": 200, "message": "获取成功",
                 "data": {"total": total_count, "list": users}
             })
     finally:
@@ -69,10 +255,16 @@ def delete_user():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
+            _, is_global, regions, error = _admin_regions(cursor, data.get('admin_user_id'))
+            if error:
+                return error
             cursor.execute("SELECT user_id, role FROM users WHERE user_id = %s", (user_id,))
             target = cursor.fetchone()
             if not target:
                 return jsonify({"code": 404, "message": "用户不存在"})
+
+            if not _scope_allows_user(cursor, user_id, is_global, regions):
+                return jsonify({"code": 403, "message": "无权管理其他区县用户"}), 403
 
             if target['role'] == 'admin':
                 return jsonify({"code": 403, "message": "管理员账号不能删除"})
@@ -95,20 +287,39 @@ def get_alerts():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
+            _, is_global, regions, error = _admin_regions(cursor, request.args.get('admin_user_id'))
+            if error:
+                return error
             # 关联老人的姓名查询
+            # An alert is a notification row. For SOS, the linked incident is
+            # the lifecycle source of truth: acknowledged is still active.
             sql = """
-                SELECT a.alert_id, e.name AS elder_name, a.alert_type, 
-                       a.description, a.is_handled, a.created_at
+                SELECT a.alert_id, e.name AS elder_name, a.alert_type,
+                       a.description, a.is_handled, a.created_at,
+                       a.emergency_incident_id,
+                       ei.status AS incident_status, ei.incident_type,
+                       ei.acknowledged_at, ei.resolved_at, ei.resolution_summary,
+                       ei.linked_order_id, c.conversation_id,
+                       o.status AS linked_order_status, vu.real_name AS linked_volunteer_name
                 FROM alerts a
                 JOIN elders e ON a.elder_id = e.elder_id
-                ORDER BY a.is_handled ASC, a.created_at DESC
+                LEFT JOIN emergency_incidents ei ON ei.incident_id = a.emergency_incident_id
+                LEFT JOIN conversations c ON c.incident_id = ei.incident_id AND c.conversation_type = 'sos'
+                LEFT JOIN orders o ON o.order_id = ei.linked_order_id
+                LEFT JOIN users vu ON vu.user_id = o.volunteer_id
             """
-            cursor.execute(sql)
+            params = []
+            if not is_global:
+                sql += " WHERE e.region_adcode IN %s"
+                params.append(tuple(regions))
+            sql += " ORDER BY CASE WHEN COALESCE(ei.status, CASE WHEN a.is_handled THEN 'resolved' ELSE 'reported' END) = 'resolved' THEN 1 ELSE 0 END, a.created_at DESC"
+            cursor.execute(sql, params)
             alerts = cursor.fetchall()
             
             for a in alerts:
-                if isinstance(a['created_at'], datetime.datetime):
-                    a['created_at'] = a['created_at'].strftime('%Y-%m-%d %H:%M:%S')
+                for field in ('created_at', 'acknowledged_at', 'resolved_at'):
+                    if isinstance(a.get(field), datetime.datetime):
+                        a[field] = a[field].strftime('%Y-%m-%d %H:%M:%S')
 
             return jsonify({"code": 200, "message": "获取报警列表成功", "data": alerts})
     finally:
@@ -120,17 +331,36 @@ def get_dashboard_stats():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
+            _, is_global, regions, error = _admin_regions(cursor, request.args.get('admin_user_id'))
+            if error:
+                return error
+            scoped = tuple(regions)
             # 1. 查总人数
-            cursor.execute("SELECT COUNT(*) AS total FROM users")
+            if is_global:
+                cursor.execute("SELECT COUNT(*) AS total FROM users")
+            else:
+                cursor.execute("""SELECT COUNT(DISTINCT user_id) AS total FROM (
+                    SELECT user_id FROM elders WHERE region_adcode IN %s
+                    UNION SELECT volunteer_id FROM volunteer_location_state WHERE service_region_adcode IN %s
+                    UNION SELECT rel.family_user_id FROM user_elder_relation rel JOIN elders e ON e.elder_id = rel.elder_id WHERE e.region_adcode IN %s
+                ) scoped_users""", (scoped, scoped, scoped))
             total_users = cursor.fetchone()['total']
 
             # 2. 查全站累计产出的志愿服务总时长 (SUM)
-            cursor.execute("SELECT SUM(total_hours) AS total_hours FROM volunteers_profile")
+            if is_global:
+                cursor.execute("SELECT SUM(total_hours) AS total_hours FROM volunteers_profile")
+            else:
+                cursor.execute("""SELECT SUM(vp.total_hours) AS total_hours FROM volunteers_profile vp
+                                  JOIN volunteer_location_state loc ON loc.volunteer_id = vp.user_id
+                                  WHERE loc.service_region_adcode IN %s""", (scoped,))
             res = cursor.fetchone()
             total_service_hours = res['total_hours'] if res['total_hours'] else 0
 
             # 3. 查服务类型分布图 (GROUP BY 聚合)
-            cursor.execute("SELECT service_type AS type, COUNT(*) AS count FROM orders GROUP BY service_type")
+            if is_global:
+                cursor.execute("SELECT service_type AS type, COUNT(*) AS count FROM orders GROUP BY service_type")
+            else:
+                cursor.execute("SELECT service_type AS type, COUNT(*) AS count FROM orders WHERE region_adcode IN %s GROUP BY service_type", (scoped,))
             distribution = cursor.fetchall()
 
             return jsonify({
@@ -158,6 +388,11 @@ def audit_volunteer():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
+            _, is_global, regions, error = _admin_regions(cursor, data.get('admin_user_id'))
+            if error:
+                return error
+            if not _scope_allows_user(cursor, user_id, is_global, regions):
+                return jsonify({"code": 403, "message": "无权审核其他区县志愿者"}), 403
             status = 'approved' if action == 'approve' else 'rejected'
             sql = "UPDATE volunteers_profile SET audit_status = %s WHERE user_id = %s AND audit_status IN ('pending', 'pending_review')"
             cursor.execute(sql, (status, user_id))
@@ -179,6 +414,13 @@ def audit_volunteer():
 def handle_alert():
     data = request.get_json() or {}
     alert_id = data.get('alert_id', data.get('alertId'))
+    action = str(data.get('action') or 'acknowledge').lower()
+    resolution_summary = str(data.get('resolution_summary') or '').strip()[:1000]
+
+    if action not in ('acknowledge', 'close'):
+        return jsonify({"code": 400, "message": "不支持的告警操作"}), 400
+    if action == 'close' and not resolution_summary:
+        return jsonify({"code": 400, "message": "关闭紧急事件前请填写处置结果"}), 400
 
     if alert_id is None:
         return jsonify({"code": 400, "message": "缺少 alert_id"})
@@ -191,10 +433,64 @@ def handle_alert():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT is_handled FROM alerts WHERE alert_id = %s", (alert_id,))
+            _, is_global, regions, error = _admin_regions(cursor, data.get('admin_user_id'))
+            if error:
+                return error
+            cursor.execute("""SELECT a.is_handled, e.region_adcode FROM alerts a
+                              JOIN elders e ON e.elder_id = a.elder_id WHERE a.alert_id = %s""", (alert_id,))
             alert = cursor.fetchone()
             if not alert:
                 return jsonify({"code": 404, "message": "报警记录不存在"})
+
+            if not is_global and str(alert.get('region_adcode')) not in regions:
+                return jsonify({"code": 403, "message": "无权处理其他区县告警"}), 403
+
+            # New SOS events have a linked incident.  Do not set is_handled
+            # when merely acknowledging it: elderly/family users must still
+            # see the active event until an explicit close result is recorded.
+            cursor.execute("SELECT emergency_incident_id FROM alerts WHERE alert_id = %s", (alert_id,))
+            incident_link = cursor.fetchone()
+            incident_id = incident_link.get('emergency_incident_id') if incident_link else None
+            if incident_id:
+                cursor.execute("""SELECT incident_id, status, linked_order_id
+                                  FROM emergency_incidents WHERE incident_id = %s FOR UPDATE""", (incident_id,))
+                incident = cursor.fetchone()
+                if not incident:
+                    return jsonify({"code": 404, "message": "关联紧急事件不存在"}), 404
+                admin_user_id = int(data.get('admin_user_id'))
+                if action == 'acknowledge':
+                    if incident['status'] == 'resolved':
+                        return jsonify({"code": 200, "message": "该紧急事件已关闭"})
+                    cursor.execute("""UPDATE emergency_incidents
+                                      SET status = CASE WHEN status = 'reported' THEN 'acknowledged' ELSE status END,
+                                          acknowledged_at = COALESCE(acknowledged_at, CURRENT_TIMESTAMP),
+                                          acknowledged_by = COALESCE(acknowledged_by, %s)
+                                      WHERE incident_id = %s""", (admin_user_id, incident_id))
+                    cursor.execute("""UPDATE emergency_notifications
+                                      SET acknowledged_at = COALESCE(acknowledged_at, CURRENT_TIMESTAMP)
+                                      WHERE incident_id = %s AND recipient_user_id = %s""", (incident_id, admin_user_id))
+                    cursor.execute("""INSERT INTO conversation_messages (conversation_id, sender_user_id, message_type, content)
+                                      SELECT conversation_id, %s, 'system', '社区管理员已接警，正在协调处置；事件尚未关闭。'
+                                      FROM conversations WHERE incident_id = %s AND conversation_type = 'sos'""",
+                                   (admin_user_id, incident_id))
+                    conn.commit()
+                    return jsonify({"code": 200, "message": "已确认接警；SOS 将继续向老人和家属显示处理中", "data": {"status": "acknowledged"}})
+
+                if incident['status'] == 'resolved':
+                    return jsonify({"code": 200, "message": "该紧急事件已关闭"})
+                cursor.execute("""UPDATE emergency_incidents
+                                  SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP,
+                                      resolved_by = %s, resolution_summary = %s
+                                  WHERE incident_id = %s""", (admin_user_id, resolution_summary, incident_id))
+                cursor.execute("UPDATE alerts SET is_handled = TRUE WHERE emergency_incident_id = %s", (incident_id,))
+                cursor.execute("""INSERT INTO conversation_messages (conversation_id, sender_user_id, message_type, content)
+                                  SELECT conversation_id, %s, 'system', %s
+                                  FROM conversations WHERE incident_id = %s AND conversation_type = 'sos'""",
+                               (admin_user_id, f'紧急事件已关闭：{resolution_summary}', incident_id))
+                cursor.execute("""UPDATE conversations SET status = 'archived', archived_at = CURRENT_TIMESTAMP
+                                  WHERE incident_id = %s AND conversation_type = 'sos'""", (incident_id,))
+                conn.commit()
+                return jsonify({"code": 200, "message": "紧急事件已关闭并保留处置记录", "data": {"status": "resolved"}})
 
             if bool(alert.get('is_handled')):
                 return jsonify({"code": 200, "message": "该报警已处理，无需重复操作"})
@@ -217,9 +513,14 @@ def handle_alert():
 # 6. 🥇 超级巨型事务：每周时长结算与自动发奖！
 @admin_bp.route('/weekly-settlement', methods=['POST'])
 def weekly_settlement():
+    data = request.get_json() or {}
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
+            _, is_global, regions, error = _admin_regions(cursor, data.get('admin_user_id'))
+            if error:
+                return error
+            scoped = tuple(regions)
             # ============ 💎 超级事务开始 ============
             
             # 第一步：找出本周表现最好的 TOP 3 志愿者并锁定他们 (排他锁)
@@ -232,7 +533,13 @@ def weekly_settlement():
                 LIMIT 3
                 FOR UPDATE
             """
-            cursor.execute(sql_find_top3)
+            if not is_global:
+                sql_find_top3 = sql_find_top3.replace(
+                    "FROM volunteers_profile", "FROM volunteers_profile vp JOIN volunteer_location_state loc ON loc.volunteer_id = vp.user_id"
+                ).replace("WHERE weekly_hours > 0", "WHERE vp.weekly_hours > 0 AND loc.service_region_adcode IN %s")
+                cursor.execute(sql_find_top3, (scoped,))
+            else:
+                cursor.execute(sql_find_top3)
             top_volunteers = cursor.fetchall()
 
             awarded_count = 0
@@ -254,7 +561,11 @@ def weekly_settlement():
 
             # 第三步：无差别重置！全站志愿者的本周时长全部清零 (总时长 total_hours 保持不变)
             sql_reset = "UPDATE volunteers_profile SET weekly_hours = 0"
-            cursor.execute(sql_reset)
+            if not is_global:
+                sql_reset += " WHERE user_id IN (SELECT volunteer_id FROM volunteer_location_state WHERE service_region_adcode IN %s)"
+                cursor.execute(sql_reset, (scoped,))
+            else:
+                cursor.execute(sql_reset)
 
             # 提交事务
             conn.commit()
@@ -275,6 +586,9 @@ def list_hour_reviews():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
+            _, is_global, regions, error = _admin_regions(cursor, request.args.get('admin_user_id'))
+            if error:
+                return error
             sql = """
                 SELECT
                     hr.review_id,
@@ -300,7 +614,11 @@ def list_hour_reviews():
                 WHERE hr.review_status = 'pending_admin'
                 ORDER BY hr.created_at DESC
             """
-            cursor.execute(sql)
+            if not is_global:
+                sql = sql.replace("ORDER BY hr.created_at", "AND o.region_adcode IN %s ORDER BY hr.created_at")
+                cursor.execute(sql, (tuple(regions),))
+            else:
+                cursor.execute(sql)
             rows = cursor.fetchall()
 
             for row in rows:
@@ -330,11 +648,14 @@ def review_hour_request():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
+            _, is_global, regions, error = _admin_regions(cursor, data.get('admin_user_id'))
+            if error:
+                return error
             cursor.execute(
                 """
                 SELECT hr.review_id, hr.order_id, hr.volunteer_id, hr.expected_hours,
                        hr.declared_hours, hr.max_auto_hours, hr.review_status, hr.approved_hours,
-                       o.status
+                       o.status, o.region_adcode
                 FROM volunteer_hour_reviews hr
                 JOIN orders o ON hr.order_id = o.order_id
                 WHERE hr.review_id = %s
@@ -347,6 +668,10 @@ def review_hour_request():
             if not review:
                 conn.rollback()
                 return jsonify({"code": 404, "message": "审核记录不存在"})
+
+            if not is_global and str(review.get('region_adcode')) not in regions:
+                conn.rollback()
+                return jsonify({"code": 403, "message": "无权审核其他区县服务时长"}), 403
 
             if review.get('review_status') != 'pending_admin':
                 conn.rollback()
@@ -414,6 +739,9 @@ def list_award_requests():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
+            _, is_global, regions, error = _admin_regions(cursor, request.args.get('admin_user_id'))
+            if error:
+                return error
             sql = """
                 SELECT
                     ar.request_id,
@@ -427,10 +755,15 @@ def list_award_requests():
                     ar.reviewed_at
                 FROM volunteer_award_requests ar
                 LEFT JOIN users u ON ar.volunteer_id = u.user_id
+                LEFT JOIN volunteer_location_state loc ON loc.volunteer_id = ar.volunteer_id
                 WHERE (%s = 'all' OR ar.status = %s)
                 ORDER BY ar.created_at DESC
             """
-            cursor.execute(sql, (status, status))
+            if not is_global:
+                sql = sql.replace("ORDER BY ar.created_at", "AND loc.service_region_adcode IN %s ORDER BY ar.created_at")
+                cursor.execute(sql, (status, status, tuple(regions)))
+            else:
+                cursor.execute(sql, (status, status))
             rows = cursor.fetchall()
 
             for row in rows:
@@ -458,6 +791,9 @@ def review_award_request():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
+            _, is_global, regions, error = _admin_regions(cursor, data.get('admin_user_id'))
+            if error:
+                return error
             cursor.execute(
                 """
                 SELECT request_id, volunteer_id, award_title, status
@@ -472,6 +808,10 @@ def review_award_request():
             if not req:
                 conn.rollback()
                 return jsonify({"code": 404, "message": "荣誉申请不存在"})
+
+            if not _scope_allows_user(cursor, req['volunteer_id'], is_global, regions):
+                conn.rollback()
+                return jsonify({"code": 403, "message": "无权审核其他区县荣誉申请"}), 403
 
             if req.get('status') != 'pending':
                 conn.rollback()

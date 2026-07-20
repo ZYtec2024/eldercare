@@ -54,6 +54,49 @@ def bind_elder():
     finally:
         conn.close()
 
+
+@family_bp.route('/orders/review', methods=['POST'])
+def review_family_order():
+    data = request.get_json() or {}
+    order_id, family_user_id, rating = data.get('order_id'), data.get('family_user_id'), data.get('rating')
+    comment = data.get('comment', '')
+    try:
+        rating = int(rating)
+    except (TypeError, ValueError):
+        return jsonify({"code": 400, "message": "评分必须为 1 到 5 星"}), 400
+    if not order_id or not family_user_id or rating < 1 or rating > 5:
+        return jsonify({"code": 400, "message": "评价参数不完整"}), 400
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""SELECT o.order_id, o.elder_id, o.volunteer_id, o.status
+                              FROM orders o WHERE o.order_id = %s FOR UPDATE""", (order_id,))
+            order = cursor.fetchone()
+            if not order or order['status'] != 'completed' or not order.get('volunteer_id'):
+                return jsonify({"code": 400, "message": "仅已完成且有志愿者的订单可以评价"}), 400
+            cursor.execute("SELECT 1 FROM user_elder_relation WHERE family_user_id = %s AND elder_id = %s",
+                           (family_user_id, order['elder_id']))
+            if not cursor.fetchone():
+                return jsonify({"code": 403, "message": "您无权评价该订单"}), 403
+            cursor.execute("INSERT INTO reviews (order_id, rating, comment) VALUES (%s, %s, %s)",
+                           (order_id, rating, comment or '家属评价'))
+            cursor.execute("""SELECT AVG(r.rating) AS avg_rating FROM reviews r
+                              JOIN orders o ON o.order_id = r.order_id WHERE o.volunteer_id = %s""",
+                           (order['volunteer_id'],))
+            average = cursor.fetchone()
+            if average and average.get('avg_rating') is not None:
+                cursor.execute("UPDATE volunteer_location_state SET service_rating = %s WHERE volunteer_id = %s",
+                               (round(float(average['avg_rating']), 2), order['volunteer_id']))
+            conn.commit()
+            return jsonify({"code": 200, "message": "评价已提交，服务评分已更新"})
+    except Exception as exc:
+        conn.rollback()
+        if 'duplicate' in str(exc).lower():
+            return jsonify({"code": 409, "message": "该订单已经评价过"}), 409
+        return jsonify({"code": 500, "message": f"提交评价失败: {exc}"}), 500
+    finally:
+        conn.close()
+
 # 1.1 修改绑定关系
 @family_bp.route('/bind-elder/relation', methods=['PUT'])
 def update_bind_relation():
@@ -189,6 +232,28 @@ def publish_order():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
+            cursor.execute("SELECT 1 FROM user_elder_relation WHERE family_user_id = %s AND elder_id = %s",
+                           (family_user_id, elder_id))
+            if not cursor.fetchone():
+                return jsonify({"code": 403, "message": "您只能替已绑定的长辈发布服务请求"}), 403
+            from routes.dispatch import create_smart_order_for_elder
+            try:
+                order_id, message = create_smart_order_for_elder(
+                    cursor,
+                    elder_id=int(elder_id),
+                    created_by=int(family_user_id),
+                    service_type=str(service_type),
+                    service_hours=service_hours,
+                    service_time=str(service_time),
+                    notes=str(notes or ""),
+                    address=str(address or "") or None,
+                    proxy_created_by=int(family_user_id),
+                    proxy_reason="家属代老人下单",
+                )
+            except ValueError as exc:
+                return jsonify({"code": 400, "message": str(exc)}), 400
+            conn.commit()
+            return jsonify({"code": 200, "message": message, "data": {"order_id": order_id, "status": "pending"}})
             # 直接插入订单表，不再有扣积分的复杂事务！公益发单毫无心理负担！
             sql = """
                 INSERT INTO orders (elder_id, created_by, service_type, service_time, service_hours, notes)
@@ -246,10 +311,13 @@ def get_family_orders():
                     JOIN elders e ON o.elder_id = e.elder_id
                     LEFT JOIN users u ON o.volunteer_id = u.user_id
                         LEFT JOIN volunteer_hour_reviews hr ON hr.order_id = o.order_id
-                    WHERE o.created_by = %s
+                    WHERE o.created_by = %s OR EXISTS (
+                        SELECT 1 FROM user_elder_relation rel
+                        WHERE rel.family_user_id = %s AND rel.elder_id = o.elder_id
+                    )
                     ORDER BY o.created_at DESC
                 """
-                cursor.execute(sql, (family_user_id,))
+                cursor.execute(sql, (family_user_id, family_user_id))
             except Exception:
                 # 如果address列不存在，则使用原始查询
                 sql = """
@@ -271,10 +339,13 @@ def get_family_orders():
                     JOIN elders e ON o.elder_id = e.elder_id
                     LEFT JOIN users u ON o.volunteer_id = u.user_id
                         LEFT JOIN volunteer_hour_reviews hr ON hr.order_id = o.order_id
-                    WHERE o.created_by = %s
+                    WHERE o.created_by = %s OR EXISTS (
+                        SELECT 1 FROM user_elder_relation rel
+                        WHERE rel.family_user_id = %s AND rel.elder_id = o.elder_id
+                    )
                     ORDER BY o.created_at DESC
                 """
-                cursor.execute(sql, (family_user_id,))
+                cursor.execute(sql, (family_user_id, family_user_id))
             
             orders = cursor.fetchall()
 
@@ -311,7 +382,7 @@ def confirm_order_hours():
         with conn.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT order_id, status, created_by, volunteer_id, service_hours
+                SELECT order_id, elder_id, status, created_by, volunteer_id, service_hours
                 FROM orders
                 WHERE order_id = %s
                 FOR UPDATE
@@ -324,7 +395,10 @@ def confirm_order_hours():
                 conn.rollback()
                 return jsonify({"code": 404, "message": "订单不存在"})
 
-            if str(order.get('created_by')) != str(family_user_id):
+            cursor.execute("""SELECT 1 FROM user_elder_relation WHERE family_user_id = %s AND elder_id = %s""",
+                           (family_user_id, order.get('elder_id')))
+            bound = cursor.fetchone()
+            if str(order.get('created_by')) != str(family_user_id) and not bound:
                 conn.rollback()
                 return jsonify({"code": 403, "message": "您无权确认该订单时长"})
 
@@ -410,25 +484,43 @@ def confirm_order_hours():
 def cancel_order():
     data = request.get_json()
     order_id = data.get('order_id')
+    family_user_id = data.get('family_user_id')
 
-    if not order_id:
+    if not order_id or not family_user_id:
         return jsonify({"code": 400, "message": "缺少订单编号"})
 
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
             # 💎 高分点：业务状态机流转控制。只有 pending (待接单) 状态才可以撤销
-            sql_check = "SELECT status FROM orders WHERE order_id = %s"
+            sql_check = "SELECT order_id, elder_id, status, volunteer_id FROM orders WHERE order_id = %s FOR UPDATE"
             cursor.execute(sql_check, (order_id,))
             order = cursor.fetchone()
+
+            if order:
+                cursor.execute("SELECT 1 FROM user_elder_relation WHERE family_user_id = %s AND elder_id = %s",
+                               (family_user_id, order['elder_id']))
+                if not cursor.fetchone():
+                    return jsonify({"code": 403, "message": "您无权取消该订单"}), 403
 
             if not order:
                 return jsonify({"code": 404, "message": "订单不存在"})
             
-            if order['status'] != 'pending':
+            if order['status'] not in ('pending', 'accepted'):
                 return jsonify({"code": 400, "message": "该订单已被接单或已处理，无法撤销！"})
 
             # 更新订单状态为 cancelled
+            cursor.execute("SELECT order_id FROM dispatch_orders WHERE order_id = %s", (order_id,))
+            if cursor.fetchone():
+                from routes.dispatch import _create_return_route
+                volunteer_id = int(order.get('volunteer_id') or 0)
+                if volunteer_id:
+                    cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order_id,))
+                    return_route = _create_return_route(cursor, volunteer_id)
+                    cursor.execute("UPDATE volunteer_location_state SET availability = %s WHERE volunteer_id = %s",
+                                   ('returning' if return_route else 'idle', volunteer_id))
+                cursor.execute("UPDATE dispatch_orders SET dispatch_state = 'cancelled' WHERE order_id = %s", (order_id,))
+                cursor.execute("UPDATE dispatch_candidates SET response_status = 'expired', responded_at = CURRENT_TIMESTAMP WHERE order_id = %s", (order_id,))
             sql_cancel = "UPDATE orders SET status = 'cancelled' WHERE order_id = %s"
             cursor.execute(sql_cancel, (order_id,))
             conn.commit()

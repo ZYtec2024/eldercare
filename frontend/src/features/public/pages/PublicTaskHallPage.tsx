@@ -60,7 +60,10 @@ export default function PublicTaskHallPage() {
 
   const load = useCallback(() => {
     setLoading(true)
-    const params = filter !== 'all' ? { status: filter === 'in_progress' ? 'accepted' : filter } : {}
+    const params = {
+      ...(filter !== 'all' ? { status: filter === 'in_progress' ? 'accepted' : filter } : {}),
+      viewer_user_id: session?.userId,
+    }
     http
       .get<ApiEnvelope<{ tasks: PublicTask[]; stats: TaskStats }>>('/public/tasks', { params })
       .then((res) => {
@@ -69,7 +72,7 @@ export default function PublicTaskHallPage() {
         // For in_progress filter, also include actual in_progress status
         if (filter === 'in_progress') {
           // Re-fetch without filter and filter client-side
-          http.get<ApiEnvelope<{ tasks: PublicTask[]; stats: TaskStats }>>('/public/tasks').then((allRes) => {
+          http.get<ApiEnvelope<{ tasks: PublicTask[]; stats: TaskStats }>>('/public/tasks', { params: { viewer_user_id: session?.userId } }).then((allRes) => {
             const allTasks = allRes.data.data.tasks ?? []
             setTasks(allTasks.filter((t) => t.status === 'accepted' || t.status === 'in_progress'))
             setStats(allRes.data.data.stats)
@@ -84,7 +87,7 @@ export default function PublicTaskHallPage() {
         setTasks([])
       })
       .finally(() => setLoading(false))
-  }, [filter])
+  }, [filter, session?.userId])
 
   useEffect(() => {
     load()
@@ -130,7 +133,7 @@ export default function PublicTaskHallPage() {
       onOk: async () => {
         setDeleting(true)
         try {
-          await http.post('/public/tasks/batch-delete', { order_ids: selectedIds })
+          await http.post('/public/tasks/batch-delete', { order_ids: selectedIds, viewer_user_id: session?.userId })
           message.success(`成功删除 ${selectedIds.length} 个任务`)
           setSelectedIds([])
           load()

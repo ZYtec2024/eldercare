@@ -1,5 +1,8 @@
 # app.py
 import json
+import os
+import threading
+import time
 
 from flask import Flask, jsonify, request
 try:
@@ -15,6 +18,8 @@ from routes.family import family_bp
 from routes.volunteer import volunteer_bp
 from routes.admin import admin_bp
 from routes.public import public_bp
+from routes.conversation import conversation_bp
+from routes.dispatch import dispatch_bp, ensure_dispatch_schema, run_dispatch_clock_tick
 from db import get_db_connection
 
 app = Flask(__name__)
@@ -29,6 +34,8 @@ app.register_blueprint(volunteer_bp, url_prefix='/api/volunteer')
 app.register_blueprint(admin_bp, url_prefix='/api/admin')
 app.register_blueprint(public_bp, url_prefix='/api/public')
 app.register_blueprint(profile_bp, url_prefix='/api/profile')
+app.register_blueprint(conversation_bp, url_prefix='/api/conversations')
+app.register_blueprint(dispatch_bp, url_prefix='/api/dispatch')
 
 
 def init_db():
@@ -101,6 +108,19 @@ def init_db():
 # 应用启动时运行数据库初始化
 with app.app_context():
     init_db()
+    ensure_dispatch_schema()
+
+
+def _dispatch_location_clock() -> None:
+    """Run the simulated GPS/dispatch clock independently of browser polling."""
+    while True:
+        run_dispatch_clock_tick()
+        time.sleep(1)
+
+
+# The development server is started without Flask's reloader in this project.
+# A daemon keeps the same persistent location state alive for every role.
+threading.Thread(target=_dispatch_location_clock, name='dispatch-location-clock', daemon=True).start()
 
 
 def snake_to_camel(name: str) -> str:
@@ -139,6 +159,9 @@ def normalize_json_response(response):
         return response
 
     if not response.is_json:
+        # Still advertise UTF-8 for plain JSON-like API payloads.
+        if response.mimetype == 'application/json' and 'charset' not in (response.content_type or ''):
+            response.headers['Content-Type'] = 'application/json; charset=utf-8'
         return response
 
     try:
@@ -150,10 +173,21 @@ def normalize_json_response(response):
         return response
 
     normalized = add_case_aliases(payload)
-    response.set_data(json.dumps(normalized, ensure_ascii=False))
-    response.mimetype = 'application/json'
+    # Explicit UTF-8 bytes + charset so Windows clients (PowerShell, Edge) do not
+    # reinterpret Chinese as the system ANSI code page.
+    response.set_data(json.dumps(normalized, ensure_ascii=False).encode('utf-8'))
+    response.headers['Content-Type'] = 'application/json; charset=utf-8'
     return response
 
+
+@app.after_request
+def ensure_api_utf8_charset(response):
+    """Guarantee charset on every /api response, including non-normalized ones."""
+    if request.path.startswith('/api/'):
+        content_type = response.headers.get('Content-Type', '')
+        if content_type.startswith('application/json') and 'charset=' not in content_type.lower():
+            response.headers['Content-Type'] = 'application/json; charset=utf-8'
+    return response
 
 # 测试服务器是否连通的根路由
 @app.route('/')
@@ -165,4 +199,5 @@ def hello():
 
 if __name__ == '__main__':
     # 开启 debug=True，以后你修改任何 Python 代码，按 Ctrl+S 保存后，服务器会自动重启
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    debug = os.getenv('FLASK_DEBUG', 'true').lower() in ('1', 'true', 'yes')
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT', '5000')), debug=debug)

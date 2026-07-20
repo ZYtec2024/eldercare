@@ -208,11 +208,12 @@ export async function fetchFamilyOrders(familyUserId = 101) {
   })
 }
 
-export async function cancelFamilyOrder(orderId: number) {
+export async function cancelFamilyOrder(orderId: number, familyUserId: number) {
   const response = await http.post<ApiEnvelope<{ status: string }>>(
     '/family/orders/cancel',
     {
       order_id: orderId,
+      family_user_id: familyUserId,
     },
   )
 
@@ -235,5 +236,12 @@ export async function confirmFamilyOrderHours(payload: {
     },
   )
 
+  return response.data
+}
+
+export async function reviewFamilyOrder(payload: { orderId: number; familyUserId: number; rating: number; comment?: string }) {
+  const response = await http.post<ApiEnvelope<unknown>>('/family/orders/review', {
+    order_id: payload.orderId, family_user_id: payload.familyUserId, rating: payload.rating, comment: payload.comment ?? '',
+  })
   return response.data
 }

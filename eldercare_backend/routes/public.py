@@ -6,10 +6,39 @@ import datetime
 public_bp = Blueprint('public', __name__)
 
 
+def _viewer_regions(cursor, raw_user_id):
+    """Resolve the operational districts visible to a logged-in viewer."""
+    if not raw_user_id:
+        return True, set()
+    try:
+        user_id = int(raw_user_id)
+    except (TypeError, ValueError):
+        return False, set()
+    cursor.execute("SELECT role FROM users WHERE user_id = %s", (user_id,))
+    user = cursor.fetchone()
+    if not user:
+        return False, set()
+    if user.get('role') == 'admin':
+        cursor.execute("SELECT region_adcode FROM admin_region_scope WHERE admin_user_id = %s", (user_id,))
+        regions = {str(row['region_adcode']) for row in cursor.fetchall()}
+        return '*' in regions, regions - {'*'}
+    cursor.execute(
+        """
+        SELECT region_adcode FROM elders WHERE user_id = %s
+        UNION SELECT service_region_adcode FROM volunteer_location_state WHERE volunteer_id = %s
+        UNION SELECT e.region_adcode FROM user_elder_relation rel
+              JOIN elders e ON e.elder_id = rel.elder_id WHERE rel.family_user_id = %s
+        """,
+        (user_id, user_id, user_id),
+    )
+    return False, {str(row['region_adcode']) for row in cursor.fetchall() if row.get('region_adcode')}
+
+
 @public_bp.route('/tasks', methods=['GET'])
 def get_all_tasks():
     """公开任务大厅：所有人可查看，支持按状态筛选"""
     status_filter = request.args.get('status')  # pending / accepted / in_progress / completed / all
+    viewer_user_id = request.args.get('viewer_user_id')
 
     conn = get_db_connection()
     if not conn:
@@ -17,6 +46,9 @@ def get_all_tasks():
 
     try:
         with conn.cursor() as cursor:
+            is_global, regions = _viewer_regions(cursor, viewer_user_id)
+            if viewer_user_id and not is_global and not regions:
+                return jsonify({"code": 403, "message": "当前账号未配置服务区县"}), 403
             sql = """
                 SELECT
                     o.order_id,
@@ -39,6 +71,10 @@ def get_all_tasks():
                 sql += " AND o.status = %s"
                 params.append(status_filter)
 
+            if not is_global:
+                sql += " AND o.region_adcode IN %s"
+                params.append(tuple(regions))
+
             sql += " ORDER BY o.created_at DESC"
 
             cursor.execute(sql, tuple(params))
@@ -51,7 +87,7 @@ def get_all_tasks():
                     o['created_at'] = o['created_at'].strftime('%Y-%m-%d %H:%M')
 
             # 统计各状态数量
-            cursor.execute("""
+            stats_sql = """
                 SELECT
                     COUNT(*) AS total,
                     COUNT(CASE WHEN status = 'pending' THEN 1 END) AS pending_count,
@@ -59,7 +95,12 @@ def get_all_tasks():
                     COUNT(CASE WHEN status = 'completed' THEN 1 END) AS completed_count
                 FROM orders
                 WHERE status != 'cancelled'
-            """)
+            """
+            if not is_global:
+                stats_sql += " AND region_adcode IN %s"
+                cursor.execute(stats_sql, (tuple(regions),))
+            else:
+                cursor.execute(stats_sql)
             stats = cursor.fetchone()
 
             return jsonify({
@@ -118,6 +159,7 @@ def batch_delete_completed_tasks():
     """批量删除已完成的任务（定量删除）"""
     data = request.get_json()
     order_ids = data.get('order_ids', [])
+    viewer_user_id = data.get('viewer_user_id')
 
     if not order_ids:
         return jsonify({"code": 400, "message": "请选择要删除的任务"})
@@ -128,10 +170,20 @@ def batch_delete_completed_tasks():
 
     try:
         with conn.cursor() as cursor:
+            cursor.execute("SELECT role FROM users WHERE user_id = %s", (viewer_user_id,))
+            viewer = cursor.fetchone()
+            if not viewer or viewer.get('role') != 'admin':
+                return jsonify({"code": 403, "message": "仅管理员可删除任务"}), 403
+            is_global, regions = _viewer_regions(cursor, viewer_user_id)
+            if not is_global and not regions:
+                return jsonify({"code": 403, "message": "该管理员未分配区县管理范围"}), 403
             deleted_count = 0
             for oid in order_ids:
-                cursor.execute("SELECT status FROM orders WHERE order_id = %s", (oid,))
+                cursor.execute("SELECT status, region_adcode FROM orders WHERE order_id = %s", (oid,))
                 order = cursor.fetchone()
+                if order and not is_global and str(order.get('region_adcode')) not in regions:
+                    conn.rollback()
+                    return jsonify({"code": 403, "message": "不能删除其他区县任务"}), 403
                 if order and order['status'] == 'completed':
                     cursor.execute("DELETE FROM reviews WHERE order_id = %s", (oid,))
                     cursor.execute("DELETE FROM volunteer_hour_reviews WHERE order_id = %s", (oid,))
