@@ -1,6 +1,7 @@
 # routes/elder.py
 from flask import Blueprint, request, jsonify
 from db import get_db_connection
+from region_service import is_active_region
 from utils import format_datetime, send_health_alert_email, send_sos_email, get_validated_data
 import datetime
 
@@ -196,6 +197,8 @@ def create_emergency_incident():
                                (reporter_user_id, elder['region_adcode']))
                 if not cursor.fetchone():
                     return jsonify({'code': 403, 'message': '您无权处理该区县紧急事件'}), 403
+            if not is_active_region(elder.get('region_adcode')):
+                return jsonify({'code': 400, 'message': '老人所属区县尚未开通或已停用，无法发起紧急求助'}), 400
             cursor.execute('''INSERT INTO emergency_incidents
                               (elder_id, region_adcode, incident_type, description, status, created_by)
                               VALUES (%s, %s, %s, %s, 'reported', %s) RETURNING incident_id''',
@@ -232,12 +235,16 @@ def create_emergency_incident():
             order_id = None
             if dispatch_service:
                 from routes.dispatch import create_smart_order_for_elder
-                order_id, _ = create_smart_order_for_elder(
-                    cursor, elder_id=int(elder_id), created_by=int(reporter_user_id),
-                    service_type='SOS紧急救助', notes=description, urgent=True,
-                    proxy_created_by=int(reporter_user_id) if reporter['role'] != 'elder' else None,
-                    proxy_reason='紧急求助代发' if reporter['role'] != 'elder' else None,
-                )
+                try:
+                    order_id, _ = create_smart_order_for_elder(
+                        cursor, elder_id=int(elder_id), created_by=int(reporter_user_id),
+                        service_type='SOS紧急救助', notes=description, urgent=True,
+                        proxy_created_by=int(reporter_user_id) if reporter['role'] != 'elder' else None,
+                        proxy_reason='紧急求助代发' if reporter['role'] != 'elder' else None,
+                    )
+                except ValueError as exc:
+                    conn.rollback()
+                    return jsonify({'code': 400, 'message': str(exc)}), 400
                 cursor.execute("UPDATE emergency_incidents SET linked_order_id = %s, status = 'dispatching' WHERE incident_id = %s",
                                (order_id, incident_id))
             cursor.execute('''SELECT u.email FROM users u JOIN user_elder_relation r ON r.family_user_id = u.user_id
@@ -252,6 +259,9 @@ def create_emergency_incident():
             return jsonify({'code': 200, 'message': '紧急事件已通知本区家属和管理员',
                             'data': {'incident_id': incident_id, 'alert_id': alert_id,
                                      'conversation_id': conversation_id, 'order_id': order_id}})
+    except ValueError as exc:
+        conn.rollback()
+        return jsonify({'code': 400, 'message': str(exc)}), 400
     except Exception as exc:
         conn.rollback()
         return jsonify({'code': 500, 'message': f'创建紧急事件失败: {exc}'}), 500

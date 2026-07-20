@@ -362,3 +362,12 @@ def admin_is_root(cursor: Any, admin_user_id: int) -> bool:
         (admin_user_id,),
     )
     return bool(cursor.fetchone())
+
+
+def is_active_region(adcode: str | None, catalog: dict[str, dict[str, Any]] | None = None) -> bool:
+    """True when the district is opened (active) in the runtime catalog."""
+    code = str(adcode or "").strip()
+    if not code:
+        return False
+    source = catalog if catalog is not None else _ACTIVE_CATALOG
+    return code in source

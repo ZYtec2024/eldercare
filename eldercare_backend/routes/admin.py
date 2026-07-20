@@ -54,11 +54,119 @@ def _user_regions(cursor, user_id):
 def _scope_allows_user(cursor, user_id, is_global, regions):
     return is_global or bool(_user_regions(cursor, user_id) & regions)
 
-# 1. 获取用户列表 (带分页与角色筛选)
+
+def _region_user_filter_sql():
+    """SQL fragment: users who operate in the given region tuple (%s x3)."""
+    return """u.user_id IN (
+        SELECT user_id FROM elders WHERE region_adcode IN %s
+        UNION SELECT volunteer_id FROM volunteer_location_state WHERE service_region_adcode IN %s
+        UNION SELECT rel.family_user_id FROM user_elder_relation rel
+              JOIN elders e ON e.elder_id = rel.elder_id WHERE e.region_adcode IN %s
+    )"""
+
+
+def _enrich_admin_users(cursor, users):
+    """Attach district and elder-binding context for admin CRM views."""
+    if not users:
+        return []
+    user_ids = tuple(int(row['user_id']) for row in users)
+    placeholders = ','.join(['%s'] * len(user_ids))
+
+    elder_by_user: dict[int, dict] = {}
+    cursor.execute(
+        f"""SELECT e.user_id, e.elder_id, e.name, e.address, e.region_adcode,
+                   COALESCE(ar.name, e.region_adcode) AS region_name
+            FROM elders e
+            LEFT JOIN administrative_regions ar ON ar.adcode = e.region_adcode
+            WHERE e.user_id IN ({placeholders})""",
+        user_ids,
+    )
+    for row in cursor.fetchall():
+        elder_by_user[int(row['user_id'])] = {
+            'elder_id': int(row['elder_id']),
+            'name': row['name'],
+            'address': row.get('address') or '',
+            'region_adcode': row.get('region_adcode'),
+            'region_name': row.get('region_name') or row.get('region_adcode') or '',
+        }
+
+    family_elders: dict[int, list[dict]] = {}
+    cursor.execute(
+        f"""SELECT rel.family_user_id, e.elder_id, e.name, e.region_adcode,
+                   COALESCE(ar.name, e.region_adcode) AS region_name
+            FROM user_elder_relation rel
+            JOIN elders e ON e.elder_id = rel.elder_id
+            LEFT JOIN administrative_regions ar ON ar.adcode = e.region_adcode
+            WHERE rel.family_user_id IN ({placeholders})
+            ORDER BY e.elder_id""",
+        user_ids,
+    )
+    for row in cursor.fetchall():
+        family_elders.setdefault(int(row['family_user_id']), []).append({
+            'elder_id': int(row['elder_id']),
+            'name': row['name'],
+            'region_adcode': row.get('region_adcode'),
+            'region_name': row.get('region_name') or row.get('region_adcode') or '',
+        })
+
+    volunteer_region: dict[int, dict] = {}
+    cursor.execute(
+        f"""SELECT v.volunteer_id, v.service_region_adcode AS region_adcode,
+                   COALESCE(ar.name, v.service_region_adcode) AS region_name
+            FROM volunteer_location_state v
+            LEFT JOIN administrative_regions ar ON ar.adcode = v.service_region_adcode
+            WHERE v.volunteer_id IN ({placeholders})""",
+        user_ids,
+    )
+    for row in cursor.fetchall():
+        volunteer_region[int(row['volunteer_id'])] = {
+            'region_adcode': row.get('region_adcode'),
+            'region_name': row.get('region_name') or row.get('region_adcode') or '',
+        }
+
+    enriched = []
+    for row in users:
+        item = dict(row)
+        uid = int(item['user_id'])
+        role = item.get('role')
+        region_adcodes: list[str] = []
+        region_names: list[str] = []
+        related_elders: list[dict] = []
+        address = ''
+
+        if role == 'elder' and uid in elder_by_user:
+            profile = elder_by_user[uid]
+            address = profile['address']
+            if profile.get('region_adcode'):
+                region_adcodes = [str(profile['region_adcode'])]
+                region_names = [profile['region_name']]
+        elif role == 'family':
+            related_elders = family_elders.get(uid, [])
+            for elder in related_elders:
+                code = str(elder.get('region_adcode') or '')
+                if code and code not in region_adcodes:
+                    region_adcodes.append(code)
+                    region_names.append(elder.get('region_name') or code)
+        elif role == 'volunteer' and uid in volunteer_region:
+            profile = volunteer_region[uid]
+            if profile.get('region_adcode'):
+                region_adcodes = [str(profile['region_adcode'])]
+                region_names = [profile['region_name']]
+
+        item['region_adcodes'] = region_adcodes
+        item['region_names'] = region_names
+        item['related_elders'] = related_elders
+        item['address'] = address
+        enriched.append(item)
+    return enriched
+
+
+# 1. 获取用户列表 (带分页与角色 / 区县筛选)
 @admin_bp.route('/users/list', methods=['GET'])
 def get_user_list():
-    role = request.args.get('role') 
+    role = request.args.get('role')
     keyword = (request.args.get('keyword') or '').strip()
+    requested_region = (request.args.get('region_adcode') or '').strip()
     page = int(request.args.get('page', 1))
     limit = int(request.args.get('limit', 10))
     offset = (page - 1) * limit
@@ -69,18 +177,23 @@ def get_user_list():
             _, is_global, regions, error = _admin_regions(cursor, request.args.get('admin_user_id'))
             if error:
                 return error
+
+            filter_regions = None
+            if requested_region:
+                if is_global or requested_region in regions:
+                    filter_regions = {requested_region}
+                else:
+                    return jsonify({"code": 403, "message": "无权查看该区县用户"}), 403
+            elif not is_global:
+                filter_regions = set(regions)
+
             region_filter = ""
             scope_params = []
-            if not is_global:
-                scoped = tuple(regions)
-                region_filter = """u.user_id IN (
-                    SELECT user_id FROM elders WHERE region_adcode IN %s
-                    UNION SELECT volunteer_id FROM volunteer_location_state WHERE service_region_adcode IN %s
-                    UNION SELECT rel.family_user_id FROM user_elder_relation rel
-                          JOIN elders e ON e.elder_id = rel.elder_id WHERE e.region_adcode IN %s
-                )"""
+            if filter_regions is not None:
+                scoped = tuple(filter_regions)
+                region_filter = _region_user_filter_sql()
                 scope_params = [scoped, scoped, scoped]
-            # 动态构建 SQL 与分页 (LIMIT OFFSET)
+
             base_sql = """
                 SELECT
                     u.user_id,
@@ -121,10 +234,10 @@ def get_user_list():
             params.extend([limit, offset])
 
             cursor.execute(base_sql, tuple(scope_params + params))
-            users = cursor.fetchall()
+            users = _enrich_admin_users(cursor, cursor.fetchall())
 
             return jsonify({
-                "code": 200, "message": "获取成功", 
+                "code": 200, "message": "获取成功",
                 "data": {"total": total_count, "list": users}
             })
     finally:

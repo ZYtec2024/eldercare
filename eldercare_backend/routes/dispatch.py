@@ -25,6 +25,7 @@ from region_service import (
     ensure_region_columns,
     fetch_district_children,
     fetch_district_detail,
+    is_active_region,
     refresh_runtime_catalog,
     resolve_region_adcode,
     upsert_region,
@@ -774,8 +775,17 @@ def _event(cursor: Any, order_id: int | None, event_type: str, message: str, det
                    (order_id, event_type, message, json.dumps(details or {}, ensure_ascii=False)))
 
 
+def _fallback_open_region() -> str:
+    if DEFAULT_REGION_ADCODE in REGION_CATALOG:
+        return DEFAULT_REGION_ADCODE
+    return next(iter(REGION_CATALOG), DEFAULT_REGION_ADCODE)
+
+
 def _region_bounds(region_adcode: str | None) -> dict[str, float]:
-    region = REGION_CATALOG.get(str(region_adcode or DEFAULT_REGION_ADCODE), REGION_CATALOG[DEFAULT_REGION_ADCODE])
+    code = str(region_adcode or "")
+    region = REGION_CATALOG.get(code) or REGION_CATALOG.get(_fallback_open_region())
+    if not region:
+        return SEED_REGIONS[DEFAULT_REGION_ADCODE]["bounds"]
     return region["bounds"]
 
 
@@ -784,6 +794,7 @@ def _region_for_point(lng: Any, lat: Any) -> str | None:
 
     Prefers official AMap district polygons stored in administrative_regions;
     falls back to rectangular bounds for seed rows without polylines yet.
+    Only returns districts that are currently opened (active).
     """
     return resolve_region_adcode(lng, lat, REGION_CATALOG)
 
@@ -793,14 +804,86 @@ def _valid_region_point(lng: Any, lat: Any, region_adcode: str | None) -> tuple[
         value_lng, value_lat = float(lng), float(lat)
     except (TypeError, ValueError):
         return None
+    # Unopened / disabled districts must not accept location pins.
+    if not is_active_region(region_adcode, REGION_CATALOG):
+        return None
     # A small buffer keeps hand-entered nearby addresses usable while avoiding
     # accidental latitude/longitude swaps or a location outside this demo map.
-    bounds = _region_bounds(region_adcode)
+    bounds = REGION_CATALOG[str(region_adcode)]["bounds"]
     if not (bounds["west"] - 0.02 <= value_lng <= bounds["east"] + 0.02):
         return None
     if not (bounds["south"] - 0.02 <= value_lat <= bounds["north"] + 0.02):
         return None
     return round(value_lng, 6), round(value_lat, 6)
+
+
+def _bind_admin_to_region(cursor: Any, admin_user_id: int, region_adcode: str, permission: str = "manage") -> None:
+    cursor.execute(
+        "SELECT 1 FROM admin_region_scope WHERE admin_user_id = %s AND region_adcode = %s",
+        (admin_user_id, region_adcode),
+    )
+    if cursor.fetchone():
+        return
+    cursor.execute(
+        "INSERT INTO admin_region_scope (admin_user_id, region_adcode, permission) VALUES (%s, %s, %s)",
+        (admin_user_id, region_adcode, permission),
+    )
+
+
+def _create_or_bind_district_admin(
+    cursor: Any,
+    region_adcode: str,
+    *,
+    manager_user_id: int | None = None,
+    district_admin: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Bind an existing admin or create a new district admin for an opened region."""
+    if manager_user_id:
+        cursor.execute("SELECT user_id, username, real_name, role FROM users WHERE user_id = %s", (manager_user_id,))
+        admin = cursor.fetchone()
+        if not admin or admin["role"] != "admin":
+            raise ValueError("指定的区管理员账号不存在或不是管理员")
+        cursor.execute(
+            "SELECT 1 FROM admin_region_scope WHERE admin_user_id = %s AND region_adcode = '*'",
+            (manager_user_id,),
+        )
+        if cursor.fetchone():
+            raise ValueError("总管理员无需再绑定区县；请创建或选择区级管理员")
+        _bind_admin_to_region(cursor, int(manager_user_id), region_adcode, "manage")
+        return {
+            "user_id": int(admin["user_id"]),
+            "username": admin["username"],
+            "real_name": admin["real_name"],
+            "created": False,
+        }
+
+    profile = district_admin or {}
+    username = str(profile.get("username") or "").strip()
+    password = str(profile.get("password") or "").strip()
+    real_name = str(profile.get("real_name") or "").strip()
+    phone = str(profile.get("phone") or "").strip()
+    email = str(profile.get("email") or "").strip()
+    if not all([username, password, real_name, phone, email]):
+        raise ValueError("开通区县时请指定已有管理员，或完整填写新区管理员账号信息")
+
+    cursor.execute("SELECT user_id FROM users WHERE username = %s", (username,))
+    if cursor.fetchone():
+        raise ValueError(f"用户名 {username} 已被占用")
+
+    cursor.execute(
+        """INSERT INTO users (username, password_hash, role, real_name, phone, email)
+           VALUES (%s, %s, 'admin', %s, %s, %s) RETURNING user_id, username, real_name""",
+        (username, password, real_name, phone, email),
+    )
+    created = cursor.fetchone()
+    new_id = int(created["user_id"])
+    _bind_admin_to_region(cursor, new_id, region_adcode, "manage")
+    return {
+        "user_id": new_id,
+        "username": created["username"],
+        "real_name": created["real_name"],
+        "created": True,
+    }
 
 
 def _valid_baoshan_point(lng: Any, lat: Any) -> tuple[float, float] | None:
@@ -919,11 +1002,27 @@ def _order_context(cursor: Any, order_id: int) -> dict[str, Any] | None:
     return cursor.fetchone()
 
 
+def _volunteer_ready_for_new_dispatch(cursor: Any, volunteer_id: int, availability: str | None) -> bool:
+    """Whether this volunteer may enter normal matching / auto-accept.
+
+    - idle: yes
+    - returning: yes (service already ended; may accept from the live return point)
+    - en_route / serving / anything else: no, even if auto-accept is enabled
+    """
+    state = str(availability or "")
+    if state not in ("idle", "returning"):
+        return False
+    cursor.execute("""SELECT 1 FROM orders WHERE volunteer_id = %s
+                      AND status IN ('accepted', 'in_progress') LIMIT 1""", (volunteer_id,))
+    return cursor.fetchone() is None
+
+
 def _candidate_rows(cursor: Any, order: dict[str, Any]) -> list[dict[str, Any]]:
     required = set(json.loads(order["required_skills"]))
     version = _traffic_version(cursor)
-    # Candidate distance must use the physical point on a live return route,
-    # not the coordinate from the previous portal refresh.
+    # Always score from the volunteer's current map point (lng/lat), never the
+    # home_lng/home_lat virtual base.  Returning volunteers are first projected
+    # onto their live return polyline so distance/ETA stay physical.
     cursor.execute("""SELECT volunteer_id FROM volunteer_location_state
                       WHERE availability = 'returning' AND service_region_adcode = %s""", (order["region_adcode"],))
     for returning in cursor.fetchall():
@@ -946,6 +1045,8 @@ def _candidate_rows(cursor: Any, order: dict[str, Any]) -> list[dict[str, Any]]:
     """, (order["region_adcode"],))
     candidates = []
     for volunteer in cursor.fetchall():
+        if not _volunteer_ready_for_new_dispatch(cursor, int(volunteer["volunteer_id"]), volunteer.get("availability")):
+            continue
         skills = {tag for tag in str(volunteer.get("skill_tags_text") or "").split("|") if tag}
         skill_ok = required.issubset(skills)
         distance = _distance_km(float(volunteer["lng"]), float(volunteer["lat"]), float(order["elder_lng"]), float(order["elder_lat"]))
@@ -982,40 +1083,33 @@ def _candidate_rows(cursor: Any, order: dict[str, Any]) -> list[dict[str, Any]]:
 def _next_assignment_preview(cursor: Any, volunteer_id: int) -> dict[str, Any] | None:
     """Build a non-binding next-job forecast for an auto-accept volunteer.
 
-    This deliberately does not create a candidate row or reserve an order.  A
-    service can finish later, traffic and competing volunteers can change in
-    the meantime, so the normal dispatcher still makes the authoritative
-    assignment at completion.
+    Mid-service volunteers never get matched.  Preview appears once they are
+    idle or already returning home (service finished).
     """
     cursor.execute("""
         SELECT p.lng, p.lat, p.fatigue_score, p.assigned_today, p.service_rating,
-               p.auto_accept_enabled,
+               p.auto_accept_enabled, p.availability,
                COALESCE(string_agg(s.skill_tag, '|'), '') AS skills_text
         FROM volunteer_location_state p
         LEFT JOIN volunteer_skill_tags s ON s.volunteer_id = p.volunteer_id
         WHERE p.volunteer_id = %s
-        GROUP BY p.lng, p.lat, p.fatigue_score, p.assigned_today, p.service_rating, p.auto_accept_enabled
+        GROUP BY p.lng, p.lat, p.fatigue_score, p.assigned_today, p.service_rating,
+                 p.auto_accept_enabled, p.availability
     """, (volunteer_id,))
     volunteer = cursor.fetchone()
     if not volunteer or not volunteer["auto_accept_enabled"]:
         return None
-    skills = {tag for tag in str(volunteer.get("skills_text") or "").split("|") if tag}
-    # During an in-progress service, calculate from the current elder's home:
-    # this is where the volunteer will be when the next dispatch is decided.
-    cursor.execute("""
-        SELECT el.lng, el.lat FROM orders o
-        JOIN elder_location_state el ON el.elder_id = o.elder_id
-        WHERE o.volunteer_id = %s AND o.status = 'in_progress'
-        ORDER BY o.order_id DESC LIMIT 1
-    """, (volunteer_id,))
-    service_point = cursor.fetchone()
-    # The card is a *service-end* forecast, not a second task hall during the
-    # return journey.  Once the service is complete the ordinary auto-dispatch
-    # flow takes over instead.
-    if not service_point:
+    if volunteer.get("availability") == "returning":
+        _materialize_return_position(cursor, volunteer_id)
+        cursor.execute("SELECT lng, lat FROM volunteer_location_state WHERE volunteer_id = %s", (volunteer_id,))
+        live = cursor.fetchone()
+        if live:
+            volunteer = {**volunteer, "lng": live["lng"], "lat": live["lat"]}
+    if not _volunteer_ready_for_new_dispatch(cursor, volunteer_id, volunteer.get("availability")):
         return None
-    origin_lng = float(service_point["lng"])
-    origin_lat = float(service_point["lat"])
+    skills = {tag for tag in str(volunteer.get("skills_text") or "").split("|") if tag}
+    origin_lng = float(volunteer["lng"])
+    origin_lat = float(volunteer["lat"])
     cursor.execute("""
         SELECT o.order_id, o.service_type, o.address, d.urgency, d.required_skills,
                e.name AS elder_name, e.address AS elder_address, el.lng, el.lat
@@ -1048,8 +1142,6 @@ def _next_assignment_preview(cursor: Any, volunteer_id: int) -> dict[str, Any] |
             "eta_minutes": int(route["eta_minutes"]), "total_score": score,
             "required_skill_labels": [SKILL_LABELS.get(tag, tag) for tag in sorted(required)],
         }
-        # SOS remains at the head of the forecast; ordinary requests use the
-        # same weighted suitability score as the normal dispatcher.
         if best is None or (item["urgency"] == "sos", item["total_score"], -item["eta_minutes"]) > (best["urgency"] == "sos", best["total_score"], -best["eta_minutes"]):
             best = item
     return best
@@ -1096,7 +1188,10 @@ def _phase_settings(phase: str) -> tuple[int, int | None, int | None, str]:
         "top1": (1, 1, TOP1_WINDOW_SECONDS, "Top1 专属确认"),
         "top3": (2, 3, TOP3_WINDOW_SECONDS - TOP1_WINDOW_SECONDS, "Top3 抢单"),
         "top10": (3, 10, TOP10_WINDOW_SECONDS - TOP3_WINDOW_SECONDS, "Top10 扩散抢单"),
-        "fallback": (4, None, None, "自动兜底"),
+        # Keep Top10-scale manual invites open after the timed windows end.
+        # Auto-accept only covers volunteers who opted in; others must still
+        # be able to see and claim the order from their portal.
+        "fallback": (4, 10, None, "自动兜底+人工可抢"),
     }.get(phase, (1, 1, TOP1_WINDOW_SECONDS, "Top1 专属确认"))
 
 
@@ -1132,12 +1227,18 @@ def _invite_candidates(cursor: Any, order: dict[str, Any], reason: str = "") -> 
         FROM dispatch_candidates c JOIN volunteer_location_state p ON p.volunteer_id = c.volunteer_id
         WHERE c.order_id = %s AND c.eligible = TRUE
           AND c.response_status = 'waiting' AND p.availability IN ('idle', 'returning')
-          AND (p.return_started_at IS NULL OR p.return_started_at <= CURRENT_TIMESTAMP - INTERVAL '20 seconds')
           AND NOT EXISTS (SELECT 1 FROM orders active WHERE active.volunteer_id = c.volunteer_id
                           AND active.status IN ('accepted', 'in_progress'))
-        ORDER BY c.candidate_rank NULLS LAST, c.total_score DESC LIMIT %s
-    """, (order["order_id"], cap))
-    rows = cursor.fetchall()
+        ORDER BY c.candidate_rank NULLS LAST, c.total_score DESC
+        LIMIT %s
+    """, (order["order_id"], max(cap * 4, 40)))
+    rows = []
+    for row in cursor.fetchall():
+        if not _volunteer_ready_for_new_dispatch(cursor, int(row["volunteer_id"]), row.get("availability")):
+            continue
+        rows.append(row)
+        if len(rows) >= cap:
+            break
     for row in rows:
         cursor.execute("""UPDATE dispatch_candidates SET response_status = 'invited', invited_at = CURRENT_TIMESTAMP
                           WHERE order_id = %s AND volunteer_id = %s AND response_status = 'waiting'""",
@@ -1350,22 +1451,23 @@ def _release_dispatch_order(cursor: Any, order: dict[str, Any], volunteer_id: in
 
 def _try_auto_accept(cursor: Any, order: dict[str, Any]) -> bool:
     """Fallback only: assign the highest-ranked volunteer who opted in."""
-    # A returning volunteer is eligible immediately.  Re-rank at the moment
-    # of assignment from the persisted current location, so a new request can
-    # legitimately turn the volunteer around from the middle of the homeward
-    # route instead of calculating from the home address or a stale ranking.
+    # Re-rank from live coordinates.  Mid-service volunteers are excluded even
+    # when auto-accept is on; returning (service finished) may accept immediately.
     _upsert_candidates(cursor, order)
     cursor.execute("""
-        SELECT c.volunteer_id FROM dispatch_candidates c
+        SELECT c.volunteer_id, p.availability FROM dispatch_candidates c
         JOIN volunteer_location_state p ON p.volunteer_id = c.volunteer_id
         WHERE c.order_id = %s AND c.eligible = TRUE AND c.response_status IN ('waiting', 'invited')
           AND p.auto_accept_enabled = TRUE AND p.availability IN ('idle', 'returning')
-        ORDER BY c.candidate_rank NULLS LAST, c.total_score DESC LIMIT 1
+        ORDER BY c.candidate_rank NULLS LAST, c.total_score DESC
     """, (order["order_id"],))
-    candidate = cursor.fetchone()
-    if not candidate:
-        return False
-    return _accept_candidate(cursor, order, int(candidate["volunteer_id"]), automatic=True) is not None
+    for candidate in cursor.fetchall():
+        volunteer_id = int(candidate["volunteer_id"])
+        if not _volunteer_ready_for_new_dispatch(cursor, volunteer_id, candidate.get("availability")):
+            continue
+        if _accept_candidate(cursor, order, volunteer_id, automatic=True) is not None:
+            return True
+    return False
 
 
 def _advance_route_to_current_intersection(cursor: Any, order_id: int, volunteer_id: int) -> None:
@@ -1395,7 +1497,12 @@ def _advance_route_to_current_intersection(cursor: Any, order_id: int, volunteer
 
 def _force_assign_sos(cursor: Any, order: dict[str, Any]) -> bool:
     candidates = _upsert_candidates(cursor, order)
-    available = [item for item in candidates if item["skill_ok"] and item["availability"] in ("idle", "returning")]
+    # SOS still cannot steal a volunteer who is mid-service / en route.
+    # Returning volunteers (service finished) may be pulled from the live return point.
+    available = [
+        item for item in candidates
+        if item["skill_ok"] and _volunteer_ready_for_new_dispatch(cursor, int(item["volunteer_id"]), item.get("availability"))
+    ]
     if not available:
         cursor.execute("UPDATE dispatch_orders SET dispatch_state = 'admin_escalated' WHERE order_id = %s", (order["order_id"],))
         _event(cursor, int(order["order_id"]), "sos_admin_escalated", "SOS无可用且技能匹配的志愿者，已通知管理员人工介入。")
@@ -1407,12 +1514,9 @@ def _force_assign_sos(cursor: Any, order: dict[str, Any]) -> bool:
         cursor.execute("SELECT user_id FROM users WHERE user_id = %s FOR UPDATE", (candidate_id,))
         if not cursor.fetchone():
             continue
-        cursor.execute("SELECT availability, return_started_at FROM volunteer_location_state WHERE volunteer_id = %s FOR UPDATE", (candidate_id,))
+        cursor.execute("SELECT availability FROM volunteer_location_state WHERE volunteer_id = %s FOR UPDATE", (candidate_id,))
         state = cursor.fetchone()
-        cursor.execute("""SELECT order_id FROM orders WHERE volunteer_id = %s
-                          AND status IN ('accepted', 'in_progress')""", (candidate_id,))
-        already_busy = cursor.fetchone()
-        if state and state["availability"] in ("idle", "returning") and not already_busy:
+        if state and _volunteer_ready_for_new_dispatch(cursor, candidate_id, state.get("availability")):
             volunteer_id = candidate_id
             break
     if volunteer_id is None:
@@ -1643,9 +1747,13 @@ def _advance_dispatch_unthrottled(cursor: Any) -> None:
             _upsert_candidates(cursor, order)
             if _try_auto_accept(cursor, order):
                 _event(cursor, int(order["order_id"]), "fallback_auto_assigned", "等到可用自动接单志愿者后，系统已完成兜底派单。")
-            elif order.get("dispatch_state") != "queued_waiting_capacity":
-                cursor.execute("UPDATE dispatch_orders SET dispatch_state = 'queued_waiting_capacity' WHERE order_id = %s", (order["order_id"],))
-                _event(cursor, int(order["order_id"]), "fallback_waiting_capacity", "自动兜底暂未找到空闲且技能匹配的自动接单志愿者，订单继续排队等待容量释放。")
+            else:
+                # Keep inviting eligible volunteers so the order does not become
+                # a ghost recommendation that only the elder can see.
+                _invite_candidates(cursor, order, "兜底等待中：继续向技能匹配志愿者开放人工抢单")
+                if order.get("dispatch_state") != "queued_waiting_capacity":
+                    cursor.execute("UPDATE dispatch_orders SET dispatch_state = 'queued_waiting_capacity' WHERE order_id = %s", (order["order_id"],))
+                    _event(cursor, int(order["order_id"]), "fallback_waiting_capacity", "自动兜底暂未找到空闲且技能匹配的自动接单志愿者，订单继续排队等待容量释放，并保持人工可抢。")
             continue
         expires_at = order.get("phase_expires_at")
         if not isinstance(expires_at, dt.datetime):
@@ -1654,12 +1762,15 @@ def _advance_dispatch_unthrottled(cursor: Any) -> None:
             _invite_candidates(cursor, order, "补齐Top1专属确认计时")
             continue
         if _now() < expires_at:
+            # Keep ranking tied to live volunteer coordinates (and the elder's
+            # current pin), not the snapshot from when the order was created.
+            _upsert_candidates(cursor, order)
+            _invite_candidates(cursor, order, "按实时位置刷新本阶段候选")
             continue
         desired_phase = {"top1": "top3", "top3": "top10", "top10": "fallback"}.get(current_phase, "top1")
         _set_dispatch_phase(cursor, order, desired_phase)
-        # At a phase boundary, refresh candidates once and freeze that ranking
-        # for the entire new manual window.  This prevents a polling page from
-        # shuffling Top1 while the person is deciding.
+        # Phase change: clear the previous invite set, then rebuild from the
+        # latest positions before opening the next manual window.
         cursor.execute("""UPDATE dispatch_candidates SET response_status = 'waiting', invited_at = NULL
                           WHERE order_id = %s AND response_status = 'invited'""", (order["order_id"],))
         _upsert_candidates(cursor, order)
@@ -1667,8 +1778,9 @@ def _advance_dispatch_unthrottled(cursor: Any) -> None:
             if _try_auto_accept(cursor, order):
                 _event(cursor, int(order["order_id"]), "fallback_auto_assigned", "35秒手动窗口结束，已自动兜底派单给最优已开启自动接单的志愿者。")
             else:
+                _invite_candidates(cursor, order, "35秒窗口结束：无自动接单志愿者，改为开放人工抢单")
                 cursor.execute("UPDATE dispatch_orders SET dispatch_state = 'queued_waiting_capacity' WHERE order_id = %s", (order["order_id"],))
-                _event(cursor, int(order["order_id"]), "fallback_waiting_capacity", "35秒手动窗口结束，暂无空闲自动接单志愿者；订单保留在容量等待队列并通知管理员。")
+                _event(cursor, int(order["order_id"]), "fallback_waiting_capacity", "35秒手动窗口结束，暂无空闲自动接单志愿者；订单保留在容量等待队列，并继续向匹配志愿者开放抢单。")
         else:
             _invite_candidates(cursor, order, "8秒专属窗口结束" if desired_phase == "top3" else "Top3窗口结束，扩大至Top10")
 
@@ -1712,14 +1824,14 @@ def run_dispatch_clock_tick() -> None:
 
 def _admin_active_region(cursor: Any, user_id: int | None, requested_region: str | None = None) -> str:
     if not user_id:
-        return DEFAULT_REGION_ADCODE
+        return _fallback_open_region()
     cursor.execute("SELECT region_adcode FROM admin_region_scope WHERE admin_user_id = %s ORDER BY region_adcode", (user_id,))
     scopes = [str(row["region_adcode"]) for row in cursor.fetchall()]
     if "*" in scopes:
-        return requested_region if requested_region in REGION_CATALOG else DEFAULT_REGION_ADCODE
-    if requested_region in scopes:
+        return requested_region if requested_region in REGION_CATALOG else _fallback_open_region()
+    if requested_region in scopes and requested_region in REGION_CATALOG:
         return str(requested_region)
-    return next((scope for scope in scopes if scope in REGION_CATALOG), DEFAULT_REGION_ADCODE)
+    return next((scope for scope in scopes if scope in REGION_CATALOG), _fallback_open_region())
 
 
 def _admin_can_manage_region(cursor: Any, admin_user_id: int, region_adcode: str) -> bool:
@@ -1792,10 +1904,26 @@ def admin_regions_managed():
                                THEN FALSE ELSE TRUE END AS has_polygon
                    FROM administrative_regions ORDER BY adcode"""
             )
-            data = []
+            rows = cursor.fetchall()
+            cursor.execute(
+                """SELECT s.region_adcode, u.user_id, u.username, u.real_name
+                   FROM admin_region_scope s
+                   JOIN users u ON u.user_id = s.admin_user_id
+                   WHERE s.region_adcode <> '*' AND s.permission IN ('manage', 'overview')
+                   ORDER BY s.region_adcode, u.user_id"""
+            )
+            managers_by_region: dict[str, list[dict[str, Any]]] = {}
             for row in cursor.fetchall():
+                managers_by_region.setdefault(str(row["region_adcode"]), []).append({
+                    "user_id": int(row["user_id"]),
+                    "username": row["username"],
+                    "real_name": row["real_name"],
+                })
+            data = []
+            for row in rows:
+                adcode = str(row["adcode"])
                 data.append({
-                    "adcode": row["adcode"],
+                    "adcode": adcode,
                     "name": row["name"],
                     "city_name": row.get("city_name"),
                     "province_name": row.get("province_name") or "",
@@ -1804,6 +1932,45 @@ def admin_regions_managed():
                     "has_polygon": bool(row.get("has_polygon")),
                     "center_lng": float(row["center_lng"]) if row.get("center_lng") is not None else None,
                     "center_lat": float(row["center_lat"]) if row.get("center_lat") is not None else None,
+                    "managers": managers_by_region.get(adcode, []),
+                })
+            return jsonify({"code": 200, "message": "ok", "data": data})
+    finally:
+        conn.close()
+
+
+@dispatch_bp.route("/admin/candidate-managers", methods=["GET"])
+def admin_candidate_managers():
+    """List district-capable admin accounts for binding to a region."""
+    admin_user_id = request.args.get("admin_user_id", type=int)
+    if not admin_user_id:
+        return jsonify({"code": 400, "message": "缺少管理员 id"}), 400
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"code": 500, "message": "database unavailable"}), 500
+    try:
+        with conn.cursor() as cursor:
+            if not admin_is_root(cursor, admin_user_id):
+                return jsonify({"code": 403, "message": "仅总管理员可查看区管理员候选"}), 403
+            cursor.execute(
+                """SELECT u.user_id, u.username, u.real_name,
+                          COALESCE(string_agg(s.region_adcode, ','), '') AS scopes
+                   FROM users u
+                   LEFT JOIN admin_region_scope s ON s.admin_user_id = u.user_id
+                   WHERE u.role = 'admin'
+                   GROUP BY u.user_id, u.username, u.real_name
+                   ORDER BY u.user_id"""
+            )
+            data = []
+            for row in cursor.fetchall():
+                scopes = [code for code in str(row["scopes"] or "").split(",") if code]
+                if "*" in scopes:
+                    continue
+                data.append({
+                    "user_id": int(row["user_id"]),
+                    "username": row["username"],
+                    "real_name": row["real_name"],
+                    "region_adcodes": scopes,
                 })
             return jsonify({"code": 200, "message": "ok", "data": data})
     finally:
@@ -1812,15 +1979,19 @@ def admin_regions_managed():
 
 @dispatch_bp.route("/admin/regions", methods=["POST"])
 def admin_regions_create():
-    """Root admin adds a district; boundary comes from official AMap polygon."""
+    """Root admin opens a district, pulls official polygon, and binds a district admin."""
     global MAP_BOUNDS
     data = request.get_json(silent=True) or {}
     admin_user_id = data.get("admin_user_id")
     adcode = str(data.get("adcode") or "").strip()
     province_name = str(data.get("province_name") or "").strip()
     city_name = str(data.get("city_name") or "").strip()
+    manager_user_id = data.get("manager_user_id")
+    district_admin = data.get("district_admin") if isinstance(data.get("district_admin"), dict) else None
     if not admin_user_id or not adcode:
         return jsonify({"code": 400, "message": "请提供 admin_user_id 与区县 adcode"}), 400
+    if not manager_user_id and not district_admin:
+        return jsonify({"code": 400, "message": "开通区县时必须绑定区管理员（已有账号或新建）"}), 400
     conn = get_db_connection()
     if not conn:
         return jsonify({"code": 500, "message": "database unavailable"}), 500
@@ -1846,19 +2017,136 @@ def admin_regions_create():
                 polygons=detail["polygons"],
                 active=True,
             )
+            manager = _create_or_bind_district_admin(
+                cursor,
+                detail["adcode"],
+                manager_user_id=int(manager_user_id) if manager_user_id else None,
+                district_admin=district_admin,
+            )
             conn.commit()
         refresh_runtime_catalog(REGION_CATALOG, conn)
         if DEFAULT_REGION_ADCODE in REGION_CATALOG:
             MAP_BOUNDS = REGION_CATALOG[DEFAULT_REGION_ADCODE]["bounds"]
+        elif detail["adcode"] in REGION_CATALOG:
+            MAP_BOUNDS = REGION_CATALOG[detail["adcode"]]["bounds"]
         return jsonify({
             "code": 200,
-            "message": f"已添加区域 {detail['name']}（官方多边形边界）",
+            "message": f"已开通区域 {detail['name']}，并绑定区管理员 {manager['real_name']}",
             "data": {
                 "adcode": detail["adcode"],
                 "name": detail["name"],
                 "polygon_rings": len(detail["polygons"]),
+                "manager": manager,
             },
         })
+    except ValueError as exc:
+        conn.rollback()
+        return jsonify({"code": 400, "message": str(exc)}), 400
+    except Exception as exc:  # noqa: BLE001
+        conn.rollback()
+        return jsonify({"code": 500, "message": str(exc)}), 500
+    finally:
+        conn.close()
+
+
+@dispatch_bp.route("/admin/regions/<adcode>/managers", methods=["POST"])
+def admin_regions_bind_manager(adcode: str):
+    """Bind an additional district admin to an already opened region."""
+    data = request.get_json(silent=True) or {}
+    admin_user_id = data.get("admin_user_id")
+    manager_user_id = data.get("manager_user_id")
+    district_admin = data.get("district_admin") if isinstance(data.get("district_admin"), dict) else None
+    if not admin_user_id:
+        return jsonify({"code": 400, "message": "缺少 admin_user_id"}), 400
+    if not manager_user_id and not district_admin:
+        return jsonify({"code": 400, "message": "请指定已有管理员或新建区管理员"}), 400
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"code": 500, "message": "database unavailable"}), 500
+    try:
+        with conn.cursor() as cursor:
+            if not admin_is_root(cursor, int(admin_user_id)):
+                return jsonify({"code": 403, "message": "仅总管理员可绑定区管理员"}), 403
+            cursor.execute("SELECT adcode, name, active FROM administrative_regions WHERE adcode = %s", (adcode,))
+            row = cursor.fetchone()
+            if not row:
+                return jsonify({"code": 404, "message": "区域不存在，请先开通"}), 404
+            if not row.get("active"):
+                return jsonify({"code": 409, "message": "区域已停用，请先启用再绑定管理员"}), 409
+            manager = _create_or_bind_district_admin(
+                cursor,
+                adcode,
+                manager_user_id=int(manager_user_id) if manager_user_id else None,
+                district_admin=district_admin,
+            )
+            conn.commit()
+            return jsonify({
+                "code": 200,
+                "message": f"已为 {row['name']} 绑定区管理员 {manager['real_name']}",
+                "data": {"adcode": adcode, "manager": manager},
+            })
+    except ValueError as exc:
+        conn.rollback()
+        return jsonify({"code": 400, "message": str(exc)}), 400
+    except Exception as exc:  # noqa: BLE001
+        conn.rollback()
+        return jsonify({"code": 500, "message": str(exc)}), 500
+    finally:
+        conn.close()
+
+
+@dispatch_bp.route("/admin/regions/<adcode>/managers/<int:manager_user_id>", methods=["DELETE"])
+def admin_regions_unbind_manager(adcode: str, manager_user_id: int):
+    """Root admin removes a district-admin binding from one opened region."""
+    admin_user_id = request.args.get("admin_user_id", type=int)
+    if not admin_user_id:
+        data = request.get_json(silent=True) or {}
+        try:
+            admin_user_id = int(data.get("admin_user_id"))
+        except (TypeError, ValueError):
+            admin_user_id = None
+    if not admin_user_id:
+        return jsonify({"code": 400, "message": "缺少 admin_user_id"}), 400
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"code": 500, "message": "database unavailable"}), 500
+    try:
+        with conn.cursor() as cursor:
+            if not admin_is_root(cursor, int(admin_user_id)):
+                return jsonify({"code": 403, "message": "仅总管理员可解绑区管理员"}), 403
+            cursor.execute("SELECT adcode, name FROM administrative_regions WHERE adcode = %s", (adcode,))
+            region = cursor.fetchone()
+            if not region:
+                return jsonify({"code": 404, "message": "区域不存在"}), 404
+            cursor.execute(
+                """SELECT u.user_id, u.username, u.real_name, s.region_adcode
+                   FROM admin_region_scope s
+                   JOIN users u ON u.user_id = s.admin_user_id
+                   WHERE s.admin_user_id = %s AND s.region_adcode = %s""",
+                (manager_user_id, adcode),
+            )
+            binding = cursor.fetchone()
+            if not binding:
+                return jsonify({"code": 404, "message": "该管理员未绑定此区县"}), 404
+            if str(binding["region_adcode"]) == "*":
+                return jsonify({"code": 403, "message": "不能解绑总管理员全国权限"}), 403
+            cursor.execute(
+                "DELETE FROM admin_region_scope WHERE admin_user_id = %s AND region_adcode = %s",
+                (manager_user_id, adcode),
+            )
+            conn.commit()
+            return jsonify({
+                "code": 200,
+                "message": f"已从 {region['name']} 解绑区管理员 {binding['real_name']}",
+                "data": {
+                    "adcode": adcode,
+                    "manager": {
+                        "user_id": int(binding["user_id"]),
+                        "username": binding["username"],
+                        "real_name": binding["real_name"],
+                    },
+                },
+            })
     except Exception as exc:  # noqa: BLE001
         conn.rollback()
         return jsonify({"code": 500, "message": str(exc)}), 500
@@ -2126,13 +2414,12 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
             else:
                 item["location_sharing_active"] = False
             payload["orders"].append(item)
-        # While a normal request is in its Top1/Top3 protection stage, it has
-        # not been assigned and therefore has no travel route yet.  Show the
-        # first invited, skill-matched candidate as a recommendation marker so
-        # the elder sees who the dispatcher is contacting from the first call.
+        # While a normal request is still pending, show the top skill-matched
+        # candidate as a recommendation marker.  This is not an assigned route:
+        # the marker stays fixed until someone actually accepts.
         cursor.execute("""
             SELECT c.volunteer_id, u.real_name, p.lng, p.lat, p.availability,
-                   p.service_rating,
+                   p.service_rating, c.response_status,
                    ROW_NUMBER() OVER (PARTITION BY c.order_id ORDER BY c.candidate_rank NULLS LAST, c.total_score DESC) AS rank_no
             FROM dispatch_candidates c
             JOIN orders o ON o.order_id = c.order_id
@@ -2142,6 +2429,7 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
               AND c.response_status IN ('invited', 'waiting')
         """, (elder["elder_id"],))
         existing_volunteers = {int(item["volunteer_id"]) for item in payload["volunteers"]}
+        showing_recommendation = False
         for candidate in cursor.fetchall():
             volunteer_id = int(candidate["volunteer_id"])
             if int(candidate["rank_no"]) != 1 or volunteer_id in existing_volunteers:
@@ -2154,7 +2442,11 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
                 "skills": [], "is_dispatch_candidate": True,
             })
             existing_volunteers.add(volunteer_id)
-        payload["privacy_message"] = "服务完成后，志愿者实时位置与路线已停止向老人端共享。"
+            showing_recommendation = True
+        if showing_recommendation:
+            payload["privacy_message"] = "地图上的志愿者是系统推荐人选（位置为参考，尚未接单，所以不会移动）。对方确认接单后才会显示出发路线。"
+        else:
+            payload["privacy_message"] = "服务完成后，志愿者实时位置与路线已停止向老人端共享。"
         return payload
 
     if role == "volunteer":
@@ -2362,6 +2654,8 @@ def update_elder_location():
             if not elder:
                 return jsonify({"code": 404, "message": "当前账号没有老人档案"}), 404
             resolved_region = _region_for_point(data.get("lng"), data.get("lat"))
+            if not resolved_region:
+                return jsonify({"code": 400, "message": "该定位不在已开通的服务区县内，请联系总管理员开通后再使用"}), 400
             point = _valid_region_point(data.get("lng"), data.get("lat"), resolved_region)
             if not point:
                 return jsonify({"code": 400, "message": "定位必须位于所属服务区县范围内"}), 400
@@ -2410,6 +2704,8 @@ def update_volunteer_location():
                 return jsonify({"code": 404, "message": "当前账号没有志愿者定位档案"}), 404
             point = _valid_region_point(data.get("lng"), data.get("lat"), volunteer.get("service_region_adcode"))
             if not point:
+                if not is_active_region(volunteer.get("service_region_adcode"), REGION_CATALOG):
+                    return jsonify({"code": 400, "message": "您所属服务区县尚未开通或已停用，暂无法更新定位"}), 400
                 return jsonify({"code": 400, "message": "定位必须位于所属服务区县范围内"}), 400
             cursor.execute("""UPDATE volunteer_location_state SET lng = %s, lat = %s, location_source = %s,
                               updated_at = CURRENT_TIMESTAMP WHERE volunteer_id = %s""", (point[0], point[1], source, volunteer_id))
@@ -2437,6 +2733,10 @@ def update_volunteer_preferences():
             if not volunteer:
                 return jsonify({"code": 404, "message": "当前账号没有志愿者定位档案"}), 404
             resolved_region = _region_for_point(data.get("home_lng"), data.get("home_lat")) if data.get("home_lng") is not None else volunteer.get("service_region_adcode")
+            if data.get("home_lng") is not None and not resolved_region:
+                return jsonify({"code": 400, "message": "家庭位置不在已开通的服务区县内，请联系总管理员开通后再设置"}), 400
+            if resolved_region and not is_active_region(resolved_region, REGION_CATALOG):
+                return jsonify({"code": 400, "message": "目标服务区县尚未开通或已停用"}), 400
             home = _valid_region_point(data.get("home_lng"), data.get("home_lat"), resolved_region) if data.get("home_lng") is not None else None
             if data.get("home_lng") is not None and not home:
                 return jsonify({"code": 400, "message": "家庭虚拟位置必须位于所属服务区县范围内"}), 400
@@ -2573,7 +2873,9 @@ def create_smart_order_for_elder(
         raise ValueError("elder profile not found")
     catalog = SERVICE_CATALOG[service_type]
     is_sos = bool(urgent) or bool(catalog.get("urgent"))
-    region_adcode = elder.get("region_adcode") or DEFAULT_REGION_ADCODE
+    region_adcode = str(elder.get("region_adcode") or DEFAULT_REGION_ADCODE)
+    if not is_active_region(region_adcode, REGION_CATALOG):
+        raise ValueError("老人所属区县尚未开通或已停用，无法下单")
     cursor.execute("""
         INSERT INTO orders
             (elder_id, created_by, service_type, service_time, service_hours, address, notes, status,
@@ -2679,12 +2981,15 @@ def create_dispatch_order():
             elder = cursor.fetchone()
             if not elder:
                 return jsonify({"code": 404, "message": "当前账号没有老人档案"}), 404
+            region_adcode = str(elder.get("region_adcode") or DEFAULT_REGION_ADCODE)
+            if not is_active_region(region_adcode, REGION_CATALOG):
+                return jsonify({"code": 400, "message": "老人所属区县尚未开通或已停用，无法下单"}), 400
             catalog = SERVICE_CATALOG[service_type]
             service_time = data.get("service_time") or _now().strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute("""
                 INSERT INTO orders (elder_id, created_by, service_type, service_time, service_hours, notes, status, region_adcode)
                 VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s) RETURNING order_id
-            """, (elder["elder_id"], user_id, service_type, service_time, data.get("service_hours") or catalog["hours"], data.get("notes") or "", elder.get("region_adcode") or DEFAULT_REGION_ADCODE))
+            """, (elder["elder_id"], user_id, service_type, service_time, data.get("service_hours") or catalog["hours"], data.get("notes") or "", region_adcode))
             order_id = int(cursor.fetchone()["order_id"])
             cursor.execute("""
                 INSERT INTO dispatch_orders
@@ -2695,7 +3000,7 @@ def create_dispatch_order():
             """, (order_id, "sos" if urgent else "normal", json.dumps(catalog["skills"]), urgent,
                   "fallback" if urgent else "top1", urgent, TOP1_WINDOW_SECONDS))
             cursor.execute("UPDATE dispatch_orders SET region_adcode = %s WHERE order_id = %s",
-                           (elder.get("region_adcode") or DEFAULT_REGION_ADCODE, order_id))
+                           (region_adcode, order_id))
             order = _order_context(cursor, order_id)
             if urgent:
                 _event(cursor, order_id, "sos_created", "老人发起SOS，开始强制派单。")

@@ -198,6 +198,15 @@ export interface AdminUserRow {
   phone: string
   email?: string
   status: AccountStatus
+  regionAdcodes?: string[]
+  regionNames?: string[]
+  address?: string
+  relatedElders?: Array<{
+    elderId: number
+    name: string
+    regionAdcode?: string
+    regionName?: string
+  }>
 }
 
 export interface HourReviewItem {

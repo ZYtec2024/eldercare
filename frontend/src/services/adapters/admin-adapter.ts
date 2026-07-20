@@ -49,6 +49,33 @@ function mapPriority(alert: Record<string, unknown>): AlertItem['priority'] {
 function mapUserRow(row: Record<string, unknown>): AdminUserRow {
   const rawStatus = String(row.status ?? 'active')
   const normalizedStatus = rawStatus === 'pending' ? 'pending_review' : rawStatus
+  const relatedRaw = Array.isArray(row.related_elders)
+    ? row.related_elders
+    : Array.isArray(row.relatedElders)
+      ? row.relatedElders
+      : []
+  const relatedElders = relatedRaw
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+    .map((item) => ({
+      elderId: toNumber(item.elderId ?? item.elder_id),
+      name: String(item.name ?? ''),
+      regionAdcode: item.region_adcode == null && item.regionAdcode == null
+        ? undefined
+        : String(item.regionAdcode ?? item.region_adcode),
+      regionName: item.region_name == null && item.regionName == null
+        ? undefined
+        : String(item.regionName ?? item.region_name),
+    }))
+  const regionAdcodes = Array.isArray(row.region_adcodes)
+    ? row.region_adcodes.map(String)
+    : Array.isArray(row.regionAdcodes)
+      ? row.regionAdcodes.map(String)
+      : []
+  const regionNames = Array.isArray(row.region_names)
+    ? row.region_names.map(String)
+    : Array.isArray(row.regionNames)
+      ? row.regionNames.map(String)
+      : []
   return {
     userId: toNumber(row.userId ?? row.user_id),
     username: String(row.username ?? ''),
@@ -57,6 +84,10 @@ function mapUserRow(row: Record<string, unknown>): AdminUserRow {
     phone: String(row.phone ?? ''),
     email: typeof row.email === 'string' ? row.email : undefined,
     status: normalizedStatus as AdminUserRow['status'],
+    regionAdcodes,
+    regionNames,
+    address: typeof row.address === 'string' ? row.address : undefined,
+    relatedElders,
   }
 }
 
@@ -113,6 +144,7 @@ export async function fetchAdminUsers(filters: {
   adminUserId: number
   role?: Role | 'all'
   keyword?: string
+  regionAdcode?: string
   page?: number
   pageSize?: number
 }) {
@@ -122,6 +154,7 @@ export async function fetchAdminUsers(filters: {
     params: {
       role: filters.role && filters.role !== 'all' ? filters.role : undefined,
       keyword: filters.keyword || undefined,
+      region_adcode: filters.regionAdcode || undefined,
       page: filters.page ?? 1,
       limit: filters.pageSize ?? 10,
       admin_user_id: filters.adminUserId,

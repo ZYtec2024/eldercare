@@ -20,7 +20,7 @@ export function AdminRegionScopeNotice() {
   return (
     <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-sky-100 bg-sky-50 px-3 py-2 text-sm text-sky-900">
       <EnvironmentOutlined />
-      <span>{isNational ? '全国总管理员：可查看全国汇总并切换区县。' : '区县管理员：本页面仅显示你的授权区县数据。'}</span>
+      <span>{isNational ? '全国总管理员：可查看全国汇总，并在用户管理 / 调度台按区县切换。' : '区县管理员：本页面仅显示你的授权区县数据。'}</span>
       {regions.map((region) => <Tag color={isNational ? 'blue' : 'green'} key={region.adcode}>{region.name}</Tag>)}
     </div>
   )

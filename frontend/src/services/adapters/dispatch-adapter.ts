@@ -18,6 +18,12 @@ export type RegionCatalogNode = {
   center?: string
 }
 
+export type ManagedDispatchRegionManager = {
+  user_id: number
+  username: string
+  real_name: string
+}
+
 export type ManagedDispatchRegion = {
   adcode: string
   name: string
@@ -28,6 +34,41 @@ export type ManagedDispatchRegion = {
   has_polygon: boolean
   center_lng?: number | null
   center_lat?: number | null
+  managers?: ManagedDispatchRegionManager[]
+}
+
+export type CandidateDistrictManager = {
+  user_id: number
+  username: string
+  real_name: string
+  region_adcodes: string[]
+}
+
+function mapManagedRegionManager(row: Record<string, unknown>): ManagedDispatchRegionManager {
+  return {
+    user_id: Number(row.user_id ?? row.userId ?? 0),
+    username: String(row.username ?? ''),
+    real_name: String(row.real_name ?? row.realName ?? ''),
+  }
+}
+
+function mapManagedRegion(row: Record<string, unknown>): ManagedDispatchRegion {
+  const managersRaw = Array.isArray(row.managers) ? row.managers : []
+  return {
+    adcode: String(row.adcode ?? ''),
+    name: String(row.name ?? ''),
+    city_name: row.city_name == null && row.cityName == null ? undefined : String(row.city_name ?? row.cityName ?? ''),
+    province_name: row.province_name == null && row.provinceName == null ? undefined : String(row.province_name ?? row.provinceName ?? ''),
+    region_level: row.region_level == null && row.regionLevel == null ? undefined : String(row.region_level ?? row.regionLevel ?? ''),
+    active: Boolean(row.active),
+    has_polygon: Boolean(row.has_polygon ?? row.hasPolygon),
+    center_lng: row.center_lng == null && row.centerLng == null ? null : Number(row.center_lng ?? row.centerLng),
+    center_lat: row.center_lat == null && row.centerLat == null ? null : Number(row.center_lat ?? row.centerLat),
+    managers: managersRaw
+      .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+      .map(mapManagedRegionManager)
+      .filter((item) => item.user_id > 0),
+  }
 }
 
 export async function fetchDispatchRegionChildren(adminUserId: number, keywords: string) {
@@ -38,10 +79,29 @@ export async function fetchDispatchRegionChildren(adminUserId: number, keywords:
 }
 
 export async function fetchManagedDispatchRegions(adminUserId: number) {
-  const response = await http.get<ApiEnvelope<ManagedDispatchRegion[]>>('/dispatch/admin/regions/managed', {
+  const response = await http.get<ApiEnvelope<Record<string, unknown>[]>>('/dispatch/admin/regions/managed', {
     params: { admin_user_id: adminUserId },
   })
-  return response.data.data
+  const payload = response.data.data
+  return Array.isArray(payload) ? payload.map(mapManagedRegion) : []
+}
+
+export async function fetchCandidateDistrictManagers(adminUserId: number) {
+  const response = await http.get<ApiEnvelope<Record<string, unknown>[]>>('/dispatch/admin/candidate-managers', {
+    params: { admin_user_id: adminUserId },
+  })
+  const payload = response.data.data
+  if (!Array.isArray(payload)) return []
+  return payload.map((row) => ({
+    user_id: Number(row.user_id ?? row.userId ?? 0),
+    username: String(row.username ?? ''),
+    real_name: String(row.real_name ?? row.realName ?? ''),
+    region_adcodes: Array.isArray(row.region_adcodes)
+      ? row.region_adcodes.map(String)
+      : Array.isArray(row.regionAdcodes)
+        ? row.regionAdcodes.map(String)
+        : [],
+  }))
 }
 
 export async function createManagedDispatchRegion(payload: {
@@ -49,13 +109,65 @@ export async function createManagedDispatchRegion(payload: {
   adcode: string
   provinceName?: string
   cityName?: string
+  managerUserId?: number
+  districtAdmin?: {
+    username: string
+    password: string
+    real_name: string
+    phone: string
+    email: string
+  }
 }) {
-  const response = await http.post<ApiEnvelope<{ adcode: string; name: string; polygon_rings: number }>>('/dispatch/admin/regions', {
+  const response = await http.post<ApiEnvelope<{
+    adcode: string
+    name: string
+    polygon_rings: number
+    manager?: ManagedDispatchRegionManager & { created?: boolean }
+  }>>('/dispatch/admin/regions', {
     admin_user_id: payload.adminUserId,
     adcode: payload.adcode,
     province_name: payload.provinceName,
     city_name: payload.cityName,
+    manager_user_id: payload.managerUserId,
+    district_admin: payload.districtAdmin,
   })
+  return response.data
+}
+
+export async function bindManagedDispatchRegionManager(
+  adcode: string,
+  payload: {
+    adminUserId: number
+    managerUserId?: number
+    districtAdmin?: {
+      username: string
+      password: string
+      real_name: string
+      phone: string
+      email: string
+    }
+  },
+) {
+  const response = await http.post<ApiEnvelope<{ adcode: string; manager: ManagedDispatchRegionManager }>>(
+    `/dispatch/admin/regions/${adcode}/managers`,
+    {
+      admin_user_id: payload.adminUserId,
+      manager_user_id: payload.managerUserId,
+      district_admin: payload.districtAdmin,
+    },
+  )
+  return response.data
+}
+
+export async function unbindManagedDispatchRegionManager(
+  adcode: string,
+  managerUserId: number,
+  adminUserId: number,
+) {
+  const response = await http.delete<ApiEnvelope<{ adcode: string; manager: ManagedDispatchRegionManager }>>(
+    `/dispatch/admin/regions/${adcode}/managers/${managerUserId}`,
+    { params: { admin_user_id: adminUserId } },
+  )
   return response.data
 }
 
