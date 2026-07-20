@@ -12,6 +12,13 @@ import { useSession } from '@/features/auth/useSession'
 
 const features = [
   {
+    icon: <DashboardOutlined className="text-5xl text-violet-600" />,
+    title: '实时守护',
+    desc: '查看绑定长辈的固定服务点；志愿者接单、出发和服务期间同步路线，服务结束后自动锁定志愿者位置。',
+    path: '/family/live-tracking',
+    color: 'border-violet-200 bg-violet-50/50',
+  },
+  {
     icon: <EyeOutlined className="text-5xl text-blue-600" />,
     title: '查看长辈健康',
     desc: '实时查看已绑定长辈的健康打卡数据、健康趋势图表和风险等级，及时了解长辈的身体状况变化。',

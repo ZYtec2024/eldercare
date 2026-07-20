@@ -60,9 +60,9 @@ function mapUserRow(row: Record<string, unknown>): AdminUserRow {
   }
 }
 
-export async function fetchAdminDashboard() {
+export async function fetchAdminDashboard(adminUserId: number) {
   const response = await http.get<ApiEnvelope<DashboardMetric[] | Record<string, unknown>>>(
-    '/admin/dashboard/stats',
+    '/admin/dashboard/stats', { params: { admin_user_id: adminUserId } },
   )
 
   const payload = response.data.data
@@ -110,6 +110,7 @@ export async function fetchAdminDashboard() {
 }
 
 export async function fetchAdminUsers(filters: {
+  adminUserId: number
   role?: Role | 'all'
   keyword?: string
   page?: number
@@ -123,6 +124,7 @@ export async function fetchAdminUsers(filters: {
       keyword: filters.keyword || undefined,
       page: filters.page ?? 1,
       limit: filters.pageSize ?? 10,
+      admin_user_id: filters.adminUserId,
     },
   })
 
@@ -143,8 +145,8 @@ export async function fetchAdminUsers(filters: {
   }
 }
 
-export async function fetchAdminAlerts() {
-  const response = await http.get<ApiEnvelope<Array<Record<string, unknown>>>>('/admin/alerts')
+export async function fetchAdminAlerts(adminUserId: number) {
+  const response = await http.get<ApiEnvelope<Array<Record<string, unknown>>>>('/admin/alerts', { params: { admin_user_id: adminUserId } })
   const payload = response.data.data
 
   if (!Array.isArray(payload)) {
@@ -156,50 +158,76 @@ export async function fetchAdminAlerts() {
     category: mapAlertType(alert.alert_type ?? alert.category),
     priority: mapPriority(alert),
     createdAt: formatDateTime(alert.created_at ?? alert.createdAt),
-    status: (alert.is_handled ? 'handled' : 'new') as AlertItem['status'],
+    status: (alert.incident_status === 'acknowledged'
+      ? 'acknowledged'
+      : alert.incident_status === 'dispatching'
+        ? 'dispatching'
+        : alert.is_handled || alert.incident_status === 'resolved'
+          ? 'handled'
+          : 'new') as AlertItem['status'],
     sourceLabel: String(alert.elder_name ?? alert.sourceLabel ?? '老人告警'),
     linkedEntityId: toNumber(alert.linkedEntityId ?? alert.elder_id),
-    resolutionSummary: typeof alert.description === 'string' ? alert.description : undefined,
+    resolutionSummary: typeof alert.resolution_summary === 'string'
+      ? alert.resolution_summary
+      : typeof alert.description === 'string' ? alert.description : undefined,
+    incidentId: alert.emergency_incident_id == null ? null : toNumber(alert.emergency_incident_id),
+    incidentStatus: typeof alert.incident_status === 'string' ? alert.incident_status : null,
+    conversationId: alert.conversation_id == null ? null : toNumber(alert.conversation_id),
+    linkedOrderId: alert.linked_order_id == null ? null : toNumber(alert.linked_order_id),
+    linkedOrderStatus: typeof alert.linked_order_status === 'string' ? alert.linked_order_status : null,
+    linkedVolunteerName: typeof alert.linked_volunteer_name === 'string' ? alert.linked_volunteer_name : null,
+    acknowledgedAt: typeof alert.acknowledged_at === 'string' ? alert.acknowledged_at : undefined,
+    resolvedAt: typeof alert.resolved_at === 'string' ? alert.resolved_at : undefined,
   }))
 }
 
-export async function auditVolunteer(userId: number, action: 'approve' | 'reject') {
+export async function auditVolunteer(userId: number, action: 'approve' | 'reject', adminUserId: number) {
   const response = await http.post<ApiEnvelope<{ review_status: string }>>(
     '/admin/volunteers/audit',
     {
       user_id: userId,
       action,
+      admin_user_id: adminUserId,
     },
   )
   return response.data
 }
 
-export async function deleteAdminUser(userId: number) {
+export async function deleteAdminUser(userId: number, adminUserId: number) {
   const response = await http.post<ApiEnvelope<null>>('/admin/users/delete', {
     user_id: userId,
+    admin_user_id: adminUserId,
   })
   return response.data
 }
 
-export async function handleAdminAlert(alertId: number) {
+export async function handleAdminAlert(
+  alertId: number,
+  adminUserId: number,
+  action: 'acknowledge' | 'close' = 'acknowledge',
+  resolutionSummary?: string,
+) {
   const response = await http.post<ApiEnvelope<{ status: string }>>(
     '/admin/alerts/handle',
     {
       alert_id: alertId,
+      admin_user_id: adminUserId,
+      action,
+      resolution_summary: resolutionSummary,
     },
   )
   return response.data
 }
 
-export async function runWeeklySettlement() {
+export async function runWeeklySettlement(adminUserId: number) {
   const response = await http.post<
     ApiEnvelope<{ winners: string[]; reset_count: number }>
-  >('/admin/weekly-settlement')
+  >('/admin/weekly-settlement', { admin_user_id: adminUserId })
   return response.data
 }
 
-export async function fetchHourReviews() {
-  const response = await http.get<ApiEnvelope<Array<Record<string, unknown>>>>('/admin/hour-reviews')
+export async function fetchHourReviews(adminUserId: number) {
+  const response = await http.get<ApiEnvelope<Array<Record<string, unknown>>>>('/admin/hour-reviews', { params: { admin_user_id: adminUserId } })
   const payload = response.data.data
 
   if (!Array.isArray(payload)) {
@@ -229,9 +257,9 @@ export async function fetchHourReviews() {
   }))
 }
 
-export async function fetchAwardRequests(status: 'pending' | 'approved' | 'rejected' | 'all' = 'pending') {
+export async function fetchAwardRequests(adminUserId: number, status: 'pending' | 'approved' | 'rejected' | 'all' = 'pending') {
   const response = await http.get<ApiEnvelope<Array<Record<string, unknown>>>>('/admin/award-requests', {
-    params: { status },
+    params: { status, admin_user_id: adminUserId },
   })
 
   const payload = response.data.data
@@ -253,6 +281,7 @@ export async function fetchAwardRequests(status: 'pending' | 'approved' | 'rejec
 }
 
 export async function reviewAwardRequest(payload: {
+  adminUserId: number
   requestId: number
   action: 'approve' | 'reject'
   reviewNote?: string
@@ -261,11 +290,13 @@ export async function reviewAwardRequest(payload: {
     request_id: payload.requestId,
     action: payload.action,
     review_note: payload.reviewNote ?? '',
+    admin_user_id: payload.adminUserId,
   })
   return response.data
 }
 
 export async function reviewHourRequest(payload: {
+  adminUserId: number
   reviewId: number
   action: 'approve' | 'reject'
   approvedHours?: number
@@ -276,6 +307,7 @@ export async function reviewHourRequest(payload: {
     action: payload.action,
     approved_hours: payload.approvedHours,
     review_note: payload.reviewNote ?? '',
+    admin_user_id: payload.adminUserId,
   })
   return response.data
 }

@@ -4,6 +4,8 @@ import { CheckOutlined, CloseOutlined } from '@ant-design/icons'
 
 import { fetchAdminUsers, auditVolunteer, deleteAdminUser } from '@/services/adapters/admin-adapter'
 import type { AdminUserRow, Role } from '@/types/domain'
+import { useSession } from '@/features/auth/useSession'
+import { AdminRegionScopeNotice } from '@/features/admin/components/AdminRegionScopeNotice'
 
 const roleColors: Record<Role, string> = {
   family: 'blue',
@@ -27,6 +29,7 @@ const statusMap: Record<string, { color: string; text: string }> = {
 
 export default function AdminUsersPage() {
   const { message } = App.useApp()
+  const { session } = useSession()
   const [users, setUsers] = useState<AdminUserRow[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -36,7 +39,8 @@ export default function AdminUsersPage() {
 
   const load = () => {
     setLoading(true)
-    fetchAdminUsers({ role: roleFilter, page, pageSize: 20 })
+    if (!session) return
+    fetchAdminUsers({ adminUserId: session.userId, role: roleFilter, page, pageSize: 20 })
       .then((res: any) => {
         if (Array.isArray(res)) {
           setUsers(res)
@@ -50,11 +54,11 @@ export default function AdminUsersPage() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(load, [roleFilter, page])
+  useEffect(load, [session?.userId, roleFilter, page])
 
   const handleAudit = async (userId: number, action: 'approve' | 'reject') => {
     try {
-      const res = await auditVolunteer(userId, action)
+      const res = await auditVolunteer(userId, action, session!.userId)
       message.success(res.message)
       load()
     } catch (err: any) {
@@ -65,7 +69,7 @@ export default function AdminUsersPage() {
   const handleDelete = async (user: AdminUserRow) => {
     setDeletingId(user.userId)
     try {
-      const res = await deleteAdminUser(user.userId)
+      const res = await deleteAdminUser(user.userId, session!.userId)
       message.success(res.message)
       load()
     } catch (err: any) {
@@ -158,6 +162,7 @@ export default function AdminUsersPage() {
 
   return (
     <div className="space-y-6">
+      <AdminRegionScopeNotice />
       <div>
         <Typography.Title level={3} className="!mb-1">用户管理</Typography.Title>
         <Typography.Text className="text-gray-500">查看和管理平台用户</Typography.Text>

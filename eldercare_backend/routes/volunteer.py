@@ -6,6 +6,33 @@ import datetime
 
 volunteer_bp = Blueprint('volunteer', __name__)
 
+
+def _leaderboard_viewer_regions(cursor, raw_user_id):
+    if not raw_user_id:
+        return True, set()
+    try:
+        user_id = int(raw_user_id)
+    except (TypeError, ValueError):
+        return False, set()
+    cursor.execute("SELECT role FROM users WHERE user_id = %s", (user_id,))
+    viewer = cursor.fetchone()
+    if not viewer:
+        return False, set()
+    if viewer.get('role') == 'admin':
+        cursor.execute("SELECT region_adcode FROM admin_region_scope WHERE admin_user_id = %s", (user_id,))
+        regions = {str(row['region_adcode']) for row in cursor.fetchall()}
+        return '*' in regions, regions - {'*'}
+    cursor.execute(
+        """
+        SELECT region_adcode FROM elders WHERE user_id = %s
+        UNION SELECT service_region_adcode FROM volunteer_location_state WHERE volunteer_id = %s
+        UNION SELECT e.region_adcode FROM user_elder_relation rel
+              JOIN elders e ON e.elder_id = rel.elder_id WHERE rel.family_user_id = %s
+        """,
+        (user_id, user_id, user_id),
+    )
+    return False, {str(row['region_adcode']) for row in cursor.fetchall() if row.get('region_adcode')}
+
 # 1. 获取任务大厅列表 (周围待接单需求)
 @volunteer_bp.route('/orders/available', methods=['GET'])
 def get_available_orders():
@@ -26,11 +53,24 @@ def get_available_orders():
                         o.status
                     FROM orders o
                     JOIN elders e ON o.elder_id = e.elder_id
-                    WHERE o.status = 'pending'
-                        OR (%s IS NOT NULL AND o.volunteer_id = %s AND o.status IN ('accepted', 'in_progress'))
+                    WHERE (%s IS NOT NULL AND o.volunteer_id = %s AND o.status IN ('accepted', 'in_progress'))
+                       OR (o.status = 'pending' AND (
+                            %s IS NULL OR NOT EXISTS (
+                                SELECT 1 FROM orders own
+                                WHERE own.volunteer_id = %s AND own.status IN ('accepted', 'in_progress')
+                            )
+                       ) AND (
+                            %s IS NULL
+                            OR NOT EXISTS (SELECT 1 FROM dispatch_orders d WHERE d.order_id = o.order_id)
+                            OR EXISTS (
+                                SELECT 1 FROM dispatch_candidates c
+                                WHERE c.order_id = o.order_id AND c.volunteer_id = %s
+                                  AND c.eligible = TRUE AND c.response_status IN ('invited', 'forced')
+                            )
+                       ))
                     ORDER BY o.created_at DESC
                 """
-                cursor.execute(sql, (volunteer_id, volunteer_id))
+                cursor.execute(sql, (volunteer_id, volunteer_id, volunteer_id, volunteer_id, volunteer_id, volunteer_id))
             except Exception:
                 sql = """
                     SELECT 
@@ -44,11 +84,24 @@ def get_available_orders():
                         o.status
                     FROM orders o
                     JOIN elders e ON o.elder_id = e.elder_id
-                    WHERE o.status = 'pending'
-                        OR (%s IS NOT NULL AND o.volunteer_id = %s AND o.status IN ('accepted', 'in_progress'))
+                    WHERE (%s IS NOT NULL AND o.volunteer_id = %s AND o.status IN ('accepted', 'in_progress'))
+                       OR (o.status = 'pending' AND (
+                            %s IS NULL OR NOT EXISTS (
+                                SELECT 1 FROM orders own
+                                WHERE own.volunteer_id = %s AND own.status IN ('accepted', 'in_progress')
+                            )
+                       ) AND (
+                            %s IS NULL
+                            OR NOT EXISTS (SELECT 1 FROM dispatch_orders d WHERE d.order_id = o.order_id)
+                            OR EXISTS (
+                                SELECT 1 FROM dispatch_candidates c
+                                WHERE c.order_id = o.order_id AND c.volunteer_id = %s
+                                  AND c.eligible = TRUE AND c.response_status IN ('invited', 'forced')
+                            )
+                       ))
                     ORDER BY o.created_at DESC
                 """
-                cursor.execute(sql, (volunteer_id, volunteer_id))
+                cursor.execute(sql, (volunteer_id, volunteer_id, volunteer_id, volunteer_id, volunteer_id, volunteer_id))
             
             orders = cursor.fetchall()
 
@@ -140,20 +193,64 @@ def grab_order():
             
             # 1. 查询订单并上排他锁 (FOR UPDATE)
             # 作用：如果同时有10个人点抢单，只有第一个人能拿到锁执行下面的代码，其他人全部在这一行排队阻塞！
-            sql_check = "SELECT status FROM orders WHERE order_id = %s FOR UPDATE"
+            sql_check = "SELECT status, region_adcode FROM orders WHERE order_id = %s FOR UPDATE"
             cursor.execute(sql_check, (order_id,))
             order = cursor.fetchone()
+
+            # Per-order locking alone does not stop one volunteer from taking
+            # two different orders in parallel browser sessions.  Lock their
+            # user row so every accept attempt for that person is serialized.
+            cursor.execute("SELECT user_id FROM users WHERE user_id = %s FOR UPDATE", (volunteer_id,))
+            volunteer = cursor.fetchone()
+            cursor.execute("SELECT service_region_adcode FROM volunteer_location_state WHERE volunteer_id = %s", (volunteer_id,))
+            volunteer_location = cursor.fetchone()
+            if not volunteer:
+                conn.rollback()
+                return jsonify({"code": 404, "message": "志愿者不存在"}), 404
 
             if not order:
                 conn.rollback()
                 return jsonify({"code": 404, "message": "订单不存在"})
             
             # 2. 校验状态：只有状态是 pending (待接单) 才能抢
+            if not volunteer_location or str(order.get('region_adcode')) != str(volunteer_location.get('service_region_adcode')):
+                conn.rollback()
+                return jsonify({"code": 403, "message": "任务不属于您的服务区县"}), 403
+
             if order['status'] != 'pending':
                 conn.rollback() # 解锁放行排队的人
                 return jsonify({"code": 400, "message": "手慢了，该订单已被其他志愿者抢走或已取消！"})
 
             # 3. 执行接单：修改状态为 accepted 并绑定志愿者ID
+            cursor.execute("""SELECT order_id FROM orders
+                              WHERE volunteer_id = %s AND status IN ('accepted', 'in_progress')""", (volunteer_id,))
+            if cursor.fetchone():
+                conn.rollback()
+                return jsonify({"code": 409, "message": "当前已有进行中的订单，请完成服务后再接新单"}), 409
+
+            # Smart-dispatch orders may also appear in the general task hall.
+            # Do not let that legacy entry point bypass the skill gate, route
+            # creation, candidate expiry, or one-order dispatch state machine.
+            cursor.execute("SELECT order_id FROM dispatch_orders WHERE order_id = %s", (order_id,))
+            if cursor.fetchone():
+                from routes.dispatch import _accept_candidate, _order_context
+                smart_order = _order_context(cursor, int(order_id))
+                cursor.execute("""SELECT eligible, response_status FROM dispatch_candidates
+                                  WHERE order_id = %s AND volunteer_id = %s""", (order_id, volunteer_id))
+                candidate = cursor.fetchone()
+                if not smart_order or not candidate or not candidate["eligible"]:
+                    conn.rollback()
+                    return jsonify({"code": 403, "message": "该请求与您的技能不匹配，不能接单"}), 403
+                if candidate["response_status"] not in ("invited", "forced"):
+                    conn.rollback()
+                    return jsonify({"code": 403, "message": "该智能请求当前未向您开放"}), 403
+                route = _accept_candidate(cursor, smart_order, int(volunteer_id))
+                if route is None:
+                    conn.rollback()
+                    return jsonify({"code": 409, "message": "接单未成功：订单已被锁定或您已有进行中的服务"}), 409
+                conn.commit()
+                return jsonify({"code": 200, "message": "接单成功，已生成前往老人家的路线", "data": route})
+
             sql_update = "UPDATE orders SET status = 'accepted', volunteer_id = %s WHERE order_id = %s"
             cursor.execute(sql_update, (volunteer_id, order_id))
             
@@ -207,13 +304,41 @@ def update_order_status():
                     return jsonify({"code": 400, "message": "订单状态异常，无法开始"})
 
                 cursor.execute("UPDATE orders SET status = 'in_progress' WHERE order_id = %s", (order_id,))
+                # The legacy task-detail screen may still start a smart
+                # dispatch order.  It must use the same shared-map invariant
+                # as /dispatch/orders/<id>/respond: service means the
+                # volunteer is physically at the elder's address, never at
+                # the previous route point.
+                cursor.execute("SELECT order_id FROM dispatch_orders WHERE order_id = %s", (order_id,))
+                if cursor.fetchone():
+                    from routes.dispatch import _order_context
+                    smart_order = _order_context(cursor, int(order_id))
+                    if smart_order:
+                        cursor.execute("UPDATE dispatch_orders SET dispatch_state = 'serving' WHERE order_id = %s", (order_id,))
+                        cursor.execute("""UPDATE volunteer_location_state
+                                          SET lng = %s, lat = %s, availability = 'serving', location_source = 'virtual', updated_at = CURRENT_TIMESTAMP
+                                          WHERE volunteer_id = %s""",
+                                       (smart_order['elder_lng'], smart_order['elder_lat'], volunteer_id))
+                        cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order_id,))
                 conn.commit()
                 return jsonify({"code": 200, "message": "服务已开始！"})
 
             if action == 'cancel':
+                cursor.execute("SELECT order_id FROM dispatch_orders WHERE order_id = %s", (order_id,))
+                is_smart_dispatch = cursor.fetchone()
                 if order.get('status') not in ['accepted', 'in_progress']:
                     conn.rollback()
                     return jsonify({"code": 400, "message": "当前状态不支持中止"})
+
+                if is_smart_dispatch:
+                    if order.get('status') != 'accepted':
+                        conn.rollback()
+                        return jsonify({"code": 409, "message": "智能订单服务开始后不能取消，请完成服务"}), 409
+                    from routes.dispatch import _order_context, _release_dispatch_order
+                    smart_order = _order_context(cursor, int(order_id))
+                    _release_dispatch_order(cursor, smart_order, int(volunteer_id), "volunteer_assignment_cancelled", "志愿者从任务详情取消，系统已立即重新计算下一位最优候选。")
+                    conn.commit()
+                    return jsonify({"code": 200, "message": "已取消接单，系统正在重新派单"})
 
                 cursor.execute(
                     "UPDATE orders SET status = 'pending', volunteer_id = NULL WHERE order_id = %s",
@@ -273,6 +398,27 @@ def update_order_status():
                         """,
                         (order_id, volunteer_id, expected_hours, declared_hours, max_auto_hours),
                     )
+
+                # The legacy task-detail page can also complete an intelligent
+                # order.  Send it through the same return-home and immediate
+                # auto-chain flow as the dispatch page, instead of leaving a
+                # stale "serving" location behind.
+                cursor.execute("SELECT order_id FROM dispatch_orders WHERE order_id = %s", (order_id,))
+                if cursor.fetchone():
+                    from routes.dispatch import _create_return_route, _record_completed_service_fatigue
+                    cursor.execute("UPDATE dispatch_orders SET dispatch_state = 'completed' WHERE order_id = %s", (order_id,))
+                    cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order_id,))
+                    return_route = _create_return_route(cursor, int(volunteer_id))
+                    _record_completed_service_fatigue(cursor, int(volunteer_id), float(order.get('service_hours') or 1))
+                    cursor.execute("UPDATE volunteer_location_state SET availability = %s WHERE volunteer_id = %s",
+                                   ('returning' if return_route else 'idle', volunteer_id))
+                    cursor.execute("SELECT auto_accept_enabled FROM volunteer_location_state WHERE volunteer_id = %s", (volunteer_id,))
+                    auto_state = cursor.fetchone()
+                    if auto_state and auto_state['auto_accept_enabled']:
+                        # The dispatch endpoint will scan after the persisted
+                        # return-window grace period; never skip the visible
+                        # return route from this legacy completion page.
+                        pass
 
                 conn.commit()
                 return jsonify({
@@ -337,9 +483,32 @@ def like_volunteer():
 # 5. 🏆 荣誉大厅排行榜 (按本周时长倒序)
 @volunteer_bp.route('/leaderboard', methods=['GET'])
 def get_leaderboard():
+    admin_user_id = request.args.get('admin_user_id')
+    viewer_user_id = request.args.get('viewer_user_id')
+    requested_region = request.args.get('region_adcode')
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
+            is_global, regions = True, set()
+            if admin_user_id:
+                cursor.execute("SELECT role FROM users WHERE user_id = %s", (admin_user_id,))
+                admin = cursor.fetchone()
+                if not admin or admin.get('role') != 'admin':
+                    return jsonify({"code": 403, "message": "仅管理员可查看管理员荣誉榜"}), 403
+                cursor.execute("SELECT region_adcode FROM admin_region_scope WHERE admin_user_id = %s", (admin_user_id,))
+                regions = {str(row['region_adcode']) for row in cursor.fetchall()}
+                is_global = '*' in regions
+                regions.discard('*')
+                if not is_global and not regions:
+                    return jsonify({"code": 403, "message": "该管理员未分配区县管理范围"}), 403
+            elif viewer_user_id:
+                is_global, regions = _leaderboard_viewer_regions(cursor, viewer_user_id)
+                if not is_global and not regions:
+                    return jsonify({"code": 403, "message": "当前账号未配置服务区县"}), 403
+            if admin_user_id and requested_region:
+                if not is_global and requested_region not in regions:
+                    return jsonify({"code": 403, "message": "无权查看其他区县排名"}), 403
+                is_global, regions = False, {str(requested_region)}
             # 💎 高分点：多表 JOIN + 子查询聚合，按本周时长统计荣誉大厅
             sql = """
                 SELECT 
@@ -358,7 +527,11 @@ def get_leaderboard():
                 ORDER BY vp.weekly_hours DESC, vp.likes_count DESC, vp.total_hours DESC
                 LIMIT 10
             """
-            cursor.execute(sql)
+            if not is_global:
+                sql = sql.replace("WHERE u.role = 'volunteer'", "JOIN volunteer_location_state loc ON loc.volunteer_id = u.user_id WHERE u.role = 'volunteer' AND loc.service_region_adcode IN %s")
+                cursor.execute(sql, (tuple(regions),))
+            else:
+                cursor.execute(sql)
             leaderboard = cursor.fetchall()
             return jsonify({"code": 200, "message": "获取榜单成功", "data": leaderboard})
     finally:

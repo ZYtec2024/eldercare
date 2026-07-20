@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Card, Typography, Spin, Button, App, Statistic, Table, Tag, Modal, Form, InputNumber, Input } from 'antd'
+import { Card, Typography, Spin, Button, App, Statistic, Table, Tag, Modal, Form, InputNumber, Input, Select, Space } from 'antd'
 import {
   UserOutlined,
   AlertOutlined,
@@ -13,6 +13,9 @@ import ReactECharts from 'echarts-for-react'
 import { fetchAdminDashboard, runWeeklySettlement, fetchHourReviews, reviewHourRequest, fetchAwardRequests, reviewAwardRequest } from '@/services/adapters/admin-adapter'
 import { fetchVolunteerLeaderboard } from '@/services/adapters/volunteer-adapter'
 import type { AwardRequestItem, DashboardMetric, HourReviewItem, VolunteerProfile } from '@/types/domain'
+import { useSession } from '@/features/auth/useSession'
+import { AdminRegionScopeNotice } from '@/features/admin/components/AdminRegionScopeNotice'
+import { fetchAdminDispatchRegions } from '@/services/adapters/dispatch-adapter'
 
 const iconMap: Record<string, React.ReactNode> = {
   total_users: <UserOutlined />,
@@ -25,8 +28,11 @@ const colorPalette = ['#2563eb', '#0284c7', '#d97706', '#dc2626', '#7c3aed', '#0
 
 export default function AdminDashboardPage() {
   const { message } = App.useApp()
+  const { session } = useSession()
   const [metrics, setMetrics] = useState<DashboardMetric[]>([])
   const [leaderboard, setLeaderboard] = useState<VolunteerProfile[]>([])
+  const [rankingRegions, setRankingRegions] = useState<Array<{ adcode: string; name: string }>>([])
+  const [rankingRegion, setRankingRegion] = useState<string | undefined>()
   const [hourReviews, setHourReviews] = useState<HourReviewItem[]>([])
   const [awardRequests, setAwardRequests] = useState<AwardRequestItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -38,25 +44,38 @@ export default function AdminDashboardPage() {
 
   useEffect(() => {
     Promise.all([
-      fetchAdminDashboard(),
-      fetchVolunteerLeaderboard(),
-      fetchHourReviews(),
-      fetchAwardRequests('pending'),
+      fetchAdminDashboard(session!.userId),
+      fetchHourReviews(session!.userId),
+      fetchAwardRequests(session!.userId, 'pending'),
     ])
-      .then(([m, lb, reviews, awards]) => {
+      .then(([m, reviews, awards]) => {
         setMetrics(m)
-        setLeaderboard(lb)
         setHourReviews(reviews)
         setAwardRequests(awards)
       })
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [])
+  }, [session?.userId])
+
+  useEffect(() => {
+    if (!session) return
+    fetchAdminDispatchRegions(session.userId).then((items) => {
+      setRankingRegions(items)
+      if (items.length === 1) setRankingRegion(items[0].adcode)
+    }).catch(() => setRankingRegions([]))
+  }, [session?.userId])
+
+  useEffect(() => {
+    if (!session) return
+    fetchVolunteerLeaderboard({ adminUserId: session.userId, regionAdcode: rankingRegion })
+      .then(setLeaderboard)
+      .catch(() => setLeaderboard([]))
+  }, [session?.userId, rankingRegion])
 
   const handleSettle = async () => {
     setSettling(true)
     try {
-      const res = await runWeeklySettlement()
+      const res = await runWeeklySettlement(session!.userId)
       message.success(res.message)
     } catch (err: any) {
       message.error(err?.message || '结算失败')
@@ -81,6 +100,7 @@ export default function AdminDashboardPage() {
       const values = await reviewForm.validateFields()
       const res = await reviewHourRequest({
         reviewId: activeReview.reviewId,
+        adminUserId: session!.userId,
         action: 'approve',
         approvedHours: values.approvedHours,
         reviewNote: values.reviewNote,
@@ -88,7 +108,7 @@ export default function AdminDashboardPage() {
       message.success(res.message)
       setActiveReview(null)
       reviewForm.resetFields()
-      const reviews = await fetchHourReviews()
+      const reviews = await fetchHourReviews(session!.userId)
       setHourReviews(reviews)
     } catch (err: any) {
       if (err?.errorFields) {
@@ -105,13 +125,14 @@ export default function AdminDashboardPage() {
     try {
       const res = await reviewHourRequest({
         reviewId: record.reviewId,
+        adminUserId: session!.userId,
         action: 'reject',
         reviewNote: '管理员驳回',
       })
       message.success(res.message)
       setActiveReview(null)
       reviewForm.resetFields()
-      const reviews = await fetchHourReviews()
+      const reviews = await fetchHourReviews(session!.userId)
       setHourReviews(reviews)
     } catch (err: any) {
       message.error(err?.message || '审核失败')
@@ -125,12 +146,13 @@ export default function AdminDashboardPage() {
     try {
       const res = await reviewAwardRequest({
         requestId: record.requestId,
+        adminUserId: session!.userId,
         action: 'approve',
         reviewNote: '管理员审核通过',
       })
       message.success(res.message)
-      setAwardRequests(await fetchAwardRequests('pending'))
-      setLeaderboard(await fetchVolunteerLeaderboard())
+      setAwardRequests(await fetchAwardRequests(session!.userId, 'pending'))
+      setLeaderboard(await fetchVolunteerLeaderboard({ adminUserId: session!.userId, regionAdcode: rankingRegion }))
     } catch (err: any) {
       message.error(err?.message || '审核失败')
     } finally {
@@ -143,11 +165,12 @@ export default function AdminDashboardPage() {
     try {
       const res = await reviewAwardRequest({
         requestId: record.requestId,
+        adminUserId: session!.userId,
         action: 'reject',
         reviewNote: '管理员驳回',
       })
       message.success(res.message)
-      setAwardRequests(await fetchAwardRequests('pending'))
+      setAwardRequests(await fetchAwardRequests(session!.userId, 'pending'))
     } catch (err: any) {
       message.error(err?.message || '审核失败')
     } finally {
@@ -285,6 +308,7 @@ export default function AdminDashboardPage() {
 
   return (
     <div className="space-y-6">
+      <AdminRegionScopeNotice />
       <div className="flex items-center justify-between">
         <div>
           <Typography.Title level={3} className="!mb-1">管理控制台</Typography.Title>
@@ -313,7 +337,16 @@ export default function AdminDashboardPage() {
             本周志愿者排行
           </span>
         }
-        extra={
+        extra={<Space wrap>
+          <Select
+            className="min-w-40"
+            value={rankingRegion ?? '__national__'}
+            onChange={(value) => setRankingRegion(value === '__national__' ? undefined : value)}
+            options={[
+              ...(rankingRegions.length > 1 ? [{ value: '__national__', label: '全国总榜' }] : []),
+              ...rankingRegions.map((region) => ({ value: region.adcode, label: `${region.name}榜` })),
+            ]}
+          />
           <Button
             type="primary"
             icon={<DollarOutlined />}
@@ -322,7 +355,7 @@ export default function AdminDashboardPage() {
           >
             周结算
           </Button>
-        }
+        </Space>}
         className="!rounded-2xl"
       >
         <Table
@@ -366,11 +399,24 @@ export default function AdminDashboardPage() {
             m.visualType === 'pie'
               ? {
                   tooltip: { trigger: 'item' as const },
-                  legend: { bottom: 0 },
+                  // Keep the legend in a dedicated band below the doughnut.  With
+                  // several service types the old default centre let the ring and
+                  // the multi-line legend occupy the same vertical space.
+                  legend: {
+                    type: 'scroll' as const,
+                    orient: 'horizontal' as const,
+                    left: 'center',
+                    right: 12,
+                    bottom: 4,
+                    itemWidth: 10,
+                    itemHeight: 10,
+                    textStyle: { fontSize: 11 },
+                  },
                   series: [
                     {
                       type: 'pie',
-                      radius: ['40%', '70%'],
+                      center: ['50%', '42%'],
+                      radius: ['36%', '58%'],
                       avoidLabelOverlap: false,
                       itemStyle: { borderRadius: 8, borderColor: '#fff', borderWidth: 2 },
                       label: { show: false },
@@ -405,7 +451,7 @@ export default function AdminDashboardPage() {
 
           return (
             <Card key={m.metricId} title={m.label} className="!rounded-2xl">
-              <ReactECharts option={option} style={{ height: 280 }} />
+              <ReactECharts option={option} style={{ height: m.visualType === 'pie' ? 300 : 280 }} />
               <div className="text-xs text-gray-400 mt-2">{m.comparisonText}</div>
             </Card>
           )

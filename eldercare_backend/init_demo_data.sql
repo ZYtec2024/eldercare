@@ -397,7 +397,7 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS trg_health_alert ON health_records;
 CREATE TRIGGER trg_health_alert
 AFTER INSERT ON health_records
-FOR EACH ROW EXECUTE FUNCTION fn_health_alert();
+FOR EACH ROW EXECUTE PROCEDURE fn_health_alert();
 
 -- ============================================================
 -- 数据概览：

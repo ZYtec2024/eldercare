@@ -1,5 +1,6 @@
 import { Card, Typography } from 'antd'
 import {
+  CompassOutlined,
   DashboardOutlined,
   UserOutlined,
   TrophyOutlined,
@@ -9,6 +10,13 @@ import { useNavigate } from 'react-router-dom'
 import { useSession } from '@/features/auth/useSession'
 
 const features = [
+  {
+    icon: <CompassOutlined className="text-5xl text-emerald-600" />,
+    title: '智能推荐接单',
+    desc: '系统先验证服务技能，再结合距离、共享路况、疲劳度和服务评分推荐订单。可自主接单或拒绝，系统会自动补位下一位候选。',
+    path: '/volunteer/dispatch',
+    color: 'border-emerald-200 bg-emerald-50/50',
+  },
   {
     icon: <DashboardOutlined className="text-5xl text-blue-600" />,
     title: '任务大厅',

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Card, Typography, Spin, Form, Input, Button, App, Descriptions, Tag, Divider } from 'antd'
+import { Card, Typography, Spin, Form, Input, Button, App, Descriptions, Tag, Divider, Space } from 'antd'
 import { UserOutlined, EditOutlined, SaveOutlined, LockOutlined } from '@ant-design/icons'
 
 import { fetchProfileInfo, updateProfileInfo } from '@/services/adapters/profile-adapter'
@@ -7,6 +7,13 @@ import { useSession } from '@/features/auth/useSession'
 import type { ProfileSnapshot } from '@/types/domain'
 import { roleLabels } from '@/types/domain'
 import { changePassword } from '@/services/adapters/auth-adapter'
+import { fetchDispatchTracking } from '@/services/adapters/dispatch-adapter'
+
+const dispatchSkillLabels: Record<string, string> = {
+  medical_support: '医疗陪护', emergency_response: '紧急响应', mobility_assist: '行动协助',
+  errand: '代办采购', companion: '陪伴沟通', rehab: '康复训练',
+  digital_assist: '智能设备协助', grooming: '生活照护',
+}
 
 export default function ProfilePage() {
   const { session } = useSession()
@@ -17,6 +24,7 @@ export default function ProfilePage() {
   const [saving, setSaving] = useState(false)
   const [changingPwd, setChangingPwd] = useState(false)
   const [pwdSaving, setPwdSaving] = useState(false)
+  const [verifiedSkills, setVerifiedSkills] = useState<string[]>([])
   const [form] = Form.useForm()
   const [pwdForm] = Form.useForm()
 
@@ -29,6 +37,13 @@ export default function ProfilePage() {
       })
       .catch(() => {})
       .finally(() => setLoading(false))
+    if (session.role === 'volunteer') {
+      fetchDispatchTracking('volunteer', session.userId)
+        .then((tracking) => setVerifiedSkills(tracking.volunteers[0]?.skills ?? []))
+        .catch(() => setVerifiedSkills([]))
+    } else {
+      setVerifiedSkills([])
+    }
   }, [session])
 
   const handleSave = async () => {
@@ -109,7 +124,10 @@ export default function ProfilePage() {
             )}
             {profile.role === 'volunteer' && (
               <>
-                <Descriptions.Item label="技能">{profile.skills || '-'}</Descriptions.Item>
+                <Descriptions.Item label="技能简介">{profile.skills || '-'}</Descriptions.Item>
+                <Descriptions.Item label="调度认证技能" span={2}>
+                  {verifiedSkills.length ? <Space wrap>{verifiedSkills.map((skill) => <Tag color="green" key={skill}>{dispatchSkillLabels[skill] ?? skill}</Tag>)}</Space> : <span className="text-slate-500">暂无认证技能，无法参与智能派单</span>}
+                </Descriptions.Item>
                 <Descriptions.Item label="总服务时长">{profile.totalHours ?? 0} 小时</Descriptions.Item>
                 <Descriptions.Item label="获赞">{profile.likesCount ?? 0}</Descriptions.Item>
               </>

@@ -1,111 +1,106 @@
-import { useEffect, useState } from 'react'
-import { Card, Tag, Typography, Button, Empty, App } from 'antd'
-import { useNavigate } from 'react-router-dom'
-import { ClockCircleOutlined, EnvironmentOutlined } from '@ant-design/icons'
+import { useCallback, useEffect, useState } from 'react'
+import { Card, Empty, List, Spin, Tag, Typography } from 'antd'
+import { ClockCircleOutlined, EnvironmentOutlined, TeamOutlined } from '@ant-design/icons'
 
-import { fetchVolunteerTasks, grabVolunteerTask } from '@/services/adapters/volunteer-adapter'
 import { useSession } from '@/features/auth/useSession'
-import type { VolunteerTaskCard } from '@/types/domain'
+import type { VolunteerDispatchTask } from '@/features/dispatch/dispatch-types'
+import { fetchVolunteerDispatchFeed } from '@/services/adapters/dispatch-adapter'
 
-const urgencyColors: Record<string, string> = { high: 'red', medium: 'orange', low: 'green' }
-const urgencyLabels: Record<string, string> = { high: '紧急', medium: '一般', low: '不急' }
-const statusLabels: Record<string, { color: string; text: string }> = {
-  pending: { color: 'orange', text: '待接单' },
-  accepted: { color: 'blue', text: '已接单' },
-  in_progress: { color: 'processing', text: '进行中' },
-  completed: { color: 'green', text: '已完成' },
-  cancelled: { color: 'default', text: '已取消' },
-  unavailable: { color: 'default', text: '不可用' },
+type CompletedTask = {
+  order_id: number
+  service_type: string
+  elder_name: string
+  address?: string
+  completed_at?: string | null
+}
+
+const activeStatuses = new Set(['accepted', 'in_progress'])
+const statusMeta: Record<string, { color: string; label: string }> = {
+  accepted: { color: 'blue', label: '正在赶路' },
+  in_progress: { color: 'green', label: '服务中' },
 }
 
 export default function VolunteerTasksPage() {
-  const navigate = useNavigate()
   const { session } = useSession()
-  const { message } = App.useApp()
-  const [tasks, setTasks] = useState<VolunteerTaskCard[]>([])
+  const [tasks, setTasks] = useState<VolunteerDispatchTask[]>([])
+  const [completedTasks, setCompletedTasks] = useState<CompletedTask[]>([])
   const [loading, setLoading] = useState(true)
-  const [grabbingId, setGrabbingId] = useState<number | null>(null)
 
-  const load = () => {
-    setLoading(true)
-    fetchVolunteerTasks(session?.userId)
-      .then(setTasks)
-      .catch(() => {})
-      .finally(() => setLoading(false))
-  }
-
-  useEffect(load, [session?.userId])
-
-  const handleGrab = async (orderId: number) => {
-    if (grabbingId === orderId) return
-    setGrabbingId(orderId)
+  const load = useCallback(async () => {
+    if (!session?.userId) return
     try {
-      await grabVolunteerTask(orderId, session?.userId)
-      message.success('抢单成功！')
-      load()
-    } catch (err: any) {
-      message.error(err?.message || '抢单失败')
+      const data = await fetchVolunteerDispatchFeed(session.userId)
+      // “我的任务”只保留已经由本人接下、正在执行的订单；候选邀约属于智能推荐接单页面。
+      setTasks(data.tasks.filter((task) => activeStatuses.has(task.status)))
+      setCompletedTasks(data.completed_tasks)
     } finally {
-      setGrabbingId(null)
+      setLoading(false)
     }
-  }
+  }, [session?.userId])
+
+  useEffect(() => {
+    void load()
+    const timer = window.setInterval(() => void load(), 3000)
+    return () => window.clearInterval(timer)
+  }, [load])
 
   return (
     <div className="space-y-6">
       <div>
-        <Typography.Title level={3} className="!mb-1">任务大厅</Typography.Title>
-        <Typography.Text className="text-gray-500">浏览可接的服务任务</Typography.Text>
+        <Typography.Title level={3} className="!mb-1">我的任务</Typography.Title>
+        <Typography.Text className="text-gray-500">
+          这里只显示我已接下的服务和完成记录；候选邀约、抢单倒计时和自动接单请查看“智能推荐接单”。
+        </Typography.Text>
       </div>
 
-      {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {[1, 2, 3].map((i) => <Card key={i} loading className="!rounded-2xl" />)}
-        </div>
-      ) : tasks.length === 0 ? (
-        <Card className="!rounded-2xl"><Empty description="暂无可接任务" /></Card>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {tasks.map((task) => {
-            const st = statusLabels[task.status] || { color: 'default', text: task.status }
-            const isGrabbing = grabbingId === task.orderId
-            return (
-              <Card
-                key={task.orderId}
-                className="!rounded-2xl hover:shadow-md transition-shadow"
-                actions={[
-                  task.status === 'pending' ? (
-                    <Button
-                      key="grab"
-                      type="primary"
-                      size="small"
-                      loading={isGrabbing}
-                      disabled={!!grabbingId && grabbingId !== task.orderId}
-                      onClick={() => handleGrab(task.orderId)}
-                    >
-                      立即抢单
-                    </Button>
-                  ) : (
-                    <Button key="detail" type="link" size="small" onClick={() => navigate(`/volunteer/tasks/${task.orderId}`)}>
-                      查看详情
-                    </Button>
-                  ),
-                ]}
-              >
-                <div className="flex items-start justify-between mb-2">
-                  <Typography.Title level={4} className="!mb-0">{task.serviceType}</Typography.Title>
-                  <Tag color={urgencyColors[task.urgencyLevel]}>{urgencyLabels[task.urgencyLevel]}</Tag>
+      <Card title="当前执行中的任务" className="!rounded-2xl">
+        {loading ? <Spin /> : tasks.length === 0 ? (
+          <Empty description="当前没有已接任务，可在“智能推荐接单”查看向你开放的候选请求" />
+        ) : (
+          <List
+            dataSource={tasks}
+            renderItem={(task) => {
+              const meta = statusMeta[task.status] ?? { color: 'default', label: task.status }
+              return (
+                <List.Item>
+                  <div className="w-full space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Typography.Text strong>{task.service_type}</Typography.Text>
+                      <Tag color={meta.color}>{meta.label}</Tag>
+                      {task.urgency === 'sos' && <Tag color="red">SOS 紧急订单</Tag>}
+                    </div>
+                    <div className="text-sm text-gray-600 space-y-1">
+                      <div><TeamOutlined className="mr-1" />服务对象：{task.elder_name}</div>
+                      <div><EnvironmentOutlined className="mr-1" />{task.address || '服务地址待确认'}</div>
+                      {task.route?.eta_minutes != null && <div><ClockCircleOutlined className="mr-1" />预计到达：约 {task.route.eta_minutes} 分钟</div>}
+                    </div>
+                  </div>
+                </List.Item>
+              )
+            }}
+          />
+        )}
+      </Card>
+
+      <Card title="已完成服务记录" className="!rounded-2xl">
+        {loading ? <Spin /> : completedTasks.length === 0 ? (
+          <Empty description="暂无已完成服务记录" />
+        ) : (
+          <List
+            size="small"
+            dataSource={completedTasks}
+            renderItem={(task) => (
+              <List.Item>
+                <div>
+                  <Typography.Text strong>{task.service_type}</Typography.Text>
+                  <Typography.Text className="ml-2 text-gray-500">{task.elder_name}</Typography.Text>
+                  {task.completed_at && <Typography.Text className="ml-2 text-gray-400">完成于 {task.completed_at}</Typography.Text>}
                 </div>
-                <Tag color={st.color} className="mb-3">{st.text}</Tag>
-                <div className="space-y-1 text-sm text-gray-600">
-                  <div><ClockCircleOutlined className="mr-1" />{task.scheduledTime} · {task.serviceHours}小时</div>
-                  <div><EnvironmentOutlined className="mr-1" />{task.addressPreview}</div>
-                  {task.elderName && <div>服务对象：{task.elderName}</div>}
-                </div>
-              </Card>
-            )
-          })}
-        </div>
-      )}
+              </List.Item>
+            )}
+          />
+        )}
+      </Card>
     </div>
   )
 }

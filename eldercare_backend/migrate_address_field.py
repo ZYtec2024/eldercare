@@ -7,7 +7,7 @@ DB_CONFIG = {
     'host': os.getenv('DB_HOST', '127.0.0.1'),
     'port': int(os.getenv('DB_PORT', '5432')),
     'user': os.getenv('DB_USER', 'gaussdb'),
-    'password': os.getenv('DB_PASSWORD', 'GaussDB_123'),
+    'password': os.getenv('DB_PASSWORD', 'openGauss@123'),
     'dbname': os.getenv('DB_NAME', 'elderly_care_system'),
 }
 

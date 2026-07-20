@@ -169,9 +169,9 @@ export async function fetchVolunteerProfile(volunteerId = 302) {
   return normalizeProfile(response.data.data as unknown as Record<string, unknown>)
 }
 
-export async function fetchVolunteerLeaderboard() {
+export async function fetchVolunteerLeaderboard(options?: { adminUserId?: number; viewerUserId?: number; regionAdcode?: string }) {
   const response = await http.get<ApiEnvelope<Array<Record<string, unknown>> | VolunteerProfile[]>>(
-    '/volunteer/leaderboard',
+    '/volunteer/leaderboard', { params: { admin_user_id: options?.adminUserId, viewer_user_id: options?.viewerUserId, region_adcode: options?.regionAdcode } },
   )
 
   const list = response.data.data

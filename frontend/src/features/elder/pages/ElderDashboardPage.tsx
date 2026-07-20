@@ -1,6 +1,7 @@
 import { Card, Typography } from 'antd'
 import {
   DashboardOutlined,
+  AimOutlined,
   HeartOutlined,
   MedicineBoxOutlined,
   AlertOutlined,
@@ -10,6 +11,13 @@ import { useNavigate } from 'react-router-dom'
 import { useSession } from '@/features/auth/useSession'
 
 const features = [
+  {
+    icon: <AimOutlined className="text-5xl text-indigo-600" />,
+    title: '智能求助调度',
+    desc: '提交服务需求后，系统会先严格匹配志愿者技能，再结合距离、共享路况、疲劳度和服务评分推荐最合适的响应人选。',
+    path: '/elder/dispatch',
+    color: 'border-indigo-200 bg-indigo-50/50',
+  },
   {
     icon: <HeartOutlined className="text-5xl text-blue-600" />,
     title: '健康打卡',

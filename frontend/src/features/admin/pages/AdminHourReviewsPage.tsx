@@ -3,9 +3,12 @@ import { App, Button, Card, Empty, Form, Input, InputNumber, Spin, Table, Tag, T
 
 import { fetchHourReviews, reviewHourRequest } from '@/services/adapters/admin-adapter'
 import type { HourReviewItem } from '@/types/domain'
+import { useSession } from '@/features/auth/useSession'
+import { AdminRegionScopeNotice } from '@/features/admin/components/AdminRegionScopeNotice'
 
 export default function AdminHourReviewsPage() {
   const { message } = App.useApp()
+  const { session } = useSession()
   const [reviews, setReviews] = useState<HourReviewItem[]>([])
   const [loading, setLoading] = useState(true)
   const [reviewing, setReviewing] = useState(false)
@@ -14,13 +17,14 @@ export default function AdminHourReviewsPage() {
 
   const load = () => {
     setLoading(true)
-    fetchHourReviews()
+    if (!session) return
+    fetchHourReviews(session.userId)
       .then(setReviews)
       .catch(() => {})
       .finally(() => setLoading(false))
   }
 
-  useEffect(load, [])
+  useEffect(load, [session?.userId])
 
   const openApprove = (review: HourReviewItem) => {
     setActiveReview(review)
@@ -38,6 +42,7 @@ export default function AdminHourReviewsPage() {
       const values = await form.validateFields()
       const res = await reviewHourRequest({
         reviewId: activeReview.reviewId,
+        adminUserId: session!.userId,
         action: 'approve',
         approvedHours: values.approvedHours,
         reviewNote: values.reviewNote,
@@ -59,6 +64,7 @@ export default function AdminHourReviewsPage() {
     try {
       const res = await reviewHourRequest({
         reviewId: review.reviewId,
+        adminUserId: session!.userId,
         action: 'reject',
         reviewNote: '管理员驳回',
       })
@@ -134,6 +140,7 @@ export default function AdminHourReviewsPage() {
 
   return (
     <div className="space-y-6">
+      <AdminRegionScopeNotice />
       <div>
         <Typography.Title level={3} className="!mb-1">时长审核</Typography.Title>
         <Typography.Text className="text-gray-500">处理超出预计范围的服务时长申请</Typography.Text>

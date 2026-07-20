@@ -164,10 +164,18 @@ export interface AlertItem {
   category: 'sos' | 'health_abnormal'
   priority: 'high' | 'medium' | 'low'
   createdAt: string
-  status: 'new' | 'handled'
+  status: 'new' | 'acknowledged' | 'dispatching' | 'handled'
   sourceLabel: string
   linkedEntityId: number
   resolutionSummary?: string
+  incidentId?: number | null
+  incidentStatus?: 'reported' | 'acknowledged' | 'dispatching' | 'resolved' | string | null
+  conversationId?: number | null
+  linkedOrderId?: number | null
+  linkedOrderStatus?: string | null
+  linkedVolunteerName?: string | null
+  acknowledgedAt?: string
+  resolvedAt?: string
 }
 
 export interface DashboardMetric {
