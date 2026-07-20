@@ -24,6 +24,8 @@ services:
       DB_USER: gaussdb
       DB_PASSWORD: Enmo@123
       DB_NAME: omm
+      # 行政区官方边界（高德 Web 服务 Key；需开通「行政区域查询」）
+      AMAP_WEB_KEY: ${AMAP_WEB_KEY:-b52114e40db3f30c5fa84c3a9173ea34}
     depends_on:
       - db
     ports:

@@ -11,6 +11,66 @@ export async function fetchAdminDispatchRegions(adminUserId: number) {
   return response.data.data
 }
 
+export type RegionCatalogNode = {
+  adcode: string
+  name: string
+  level: string
+  center?: string
+}
+
+export type ManagedDispatchRegion = {
+  adcode: string
+  name: string
+  city_name?: string
+  province_name?: string
+  region_level?: string
+  active: boolean
+  has_polygon: boolean
+  center_lng?: number | null
+  center_lat?: number | null
+}
+
+export async function fetchDispatchRegionChildren(adminUserId: number, keywords: string) {
+  const response = await http.get<ApiEnvelope<RegionCatalogNode[]>>('/dispatch/admin/region-catalog/children', {
+    params: { admin_user_id: adminUserId, keywords },
+  })
+  return response.data.data
+}
+
+export async function fetchManagedDispatchRegions(adminUserId: number) {
+  const response = await http.get<ApiEnvelope<ManagedDispatchRegion[]>>('/dispatch/admin/regions/managed', {
+    params: { admin_user_id: adminUserId },
+  })
+  return response.data.data
+}
+
+export async function createManagedDispatchRegion(payload: {
+  adminUserId: number
+  adcode: string
+  provinceName?: string
+  cityName?: string
+}) {
+  const response = await http.post<ApiEnvelope<{ adcode: string; name: string; polygon_rings: number }>>('/dispatch/admin/regions', {
+    admin_user_id: payload.adminUserId,
+    adcode: payload.adcode,
+    province_name: payload.provinceName,
+    city_name: payload.cityName,
+  })
+  return response.data
+}
+
+export async function patchManagedDispatchRegion(
+  adcode: string,
+  payload: { adminUserId: number; active?: boolean; refreshPolygon?: boolean },
+) {
+  const response = await http.patch<ApiEnvelope<unknown>>(`/dispatch/admin/regions/${adcode}`, {
+    admin_user_id: payload.adminUserId,
+    active: payload.active,
+    refresh_polygon: payload.refreshPolygon,
+  })
+  return response.data
+}
+
 export async function manuallyAssignDispatchOrder(orderId: number, payload: { adminUserId: number; volunteerId: number; reason: string }) {
   const response = await http.post<ApiEnvelope<unknown>>(`/dispatch/admin/orders/${orderId}/manual-assign`, {
     admin_user_id: payload.adminUserId,

@@ -19,31 +19,40 @@ from urllib.parse import urlencode
 from flask import Blueprint, jsonify, request
 
 from db import get_db_connection
+from region_service import (
+    admin_is_root,
+    enrich_missing_polygons,
+    ensure_region_columns,
+    fetch_district_children,
+    fetch_district_detail,
+    refresh_runtime_catalog,
+    resolve_region_adcode,
+    upsert_region,
+)
 
 
 dispatch_bp = Blueprint("dispatch", __name__)
 
-# Shanghai Baoshan demonstration bounds.  They are used to validate virtual
-# locations, while route geometry is obtained from AMap in the browser.
-# A dispatch unit is always a county/district.  The platform can host many
-# regions, but candidates are never borrowed from a different one.
-REGION_CATALOG: dict[str, dict[str, Any]] = {
+# Built-in demo districts (seed only). Runtime catalog is reloaded from DB and
+# prefers official AMap polygons when available.
+SEED_REGIONS: dict[str, dict[str, Any]] = {
     "310113": {
         "name": "上海市宝山区", "city": "上海市", "level": "district",
         "bounds": {"west": 121.405, "east": 121.535, "south": 31.325, "north": 31.455},
-        "center": (121.458, 31.382),
+        "center": (121.458, 31.382), "polygons": [],
     },
     "310115": {
         "name": "上海市浦东新区", "city": "上海市", "level": "district",
         "bounds": {"west": 121.500, "east": 121.700, "south": 31.120, "north": 31.320},
-        "center": (121.572, 31.218),
+        "center": (121.572, 31.218), "polygons": [],
     },
     "110105": {
         "name": "北京市朝阳区", "city": "北京市", "level": "district",
         "bounds": {"west": 116.370, "east": 116.560, "south": 39.820, "north": 40.060},
-        "center": (116.472, 39.943),
+        "center": (116.472, 39.943), "polygons": [],
     },
 }
+REGION_CATALOG: dict[str, dict[str, Any]] = {code: dict(meta) for code, meta in SEED_REGIONS.items()}
 DEFAULT_REGION_ADCODE = "310113"
 MAP_BOUNDS = REGION_CATALOG[DEFAULT_REGION_ADCODE]["bounds"]
 NEAR_RADIUS_KM = 2.0
@@ -205,6 +214,7 @@ def _add_column_if_missing(cursor: Any, table_name: str, column_name: str, defin
 
 
 def ensure_dispatch_schema() -> None:
+    global MAP_BOUNDS
     conn = get_db_connection()
     if not conn:
         return
@@ -443,12 +453,13 @@ def ensure_dispatch_schema() -> None:
                                 AND d.urgency = 'normal' AND d.dispatch_state = 'admin_escalated'""")
             _ensure_column(cursor, "elder_location_state", "location_source", "VARCHAR(24) NOT NULL DEFAULT 'simulated'")
             _ensure_column(cursor, "elder_location_state", "is_home_fixed", "BOOLEAN NOT NULL DEFAULT TRUE")
-            for adcode, region in REGION_CATALOG.items():
+            ensure_region_columns(cursor)
+            for adcode, region in SEED_REGIONS.items():
                 cursor.execute("SELECT adcode FROM administrative_regions WHERE adcode = %s", (adcode,))
                 if not cursor.fetchone():
                     cursor.execute("""INSERT INTO administrative_regions
-                                      (adcode, name, city_name, region_level, bounds_json)
-                                      VALUES (%s, %s, %s, %s, %s)""",
+                                      (adcode, name, city_name, region_level, bounds_json, active)
+                                      VALUES (%s, %s, %s, %s, %s, TRUE)""",
                                    (adcode, region["name"], region["city"], region["level"], json.dumps(region["bounds"])))
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_orders_region_status ON orders (region_adcode, status, created_at)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_volunteer_region_available ON volunteer_location_state (service_region_adcode, availability)")
@@ -456,6 +467,15 @@ def ensure_dispatch_schema() -> None:
         seed_dispatch_demo_data(conn)
         seed_regional_demo_data(conn)
         _repair_active_dispatch_routes(conn)
+        try:
+            enrich_missing_polygons(conn, list(SEED_REGIONS))
+        except Exception as enrich_exc:  # noqa: BLE001
+            print(f"region polygon enrichment skipped: {enrich_exc}")
+        refresh_runtime_catalog(REGION_CATALOG, conn)
+        if DEFAULT_REGION_ADCODE in REGION_CATALOG:
+            MAP_BOUNDS = REGION_CATALOG[DEFAULT_REGION_ADCODE]["bounds"]
+        elif REGION_CATALOG:
+            MAP_BOUNDS = next(iter(REGION_CATALOG.values()))["bounds"]
     except Exception as exc:
         conn.rollback()
         print(f"dispatch schema initialization failed: {exc}")
@@ -762,18 +782,10 @@ def _region_bounds(region_adcode: str | None) -> dict[str, float]:
 def _region_for_point(lng: Any, lat: Any) -> str | None:
     """Resolve the configured dispatch district from a map point.
 
-    This is deliberately server-side: the address form may suggest a district,
-    but it cannot choose a different operational district by itself.
+    Prefers official AMap district polygons stored in administrative_regions;
+    falls back to rectangular bounds for seed rows without polylines yet.
     """
-    try:
-        lng_value, lat_value = float(lng), float(lat)
-    except (TypeError, ValueError):
-        return None
-    for adcode, region in REGION_CATALOG.items():
-        bounds = region["bounds"]
-        if bounds["west"] <= lng_value <= bounds["east"] and bounds["south"] <= lat_value <= bounds["north"]:
-            return adcode
-    return None
+    return resolve_region_adcode(lng, lat, REGION_CATALOG)
 
 
 def _valid_region_point(lng: Any, lat: Any, region_adcode: str | None) -> tuple[float, float] | None:
@@ -1733,6 +1745,173 @@ def admin_regions():
             codes = list(REGION_CATALOG) if "*" in scopes else [code for code in REGION_CATALOG if code in scopes]
             data = [{"adcode": code, "name": REGION_CATALOG[code]["name"]} for code in codes]
             return jsonify({"code": 200, "message": "ok", "data": data})
+    finally:
+        conn.close()
+
+
+@dispatch_bp.route("/admin/region-catalog/children", methods=["GET"])
+def admin_region_catalog_children():
+    """Cascade picker: province / city / district children from AMap."""
+    admin_user_id = request.args.get("admin_user_id", type=int)
+    keywords = (request.args.get("keywords") or "中华人民共和国").strip()
+    if not admin_user_id:
+        return jsonify({"code": 400, "message": "缺少管理员 id"}), 400
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"code": 500, "message": "database unavailable"}), 500
+    try:
+        with conn.cursor() as cursor:
+            if not admin_is_root(cursor, admin_user_id):
+                return jsonify({"code": 403, "message": "仅总管理员可浏览全国区划目录"}), 403
+        children = fetch_district_children(keywords, subdistrict=1)
+        return jsonify({"code": 200, "message": "ok", "data": children})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"code": 500, "message": str(exc)}), 500
+    finally:
+        conn.close()
+
+
+@dispatch_bp.route("/admin/regions/managed", methods=["GET"])
+def admin_regions_managed():
+    """List all stored regions for root admin management."""
+    admin_user_id = request.args.get("admin_user_id", type=int)
+    if not admin_user_id:
+        return jsonify({"code": 400, "message": "缺少管理员 id"}), 400
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"code": 500, "message": "database unavailable"}), 500
+    try:
+        with conn.cursor() as cursor:
+            if not admin_is_root(cursor, admin_user_id):
+                return jsonify({"code": 403, "message": "仅总管理员可管理区域"}), 403
+            ensure_region_columns(cursor)
+            cursor.execute(
+                """SELECT adcode, name, city_name, province_name, region_level, active,
+                          center_lng, center_lat,
+                          CASE WHEN polygon_json IS NULL OR polygon_json = '' OR polygon_json = '[]'
+                               THEN FALSE ELSE TRUE END AS has_polygon
+                   FROM administrative_regions ORDER BY adcode"""
+            )
+            data = []
+            for row in cursor.fetchall():
+                data.append({
+                    "adcode": row["adcode"],
+                    "name": row["name"],
+                    "city_name": row.get("city_name"),
+                    "province_name": row.get("province_name") or "",
+                    "region_level": row.get("region_level"),
+                    "active": bool(row.get("active")),
+                    "has_polygon": bool(row.get("has_polygon")),
+                    "center_lng": float(row["center_lng"]) if row.get("center_lng") is not None else None,
+                    "center_lat": float(row["center_lat"]) if row.get("center_lat") is not None else None,
+                })
+            return jsonify({"code": 200, "message": "ok", "data": data})
+    finally:
+        conn.close()
+
+
+@dispatch_bp.route("/admin/regions", methods=["POST"])
+def admin_regions_create():
+    """Root admin adds a district; boundary comes from official AMap polygon."""
+    global MAP_BOUNDS
+    data = request.get_json(silent=True) or {}
+    admin_user_id = data.get("admin_user_id")
+    adcode = str(data.get("adcode") or "").strip()
+    province_name = str(data.get("province_name") or "").strip()
+    city_name = str(data.get("city_name") or "").strip()
+    if not admin_user_id or not adcode:
+        return jsonify({"code": 400, "message": "请提供 admin_user_id 与区县 adcode"}), 400
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"code": 500, "message": "database unavailable"}), 500
+    try:
+        with conn.cursor() as cursor:
+            if not admin_is_root(cursor, int(admin_user_id)):
+                return jsonify({"code": 403, "message": "仅总管理员可添加区域"}), 403
+            detail = fetch_district_detail(adcode)
+            level = detail.get("level") or ""
+            if level not in ("district", "biz_area"):
+                # Some municipalities return district under city search; still accept district-level adcodes ending pattern.
+                if len(adcode) != 6:
+                    return jsonify({"code": 400, "message": f"请选择区县级行政区（当前级别：{level or '未知'}）"}), 400
+            upsert_region(
+                cursor,
+                adcode=detail["adcode"],
+                name=detail["name"],
+                city_name=city_name or detail.get("city_name") or detail["name"],
+                province_name=province_name or detail.get("province_name") or "",
+                region_level="district",
+                bounds=detail["bounds"],
+                center=detail["center"],
+                polygons=detail["polygons"],
+                active=True,
+            )
+            conn.commit()
+        refresh_runtime_catalog(REGION_CATALOG, conn)
+        if DEFAULT_REGION_ADCODE in REGION_CATALOG:
+            MAP_BOUNDS = REGION_CATALOG[DEFAULT_REGION_ADCODE]["bounds"]
+        return jsonify({
+            "code": 200,
+            "message": f"已添加区域 {detail['name']}（官方多边形边界）",
+            "data": {
+                "adcode": detail["adcode"],
+                "name": detail["name"],
+                "polygon_rings": len(detail["polygons"]),
+            },
+        })
+    except Exception as exc:  # noqa: BLE001
+        conn.rollback()
+        return jsonify({"code": 500, "message": str(exc)}), 500
+    finally:
+        conn.close()
+
+
+@dispatch_bp.route("/admin/regions/<adcode>", methods=["PATCH"])
+def admin_regions_patch(adcode: str):
+    """Enable/disable a region, or refresh official polygon from AMap."""
+    global MAP_BOUNDS
+    data = request.get_json(silent=True) or {}
+    admin_user_id = data.get("admin_user_id")
+    if not admin_user_id:
+        return jsonify({"code": 400, "message": "缺少 admin_user_id"}), 400
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"code": 500, "message": "database unavailable"}), 500
+    try:
+        with conn.cursor() as cursor:
+            if not admin_is_root(cursor, int(admin_user_id)):
+                return jsonify({"code": 403, "message": "仅总管理员可修改区域"}), 403
+            cursor.execute("SELECT adcode, name FROM administrative_regions WHERE adcode = %s", (adcode,))
+            row = cursor.fetchone()
+            if not row:
+                return jsonify({"code": 404, "message": "区域不存在"}), 404
+            if data.get("refresh_polygon"):
+                detail = fetch_district_detail(adcode)
+                upsert_region(
+                    cursor,
+                    adcode=detail["adcode"],
+                    name=detail["name"] or row["name"],
+                    city_name=detail.get("city_name") or detail["name"],
+                    province_name=detail.get("province_name") or "",
+                    region_level="district",
+                    bounds=detail["bounds"],
+                    center=detail["center"],
+                    polygons=detail["polygons"],
+                    active=True,
+                )
+            if "active" in data:
+                cursor.execute(
+                    "UPDATE administrative_regions SET active = %s WHERE adcode = %s",
+                    (bool(data.get("active")), adcode),
+                )
+            conn.commit()
+        refresh_runtime_catalog(REGION_CATALOG, conn)
+        if DEFAULT_REGION_ADCODE in REGION_CATALOG:
+            MAP_BOUNDS = REGION_CATALOG[DEFAULT_REGION_ADCODE]["bounds"]
+        return jsonify({"code": 200, "message": "区域已更新"})
+    except Exception as exc:  # noqa: BLE001
+        conn.rollback()
+        return jsonify({"code": 500, "message": str(exc)}), 500
     finally:
         conn.close()
 

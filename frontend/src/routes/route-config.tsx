@@ -17,6 +17,7 @@ import { matchPath } from 'react-router-dom'
 import {
   AdminAlertsPage,
   AdminDispatchBoardPage,
+  AdminRegionsPage,
   AdminDashboardPage,
   AdminHomePage,
   AdminHourReviewsPage,
@@ -392,6 +393,17 @@ export const appRoutes: AppRouteDefinition[] = [
     navigationOrder: 15,
     navigation: { label: '实时调度指挥台', description: '', iconKey: 'dashboard' },
     element: AdminDispatchBoardPage,
+  },
+  {
+    key: 'admin-regions',
+    path: '/admin/regions',
+    roles: ['admin'],
+    title: '区域管理',
+    description: '总管理员按省市区添加官方多边形调度区域',
+    showInNavigation: true,
+    navigationOrder: 16,
+    navigation: { label: '区域管理', description: '', iconKey: 'dashboard' },
+    element: AdminRegionsPage,
   },
   {
     key: 'admin-dashboard',

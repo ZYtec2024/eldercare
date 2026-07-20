@@ -34,6 +34,7 @@ export const AdminUsersPage = lazy(() => import('@/features/admin/pages/AdminUse
 export const AdminAlertsPage = lazy(() => import('@/features/admin/pages/AdminAlertsPage'))
 export const AdminHomePage = lazy(() => import('@/features/admin/pages/AdminHomePage'))
 export const AdminDispatchBoardPage = lazy(() => import('@/features/admin/pages/AdminDispatchBoardPage'))
+export const AdminRegionsPage = lazy(() => import('@/features/admin/pages/AdminRegionsPage'))
 
 export const HealthKnowledgePage = lazy(() => import('@/features/home/pages/HealthKnowledgePage'))
 
