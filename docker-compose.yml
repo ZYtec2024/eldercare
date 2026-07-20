@@ -1,0 +1,49 @@
+services:
+  # ===== openGauss 数据库 =====
+  db:
+    image: enmotech/opengauss:latest
+    container_name: eldercare-db
+    privileged: true
+    environment:
+      GS_PASSWORD: Enmo@123
+    volumes:
+      # 首次启动自动导入演示数据
+      - ./eldercare_backend/init_demo_data.sql:/docker-entrypoint-initdb.d/init.sql
+      # 持久化数据（容器重启不丢失）
+      - ogdata:/var/lib/opengauss
+    ports:
+      - "5432:5432"
+
+  # ===== Flask 后端 =====
+  backend:
+    build: ./eldercare_backend
+    container_name: eldercare-backend
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: gaussdb
+      DB_PASSWORD: Enmo@123
+      DB_NAME: omm
+    depends_on:
+      - db
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+
+  # ===== 前端（Nginx + React） =====
+  frontend:
+    build: ./frontend
+    container_name: eldercare-frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:80"
+
+volumes:
+  ogdata:

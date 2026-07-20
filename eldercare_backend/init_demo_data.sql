@@ -4,6 +4,8 @@
 -- 数据库名: elderly_care_system
 -- ============================================================
 
+SET search_path TO public;
+
 DROP TABLE IF EXISTS volunteer_award_requests CASCADE;
 DROP TABLE IF EXISTS volunteer_hour_reviews CASCADE;
 DROP TABLE IF EXISTS volunteer_likes CASCADE;
