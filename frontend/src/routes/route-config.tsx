@@ -67,7 +67,7 @@ const iconMap: Record<string, ReactNode> = {
 
 export const allRoles: Role[] = ['family', 'elder', 'volunteer', 'admin']
 
-const taskHallNavigationRoles: Role[] = ['family', 'elder', 'admin']
+const taskHallNavigationRoles: Role[] = ['family', 'admin']
 
 export const appRoutes: AppRouteDefinition[] = [
   {
@@ -145,11 +145,11 @@ export const appRoutes: AppRouteDefinition[] = [
     key: 'conversations',
     path: '/conversations',
     roles: allRoles,
-    title: '服务沟通',
-    description: '服务订单与紧急事件的授权沟通窗口',
+    title: '我的消息',
+    description: '和家人、社区、志愿者沟通',
     showInNavigation: true,
-    navigationOrder: 75,
-    navigation: { label: '服务沟通', description: '', iconKey: 'document' },
+    navigationOrder: 25,
+    navigation: { label: '我的消息', description: '', iconKey: 'document' },
     element: ConversationPage,
   },
   // ── Family ──
@@ -245,40 +245,40 @@ export const appRoutes: AppRouteDefinition[] = [
     element: ElderCheckinPage,
   },
   {
-    key: 'elder-services',
-    path: '/elder/services',
-    roles: ['elder'],
-    title: '我的服务',
-    description: '',
-    showInNavigation: true,
-    navigationOrder: 30,
-    isHomeAction: true,
-    navigation: { label: '我的服务', description: '', iconKey: 'service' },
-    element: ElderServicesPage,
-  },
-  {
-    key: 'elder-dispatch',
-    path: '/elder/dispatch',
-    roles: ['elder'],
-    title: '智能求助调度',
-    description: '按技能、路况和距离匹配志愿者',
-    showInNavigation: true,
-    navigationOrder: 35,
-    isHomeAction: true,
-    navigation: { label: '智能求助调度', description: '', iconKey: 'service' },
-    element: ElderDispatchPage,
-  },
-  {
     key: 'elder-sos',
     path: '/elder/sos',
     roles: ['elder'],
     title: '紧急求助',
     description: '',
     showInNavigation: true,
-    navigationOrder: 40,
+    navigationOrder: 15,
     isHomeAction: true,
     navigation: { label: '紧急求助', description: '', iconKey: 'emergency' },
     element: ElderSosPage,
+  },
+  {
+    key: 'elder-services',
+    path: '/elder/services',
+    roles: ['elder'],
+    title: '谁在帮我',
+    description: '',
+    showInNavigation: true,
+    navigationOrder: 30,
+    isHomeAction: true,
+    navigation: { label: '谁在帮我', description: '', iconKey: 'service' },
+    element: ElderServicesPage,
+  },
+  {
+    key: 'elder-dispatch',
+    path: '/elder/dispatch',
+    roles: ['elder'],
+    title: '请人帮忙',
+    description: '告诉系统需要什么帮助，安排志愿者',
+    showInNavigation: true,
+    navigationOrder: 35,
+    isHomeAction: true,
+    navigation: { label: '请人帮忙', description: '', iconKey: 'service' },
+    element: ElderDispatchPage,
   },
   // ── Volunteer ──
   {

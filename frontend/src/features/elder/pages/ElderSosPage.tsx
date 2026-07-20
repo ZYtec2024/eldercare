@@ -1,14 +1,24 @@
 import { useEffect, useState } from 'react'
 import { Alert, App, Button, Card, Form, Input, Select, Space, Tag, Typography } from 'antd'
-import { AlertOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
+import { AlertOutlined, PhoneOutlined } from '@ant-design/icons'
+import { useNavigate } from 'react-router-dom'
 
 import { useSession } from '@/features/auth/useSession'
 import { createEmergencyIncident, fetchEmergencyIncidents, type EmergencyIncident } from '@/services/adapters/elder-adapter'
 
+function statusLabel(status: string) {
+  if (status === 'reported') return '已通知家人，请稍等'
+  if (status === 'acknowledged') return '社区已收到，正在处理'
+  if (status === 'dispatching') return '正在找志愿者上门'
+  return '这件事已经结束'
+}
+
 export default function ElderSosPage() {
   const { session } = useSession()
+  const navigate = useNavigate()
   const { message, modal } = App.useApp()
   const [loading, setLoading] = useState(false)
+  const [showVolunteerForm, setShowVolunteerForm] = useState(false)
   const [incidents, setIncidents] = useState<EmergencyIncident[]>([])
   const [form] = Form.useForm()
 
@@ -25,7 +35,9 @@ export default function ElderSosPage() {
 
   const submit = async (dispatchService: boolean) => {
     if (!session) return
-    const values = dispatchService ? await form.validateFields() : { incidentType: 'general_help', description: '一键紧急求助' }
+    const values = dispatchService
+      ? await form.validateFields()
+      : { incidentType: 'general_help', description: '一键紧急求助' }
     setLoading(true)
     try {
       const result = await createEmergencyIncident({
@@ -34,11 +46,15 @@ export default function ElderSosPage() {
         description: values.description,
         dispatchService,
       })
-      message.success(result.message)
-      if (dispatchService) form.resetFields()
+      message.success(dispatchService ? '已通知家人，并开始帮您找志愿者' : '已通知家人和社区')
+      if (dispatchService) {
+        form.resetFields()
+        setShowVolunteerForm(false)
+      }
       loadIncidents()
+      void result
     } catch (err: any) {
-      message.error(err?.message || '紧急求助发送失败')
+      message.error(err?.message || '求助发送失败，请再试一次')
     } finally {
       setLoading(false)
     }
@@ -46,66 +62,146 @@ export default function ElderSosPage() {
 
   const handleOneClickAlert = () => {
     modal.confirm({
-      title: '确认发送一键紧急告警？',
-      content: '系统将立即通知绑定家属和本区管理员，并建立紧急协同会话。若有生命危险，请同步联系 120。',
-      okText: '立即告警', okType: 'danger', cancelText: '取消',
+      title: '确认发出求助？',
+      content: '会马上通知您的家人和本社区工作人员。如果有生命危险，请同时拨打 120。',
+      okText: '确认求助',
+      okType: 'danger',
+      cancelText: '取消',
       onOk: () => submit(false),
     })
   }
 
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="space-y-6 max-w-2xl">
       <div>
         <Typography.Title level={2} className="!mb-1">紧急求助</Typography.Title>
-        <Typography.Text className="text-gray-500">一键告警通知家属与本区管理员；需要志愿者到场时，请填写具体情况并启动 SOS 服务调度。</Typography.Text>
+        <Typography.Text className="text-gray-500 text-base">
+          先通知家人。如果还需要志愿者上门，再点下面的补充选项。
+        </Typography.Text>
       </div>
 
-      <Alert type="error" showIcon message="如存在生命危险，请立即拨打 120" description="平台会同步记录事件、提醒家属和本区管理员，但不能替代专业急救服务。" />
+      <Alert
+        type="error"
+        showIcon
+        icon={<PhoneOutlined />}
+        message="有生命危险请先拨打 120"
+        description="本平台会通知家人和社区，但不能代替急救电话。"
+      />
 
-      <div className="grid gap-5 md:grid-cols-2">
-        <Card className="!rounded-2xl !border-red-200 !bg-red-50" title={<Space><AlertOutlined className="text-red-500" />一键紧急告警</Space>}>
-          <Typography.Paragraph>保留原有 SOS 告警能力：不生成普通服务订单，只通知家属和本区管理员并开启协同会话。</Typography.Paragraph>
-          <Button danger type="primary" block size="large" loading={loading} onClick={handleOneClickAlert}>立即发送 SOS 告警</Button>
-        </Card>
+      <Card className="!rounded-2xl !border-2 !border-red-300 !bg-red-50">
+        <div className="text-center space-y-4 py-2">
+          <AlertOutlined className="text-5xl text-red-500" />
+          <Typography.Title level={3} className="!mb-0">我需要帮助</Typography.Title>
+          <Typography.Paragraph className="!text-base !text-gray-700 !mb-0">
+            一键通知家人和社区工作人员，你们可以立刻开始联系。
+          </Typography.Paragraph>
+          <Button
+            danger
+            type="primary"
+            size="large"
+            block
+            loading={loading}
+            className="!h-14 !text-xl !font-semibold"
+            onClick={handleOneClickAlert}
+          >
+            马上通知家人
+          </Button>
+        </div>
+      </Card>
 
-        <Card className="!rounded-2xl !border-orange-200" title={<Space><SafetyCertificateOutlined className="text-orange-500" />紧急服务调度</Space>}>
+      <Card className="!rounded-2xl">
+        {!showVolunteerForm ? (
+          <div className="space-y-3">
+            <Typography.Text className="text-base text-gray-700">
+              还需要志愿者上门帮忙？（例如陪同就医、跌倒起身）
+            </Typography.Text>
+            <Button size="large" block onClick={() => setShowVolunteerForm(true)}>
+              是的，还要找志愿者
+            </Button>
+          </div>
+        ) : (
           <Form form={form} layout="vertical" initialValues={{ incidentType: 'unwell' }}>
-            <Form.Item name="incidentType" label="紧急情况" rules={[{ required: true }]}>
-              <Select options={[
-                { value: 'fall', label: '跌倒或行动困难' },
-                { value: 'unwell', label: '身体不适' },
-                { value: 'hospital', label: '需陪同就医' },
-                { value: 'lost_risk', label: '走失风险' },
-                { value: 'other', label: '其他紧急情况' },
-              ]} />
+            <Typography.Title level={4} className="!mt-0">说明一下情况</Typography.Title>
+            <Form.Item name="incidentType" label="遇到了什么" rules={[{ required: true }]}>
+              <Select
+                size="large"
+                options={[
+                  { value: 'fall', label: '跌倒或起不来' },
+                  { value: 'unwell', label: '身体不舒服' },
+                  { value: 'hospital', label: '要人陪着去医院' },
+                  { value: 'lost_risk', label: '怕走丢、迷路' },
+                  { value: 'other', label: '其他紧急情况' },
+                ]}
+              />
             </Form.Item>
-            <Form.Item name="description" label="具体情况" rules={[{ required: true, message: '请简要说明需要什么帮助' }]}>
-              <Input.TextArea rows={3} maxLength={500} placeholder="例如：头晕无法下楼，需要志愿者陪同前往医院" />
+            <Form.Item
+              name="description"
+              label="再补充几句（可选写清楚更好）"
+              rules={[{ required: true, message: '请简单说一下需要什么帮助' }]}
+            >
+              <Input.TextArea
+                rows={3}
+                maxLength={500}
+                placeholder="例如：头晕站不稳，希望有人陪我去医院"
+                className="!text-base"
+              />
             </Form.Item>
-            <Button type="primary" danger block loading={loading} onClick={() => void submit(true)}>通知并启动本区 SOS 派单</Button>
+            <Space direction="vertical" className="w-full" size="middle">
+              <Button
+                type="primary"
+                danger
+                size="large"
+                block
+                loading={loading}
+                className="!h-12"
+                onClick={() => void submit(true)}
+              >
+                通知家人，并找志愿者
+              </Button>
+              <Button size="large" block onClick={() => setShowVolunteerForm(false)}>
+                返回
+              </Button>
+            </Space>
           </Form>
-        </Card>
-      </div>
+        )}
+      </Card>
 
-      <Card className="!rounded-2xl" title="我的 SOS 事件进度">
+      <Card className="!rounded-2xl" title="求助进度">
         {incidents.length ? (
           <div className="space-y-3">
             {incidents.slice(0, 5).map((incident) => {
               const active = incident.status !== 'resolved'
-              const label = incident.status === 'reported' ? '等待社区接警'
-                : incident.status === 'acknowledged' ? '社区已接警，处理中'
-                  : incident.status === 'dispatching' ? '志愿服务调度中'
-                    : '事件已关闭'
-              return <div key={incident.incidentId} className="rounded-xl border border-slate-100 p-3">
-                <Space wrap><Tag color={active ? 'red' : 'green'}>{label}</Tag><span className="font-medium">{incident.createdAt}</span></Space>
-                <div className="mt-2 text-slate-600">{incident.description}</div>
-                {incident.acknowledgedAt ? <div className="mt-1 text-xs text-blue-700">已接警：{incident.acknowledgedAt}</div> : null}
-                {incident.resolutionSummary ? <div className="mt-1 text-xs text-emerald-700">处置结果：{incident.resolutionSummary}</div> : null}
-                {active && incident.conversationId ? <Button className="mt-2" size="small" onClick={() => { window.location.href = '/conversations' }}>进入 SOS 协同沟通</Button> : null}
-              </div>
+              return (
+                <div key={incident.incidentId} className="rounded-xl border border-slate-100 p-4">
+                  <Space wrap>
+                    <Tag color={active ? 'red' : 'green'} className="!text-sm !px-2 !py-0.5">
+                      {statusLabel(incident.status)}
+                    </Tag>
+                    <span className="text-gray-500">{incident.createdAt}</span>
+                  </Space>
+                  <div className="mt-2 text-base text-slate-700">{incident.description}</div>
+                  {incident.resolutionSummary ? (
+                    <div className="mt-1 text-sm text-emerald-700">结果：{incident.resolutionSummary}</div>
+                  ) : null}
+                  {active && incident.conversationId ? (
+                    <Button
+                      className="mt-3"
+                      size="large"
+                      type="default"
+                      onClick={() => navigate('/conversations')}
+                    >
+                      和家人说话
+                    </Button>
+                  ) : null}
+                </div>
+              )
             })}
           </div>
-        ) : <Typography.Text type="secondary">暂无 SOS 事件记录。</Typography.Text>}
+        ) : (
+          <Typography.Text type="secondary" className="text-base">
+            暂时还没有求助记录。
+          </Typography.Text>
+        )}
       </Card>
     </div>
   )
