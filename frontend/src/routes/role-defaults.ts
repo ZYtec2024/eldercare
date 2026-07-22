@@ -12,10 +12,10 @@ export function getDefaultRoute(role: Role) {
 }
 
 const roleAllowedPrefixes: Record<Role, string[]> = {
-  family: ['/family', '/profile', '/family/honor-wall'],
-  elder: ['/elder', '/profile'],
-  volunteer: ['/volunteer', '/profile'],
-  admin: ['/admin', '/profile', '/admin/honor-wall'],
+  family: ['/family', '/profile', '/conversations', '/conversation', '/family/honor-wall'],
+  elder: ['/elder', '/profile', '/conversations', '/conversation'],
+  volunteer: ['/volunteer', '/profile', '/conversations', '/conversation'],
+  admin: ['/admin', '/profile', '/conversations', '/conversation', '/admin/honor-wall'],
 }
 
 export function isRoleAllowedPath(role: Role, pathname: string) {

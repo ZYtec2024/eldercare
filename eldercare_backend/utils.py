@@ -28,18 +28,39 @@ def get_validated_data(data, required_fields):
 
 
 # ========== 日期格式化 ==========
-def format_datetime(value):
-    """格式化日期时间"""
+_SHANGHAI = datetime.timezone(datetime.timedelta(hours=8))
+
+
+def _as_shanghai(value):
+    """Treat naive DB timestamps as UTC, then convert to Asia/Shanghai."""
+    if not isinstance(value, datetime.datetime):
+        return value
+    if value.tzinfo is None:
+        aware = value.replace(tzinfo=datetime.timezone.utc)
+    else:
+        aware = value.astimezone(datetime.timezone.utc)
+    return aware.astimezone(_SHANGHAI)
+
+
+def format_datetime(value, fmt='%Y-%m-%d %H:%M:%S'):
+    """Format timestamps for the UI in Asia/Shanghai (UTC+8)."""
     if isinstance(value, datetime.datetime):
-        return value.strftime('%Y-%m-%d %H:%M:%S')
+        return _as_shanghai(value).strftime(fmt)
     return value
 
 
 def format_date(value):
     """格式化日期"""
+    if isinstance(value, datetime.datetime):
+        return _as_shanghai(value).strftime('%Y-%m-%d')
     if isinstance(value, datetime.date):
         return value.strftime('%Y-%m-%d')
     return value
+
+
+def shanghai_now():
+    """Current wall-clock in Asia/Shanghai (tz-aware)."""
+    return datetime.datetime.now(datetime.timezone.utc).astimezone(_SHANGHAI)
 
 
 # ========== 文本处理 ==========
@@ -112,9 +133,10 @@ def build_available_actions(order_status, order_volunteer_id, current_volunteer_
     if str(order_volunteer_id) != str(current_volunteer_id):
         return []
     if order_status == 'accepted':
-        return ['start', 'cancel']
+        # 已接单即视为出发：志愿者不可取消，仅老人可取消。
+        return ['start']
     if order_status == 'in_progress':
-        return ['complete', 'cancel']
+        return ['complete']
     return []
 
 

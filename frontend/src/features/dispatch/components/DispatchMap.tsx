@@ -143,14 +143,15 @@ export function DispatchMap({ overview, height = 390 }: { overview: DispatchMapD
     let alive = true
     loadAmap().then((AMap) => {
       if (!alive || !containerRef.current) return
-      const bounds = overview?.bounds ?? { west: 121.405, east: 121.535, south: 31.325, north: 31.455 }
+      // Do not invent a Baoshan center before role-scoped tracking arrives.
+      // First paint + setFitView below will lock onto visible markers only.
       const map = new AMap.Map(containerRef.current, {
-        center: [(bounds.west + bounds.east) / 2, (bounds.south + bounds.north) / 2], zoom: 12.7, resizeEnable: true, viewMode: '2D',
+        zoom: 12, resizeEnable: true, viewMode: '2D',
       })
       map.addControl(new AMap.Scale())
       map.addControl(new AMap.ToolBar({ position: 'RT' }))
-      const traffic = new AMap.TileLayer.Traffic({ autoRefresh: true, interval: 60 })
-      traffic.setMap(map)
+      // Do not enable AMap.TileLayer.Traffic by default: its blue/green road wash
+      // covers the whole map and makes our dispatch polylines hard to read.
       mapRef.current = map
       let previousFrame = performance.now()
       const animateTrips = (now: number) => {
@@ -190,12 +191,6 @@ export function DispatchMap({ overview, height = 390 }: { overview: DispatchMapD
     const map = mapRef.current
     const AMap = window.AMap
     if (!map || !AMap || !overview) return
-    const regionKey = overview.region_adcode ?? `${overview.bounds.west}:${overview.bounds.east}:${overview.bounds.south}:${overview.bounds.north}`
-    if (focusedRegionRef.current !== regionKey) {
-      focusedRegionRef.current = regionKey
-      const bounds = overview.bounds
-      map.setBounds?.(new AMap.Bounds([bounds.west, bounds.south], [bounds.east, bounds.north]))
-    }
     overlaysRef.current.forEach((overlay) => overlay.setMap?.(null))
     overlaysRef.current = []
     const add = (overlay: any) => { overlay.setMap(map); overlaysRef.current.push(overlay) }
@@ -261,20 +256,56 @@ export function DispatchMap({ overview, height = 390 }: { overview: DispatchMapD
       }
     })
 
-    overview.elders.forEach((elder) => add(new AMap.Marker({
-      position: [elder.lng, elder.lat], offset: new AMap.Pixel(-13, -13),
-      content: markerHtml('#e11d48', '老', elder.name), label: { content: elder.name, direction: 'bottom', offset: new AMap.Pixel(0, 4), style: { fontSize: '11px', color: '#334155', border: '0', background: '#fff' } }, zIndex: 30,
-    })))
+    const focusPoints: Point[] = []
+    overview.elders.forEach((elder) => {
+      focusPoints.push([elder.lng, elder.lat])
+      add(new AMap.Marker({
+        position: [elder.lng, elder.lat], offset: new AMap.Pixel(-13, -13),
+        content: markerHtml('#e11d48', '老', elder.name), label: { content: elder.name, direction: 'bottom', offset: new AMap.Pixel(0, 4), style: { fontSize: '11px', color: '#334155', border: '0', background: '#fff' } }, zIndex: 30,
+      }))
+    })
     const routedVolunteerIds = new Set([...overview.routes.filter((route) => route.progress != null && route.progress <= 100).map((route) => route.volunteer_id), ...finishingVolunteerIds])
-    overview.volunteers.filter((volunteer) => !routedVolunteerIds.has(volunteer.volunteer_id)).forEach((volunteer) => add(new AMap.Marker({
-      position: [volunteer.lng, volunteer.lat], offset: new AMap.Pixel(-13, -13),
-      content: markerHtml(availabilityColor(volunteer.availability), '志', volunteer.name), label: { content: `${volunteer.name} · ${volunteer.availability}`, direction: 'bottom', offset: new AMap.Pixel(0, 4), style: { fontSize: '11px', color: '#334155', border: '0', background: '#fff' } }, zIndex: 40,
-    })))
-    overview.orders.filter((order) => order.lng != null && order.lat != null).forEach((order) => add(new AMap.Marker({
-      position: [order.lng!, order.lat!], offset: new AMap.Pixel(-11, -11),
-      content: markerHtml(order.urgency === 'sos' ? '#dc2626' : '#ea580c', order.urgency === 'sos' ? 'SOS' : '单', order.service_type), zIndex: 50,
-    })))
+    overview.volunteers.filter((volunteer) => !routedVolunteerIds.has(volunteer.volunteer_id)).forEach((volunteer) => {
+      focusPoints.push([volunteer.lng, volunteer.lat])
+      add(new AMap.Marker({
+        position: [volunteer.lng, volunteer.lat], offset: new AMap.Pixel(-13, -13),
+        content: markerHtml(availabilityColor(volunteer.availability), '志', volunteer.name), label: { content: `${volunteer.name} · ${volunteer.availability}`, direction: 'bottom', offset: new AMap.Pixel(0, 4), style: { fontSize: '11px', color: '#334155', border: '0', background: '#fff' } }, zIndex: 40,
+      }))
+    })
+    overview.orders.filter((order) => order.lng != null && order.lat != null).forEach((order) => {
+      focusPoints.push([order.lng!, order.lat!])
+      add(new AMap.Marker({
+        position: [order.lng!, order.lat!], offset: new AMap.Pixel(-11, -11),
+        content: markerHtml(order.urgency === 'sos' ? '#dc2626' : '#ea580c', order.urgency === 'sos' ? 'SOS' : '单', order.service_type), zIndex: 50,
+      }))
+    })
 
+    // Fit once per privacy scope change (region + who is visible), so idle
+    // elder/volunteer maps center on self instead of the whole district.
+    const focusKey = [
+      overview.region_adcode ?? '',
+      ...overview.elders.map((item) => `e${item.elder_id}`),
+      ...overview.volunteers.map((item) => `v${item.volunteer_id}`),
+      ...overview.orders.filter((item) => item.lng != null).map((item) => `o${item.order_id}`),
+      ...overview.routes.map((item) => `r${item.order_id}`),
+    ].join('|')
+    if (focusedRegionRef.current !== focusKey) {
+      focusedRegionRef.current = focusKey
+      if (focusPoints.length === 1) {
+        map.setZoomAndCenter?.(14, focusPoints[0])
+      } else if (focusPoints.length > 1) {
+        const lngs = focusPoints.map((point) => point[0])
+        const lats = focusPoints.map((point) => point[1])
+        const pad = 0.008
+        map.setBounds?.(new AMap.Bounds(
+          [Math.min(...lngs) - pad, Math.min(...lats) - pad],
+          [Math.max(...lngs) + pad, Math.max(...lats) + pad],
+        ))
+      } else if (overview.bounds) {
+        const bounds = overview.bounds
+        map.setBounds?.(new AMap.Bounds([bounds.west, bounds.south], [bounds.east, bounds.north]))
+      }
+    }
     const drawActualRoute = (route: DispatchRoute) => {
       const fallback = route.path
       if (fallback.length < 2) return
@@ -313,9 +344,9 @@ export function DispatchMap({ overview, height = 390 }: { overview: DispatchMapD
           // layered above it wherever traffic information is available.
           add(new AMap.Polyline({
             path: points,
-            strokeColor: isSos ? '#2563eb' : '#3b82f6',
+            strokeColor: isSos ? '#dc2626' : '#0f766e',
             strokeWeight: isSos ? 8 : 6,
-            strokeOpacity: .95,
+            strokeOpacity: .92,
             strokeStyle: isFallback ? 'dashed' : 'solid',
             lineJoin: 'round',
             lineCap: 'round',

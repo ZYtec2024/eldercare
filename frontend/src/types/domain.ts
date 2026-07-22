@@ -36,6 +36,9 @@ export interface SessionUser {
   tokenState: TokenState
   reviewState: ReviewState
   lastVisitedRoute: string
+  /** Root admin with region_adcode='*' */
+  isRoot?: boolean
+  regionScopes?: string[]
 }
 
 export interface NavigationItem {
@@ -114,6 +117,8 @@ export interface PendingService {
   volunteerId?: number
   volunteerName?: string
   status: ServiceStatus
+  dispatchState?: string
+  canComplete?: boolean
   canReview?: boolean
   reviewSubmitted?: boolean
 }
@@ -169,13 +174,19 @@ export interface AlertItem {
   linkedEntityId: number
   resolutionSummary?: string
   incidentId?: number | null
-  incidentStatus?: 'reported' | 'acknowledged' | 'dispatching' | 'resolved' | string | null
+  incidentStatus?: 'reported' | 'acknowledged' | 'dispatching' | 'awaiting_admin_close' | 'resolved' | string | null
   conversationId?: number | null
   linkedOrderId?: number | null
   linkedOrderStatus?: string | null
   linkedVolunteerName?: string | null
   acknowledgedAt?: string
   resolvedAt?: string
+  lastMessage?: string | null
+  lastMessageAt?: string | null
+  regionAdcode?: string | null
+  regionName?: string | null
+  provinceName?: string | null
+  cityName?: string | null
 }
 
 export interface DashboardMetric {

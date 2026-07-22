@@ -60,6 +60,7 @@ export async function createEmergencyIncident(payload: {
   incidentType?: 'general_help' | 'fall' | 'unwell' | 'hospital' | 'lost_risk' | 'other'
   description?: string
   dispatchService?: boolean
+  requiredSkills?: string[]
 }) {
   const response = await http.post<ApiEnvelope<{ incident_id: number; conversation_id: number; order_id?: number | null }>>(
     '/elder/emergency/incidents',
@@ -69,6 +70,7 @@ export async function createEmergencyIncident(payload: {
       incident_type: payload.incidentType ?? 'general_help',
       description: payload.description ?? '一键紧急求助',
       dispatch_service: payload.dispatchService ?? false,
+      required_skills: payload.requiredSkills,
     },
   )
   return response.data
@@ -96,6 +98,14 @@ export async function fetchEmergencyIncidents(userId: number) {
     orderStatus: typeof row.order_status === 'string' ? row.order_status : null,
     conversationId: row.conversation_id == null ? null : Number(row.conversation_id),
   }))
+}
+
+export async function cancelEmergencyIncident(incidentId: number, userId: number) {
+  const response = await http.post<ApiEnvelope<null>>(
+    `/elder/emergency/incidents/${incidentId}/cancel`,
+    { user_id: userId },
+  )
+  return response.data
 }
 
 export async function submitServiceReview(payload: {

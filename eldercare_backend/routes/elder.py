@@ -129,9 +129,11 @@ def my_services():
             sql = """
                                 SELECT o.order_id, o.service_type, o.service_time, o.status,
                                              o.volunteer_id, v.real_name AS volunteer_name,
+                                             d.dispatch_state,
                                              EXISTS(SELECT 1 FROM reviews r WHERE r.order_id = o.order_id) AS review_submitted
                 FROM orders o
                 LEFT JOIN users v ON o.volunteer_id = v.user_id
+                LEFT JOIN dispatch_orders d ON d.order_id = o.order_id
                 WHERE o.elder_id = (SELECT elder_id FROM elders WHERE user_id = %s)
                                     AND o.status IN ('pending', 'accepted', 'in_progress', 'completed', 'cancelled')
                 ORDER BY o.service_time DESC
@@ -142,15 +144,19 @@ def my_services():
                 service_time = row['service_time']
                 if isinstance(service_time, datetime.datetime):
                     service_time = service_time.strftime('%Y-%m-%d %H:%M')
+                status = row['status']
+                can_complete = status in ('accepted', 'in_progress') and bool(row['volunteer_id'])
                 services.append({
                     'orderId': int(row['order_id']),
                     'serviceType': row['service_type'],
                     'time': str(service_time or ''),
-                    'status': row['status'],
+                    'status': status,
                     'volunteerId': int(row['volunteer_id']) if row['volunteer_id'] else None,
                     'volunteerName': row['volunteer_name'],
+                    'dispatchState': row.get('dispatch_state'),
                     'reviewSubmitted': bool(row['review_submitted']),
-                    'canReview': row['status'] == 'completed' and bool(row['volunteer_id']) and not bool(row['review_submitted']),
+                    'canReview': status == 'completed' and bool(row['volunteer_id']) and not bool(row['review_submitted']),
+                    'canComplete': can_complete,
                 })
             return jsonify({"code": 200, "message": "查询成功", "data": services})
     finally:
@@ -210,8 +216,16 @@ def create_emergency_incident():
             alert_id = int(cursor.fetchone()['alert_id'])
             cursor.execute('SELECT family_user_id FROM user_elder_relation WHERE elder_id = %s', (elder_id,))
             recipient_ids = {int(row['family_user_id']) for row in cursor.fetchall()}
-            cursor.execute("SELECT admin_user_id FROM admin_region_scope WHERE region_adcode IN (%s, '*')", (elder['region_adcode'],))
-            recipient_ids.update(int(row['admin_user_id']) for row in cursor.fetchall())
+            # Root admins always receive every SOS; exactly one district admin is
+            # assigned by least open-SOS load so the desk stays load-balanced.
+            cursor.execute("SELECT admin_user_id FROM admin_region_scope WHERE region_adcode = '*'")
+            root_admin_ids = {int(row['admin_user_id']) for row in cursor.fetchall()}
+            recipient_ids.update(root_admin_ids)
+            from routes.dispatch import _persist_sos_assigned_admin, _pick_least_loaded_district_admin
+            assigned_admin_id = _pick_least_loaded_district_admin(cursor, str(elder['region_adcode']))
+            if assigned_admin_id:
+                recipient_ids.add(assigned_admin_id)
+                _persist_sos_assigned_admin(cursor, incident_id, assigned_admin_id)
             for recipient_id in recipient_ids:
                 cursor.execute('''INSERT INTO emergency_notifications
                                   (incident_id, recipient_user_id, recipient_role, notification_type)
@@ -228,10 +242,16 @@ def create_emergency_incident():
                     cursor.execute('''INSERT INTO conversation_members
                                       (conversation_id, user_id, role_in_conversation)
                                       VALUES (%s, %s, %s)''', (conversation_id, member_id, member['role']))
+            assign_note = '已按本区平均负载指派分管理员跟进' if assigned_admin_id else '已通知总管理员'
+            if assigned_admin_id:
+                cursor.execute('SELECT real_name FROM users WHERE user_id = %s', (assigned_admin_id,))
+                named = cursor.fetchone()
+                if named and named.get('real_name'):
+                    assign_note = f"已平均分配给分管理员 {named['real_name']} 跟进"
             cursor.execute('''INSERT INTO conversation_messages
                               (conversation_id, sender_user_id, message_type, content)
                               VALUES (%s, %s, 'system', %s)''',
-                           (conversation_id, reporter_user_id, f'已发起紧急求助：{description}'))
+                           (conversation_id, reporter_user_id, f'已发起紧急求助：{description}；{assign_note}'))
             order_id = None
             if dispatch_service:
                 from routes.dispatch import create_smart_order_for_elder
@@ -241,12 +261,14 @@ def create_emergency_incident():
                         service_type='SOS紧急救助', notes=description, urgent=True,
                         proxy_created_by=int(reporter_user_id) if reporter['role'] != 'elder' else None,
                         proxy_reason='紧急求助代发' if reporter['role'] != 'elder' else None,
+                        incident_id=incident_id,
+                        conversation_id=conversation_id,
+                        required_skills=data.get('required_skills') or data.get('preferred_skills'),
                     )
                 except ValueError as exc:
                     conn.rollback()
                     return jsonify({'code': 400, 'message': str(exc)}), 400
-                cursor.execute("UPDATE emergency_incidents SET linked_order_id = %s, status = 'dispatching' WHERE incident_id = %s",
-                               (order_id, incident_id))
+                # create_smart_order already linked incident + conversation before assign.
             cursor.execute('''SELECT u.email FROM users u JOIN user_elder_relation r ON r.family_user_id = u.user_id
                               WHERE r.elder_id = %s AND u.email IS NOT NULL''', (elder_id,))
             family_emails = [row['email'] for row in cursor.fetchall()]
@@ -297,7 +319,14 @@ def list_emergency_incidents():
                            WHERE rel.elder_id = e.elder_id AND rel.family_user_id = %s)
                 OR (%s = 'admin' AND EXISTS (
                     SELECT 1 FROM admin_region_scope ars
-                    WHERE ars.admin_user_id = %s AND ars.region_adcode IN (ei.region_adcode, '*')
+                    WHERE ars.admin_user_id = %s AND ars.region_adcode = '*'
+                ))
+                OR (%s = 'admin' AND (
+                    ei.assigned_admin_id = %s
+                    OR EXISTS (
+                        SELECT 1 FROM emergency_notifications en
+                         WHERE en.incident_id = ei.incident_id AND en.recipient_user_id = %s
+                    )
                 ))
             """
             cursor.execute(f"""
@@ -315,13 +344,108 @@ def list_emergency_incidents():
                 WHERE {scope_sql}
                 ORDER BY (ei.status <> 'resolved') DESC, ei.created_at DESC
                 LIMIT 50
-            """, (user_id, user_id, viewer['role'], user_id))
+            """, (user_id, user_id, viewer['role'], user_id, viewer['role'], user_id, user_id))
             rows = cursor.fetchall()
             for row in rows:
                 for field in ('created_at', 'acknowledged_at', 'resolved_at'):
                     if isinstance(row.get(field), datetime.datetime):
-                        row[field] = row[field].strftime('%Y-%m-%d %H:%M:%S')
+                        row[field] = format_datetime(row.get(field))
             return jsonify({'code': 200, 'message': '获取紧急事件成功', 'data': rows})
+    finally:
+        conn.close()
+
+
+@elder_bp.route('/emergency/incidents/<int:incident_id>/cancel', methods=['POST'])
+def cancel_emergency_incident(incident_id: int):
+    """Let the elder cancel an open SOS; linked volunteer tasks disappear immediately."""
+    data = request.get_json() or {}
+    user_id = data.get('user_id') or data.get('reporter_user_id')
+    if not user_id:
+        return jsonify({'code': 400, 'message': '缺少老人账号'}), 400
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'code': 500, 'message': '数据库连接失败'}), 500
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """SELECT ei.incident_id, ei.status, ei.linked_order_id, ei.elder_id, e.user_id AS elder_user_id
+                   FROM emergency_incidents ei
+                   JOIN elders e ON e.elder_id = ei.elder_id
+                   WHERE ei.incident_id = %s FOR UPDATE""",
+                (incident_id,),
+            )
+            incident = cursor.fetchone()
+            if not incident:
+                return jsonify({'code': 404, 'message': '紧急事件不存在'}), 404
+            if int(incident['elder_user_id']) != int(user_id):
+                return jsonify({'code': 403, 'message': '只能取消自己的紧急求助'}), 403
+            if incident['status'] == 'resolved':
+                return jsonify({'code': 200, 'message': '该求助已经结束'})
+
+            linked_order_id = int(incident['linked_order_id']) if incident.get('linked_order_id') else None
+            if linked_order_id:
+                cursor.execute("SELECT order_id, status FROM orders WHERE order_id = %s FOR UPDATE", (linked_order_id,))
+                order = cursor.fetchone()
+                if order and order['status'] == 'in_progress':
+                    return jsonify({
+                        'code': 409,
+                        'message': '志愿者已开始服务，请到「谁在帮我」确认完成服务，或联系管理员',
+                    }), 409
+                if order and order['status'] in ('pending', 'accepted'):
+                    from routes.dispatch import finalize_cancelled_dispatch_order
+                    finalize_cancelled_dispatch_order(
+                        cursor,
+                        linked_order_id,
+                        actor_user_id=int(user_id),
+                        event_type='elder_sos_cancelled',
+                        event_message='老人已取消紧急求助，关联志愿服务与志愿者任务已同步关闭。',
+                        emergency_summary='老人已取消紧急求助，关联志愿者任务已关闭',
+                    )
+                else:
+                    cursor.execute(
+                        """UPDATE emergency_incidents
+                           SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP,
+                               resolved_by = %s, resolution_summary = %s
+                           WHERE incident_id = %s AND status <> 'resolved'""",
+                        (int(user_id), '老人已取消紧急求助', incident_id),
+                    )
+                    cursor.execute("UPDATE alerts SET is_handled = TRUE WHERE emergency_incident_id = %s", (incident_id,))
+                    cursor.execute(
+                        """INSERT INTO conversation_messages (conversation_id, sender_user_id, message_type, content)
+                           SELECT conversation_id, %s, 'system', '老人已取消本次紧急求助。'
+                           FROM conversations WHERE incident_id = %s AND conversation_type = 'sos'""",
+                        (int(user_id), incident_id),
+                    )
+                    cursor.execute(
+                        """UPDATE conversations SET status = 'archived', archived_at = CURRENT_TIMESTAMP
+                           WHERE incident_id = %s AND conversation_type = 'sos' AND status = 'active'""",
+                        (incident_id,),
+                    )
+            else:
+                cursor.execute(
+                    """UPDATE emergency_incidents
+                       SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP,
+                           resolved_by = %s, resolution_summary = %s
+                       WHERE incident_id = %s""",
+                    (int(user_id), '老人已取消紧急求助', incident_id),
+                )
+                cursor.execute("UPDATE alerts SET is_handled = TRUE WHERE emergency_incident_id = %s", (incident_id,))
+                cursor.execute(
+                    """INSERT INTO conversation_messages (conversation_id, sender_user_id, message_type, content)
+                       SELECT conversation_id, %s, 'system', '老人已取消本次紧急求助。'
+                       FROM conversations WHERE incident_id = %s AND conversation_type = 'sos'""",
+                    (int(user_id), incident_id),
+                )
+                cursor.execute(
+                    """UPDATE conversations SET status = 'archived', archived_at = CURRENT_TIMESTAMP
+                       WHERE incident_id = %s AND conversation_type = 'sos' AND status = 'active'""",
+                    (incident_id,),
+                )
+            conn.commit()
+            return jsonify({'code': 200, 'message': '已取消紧急求助，相关任务已同步关闭'})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({'code': 500, 'message': f'取消紧急求助失败: {exc}'}), 500
     finally:
         conn.close()
 

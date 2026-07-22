@@ -3,10 +3,10 @@ import { Card, Table, Tag, Typography, Button, Select, App, Space } from 'antd'
 import { CheckOutlined, CloseOutlined } from '@ant-design/icons'
 
 import { fetchAdminUsers, auditVolunteer, deleteAdminUser } from '@/services/adapters/admin-adapter'
-import { fetchAdminDispatchRegions } from '@/services/adapters/dispatch-adapter'
 import type { AdminUserRow, Role } from '@/types/domain'
 import { useSession } from '@/features/auth/useSession'
 import { AdminRegionScopeNotice } from '@/features/admin/components/AdminRegionScopeNotice'
+import { AdminGeoScopeFilters, type AdminGeoScope } from '@/features/admin/components/AdminGeoScopeFilters'
 
 const roleColors: Record<Role, string> = {
   family: 'blue',
@@ -35,19 +35,9 @@ export default function AdminUsersPage() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [roleFilter, setRoleFilter] = useState<Role | undefined>('elder')
-  const [regionAdcode, setRegionAdcode] = useState<string>()
-  const [regions, setRegions] = useState<Array<{ adcode: string; name: string }>>([])
+  const [geoScope, setGeoScope] = useState<AdminGeoScope>({})
   const [page, setPage] = useState(1)
   const [deletingId, setDeletingId] = useState<number | null>(null)
-
-  useEffect(() => {
-    if (!session) return
-    fetchAdminDispatchRegions(session.userId)
-      .then((items) => {
-        setRegions(items)
-      })
-      .catch(() => setRegions([]))
-  }, [session?.userId])
 
   const load = () => {
     setLoading(true)
@@ -55,7 +45,9 @@ export default function AdminUsersPage() {
     fetchAdminUsers({
       adminUserId: session.userId,
       role: roleFilter,
-      regionAdcode,
+      regionAdcode: geoScope.regionAdcode,
+      provinceName: !geoScope.regionAdcode ? geoScope.provinceName : undefined,
+      cityName: !geoScope.regionAdcode ? geoScope.cityName : undefined,
       page,
       pageSize: 20,
     })
@@ -72,7 +64,7 @@ export default function AdminUsersPage() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(load, [session?.userId, roleFilter, regionAdcode, page])
+  useEffect(load, [session?.userId, roleFilter, geoScope.regionAdcode, geoScope.provinceName, geoScope.cityName, page])
 
   const handleAudit = async (userId: number, action: 'approve' | 'reject') => {
     try {
@@ -225,24 +217,18 @@ export default function AdminUsersPage() {
       <div>
         <Typography.Title level={3} className="!mb-1">用户管理</Typography.Title>
         <Typography.Text className="text-gray-500">
-          总管理员可按区县查看老人与家属；区管理员仅能看到本区数据。
+          总管理员按全国 → 省 → 市 → 区查看；区管理员仅能看到本区数据。
         </Typography.Text>
       </div>
 
       <Card className="!rounded-2xl">
         <div className="mb-4 flex flex-wrap gap-3">
-          <Select
-            placeholder="按区县筛选"
-            allowClear
-            style={{ width: 220 }}
-            value={regionAdcode}
-            onChange={(value) => {
-              setRegionAdcode(value)
+          <AdminGeoScopeFilters
+            value={geoScope}
+            onChange={(next) => {
+              setGeoScope(next)
               setPage(1)
             }}
-            options={regions.map((item) => ({ value: item.adcode, label: item.name }))}
-            showSearch
-            optionFilterProp="label"
           />
           <Select
             placeholder="按角色筛选"

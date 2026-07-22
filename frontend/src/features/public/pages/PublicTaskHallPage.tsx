@@ -14,6 +14,7 @@ import {
 
 import { useSession } from '@/features/auth/useSession'
 import { http, type ApiEnvelope } from '@/services/http'
+import { AdminGeoScopeFilters, type AdminGeoScope } from '@/features/admin/components/AdminGeoScopeFilters'
 
 interface PublicTask {
   order_id: number
@@ -25,6 +26,10 @@ interface PublicTask {
   status: string
   created_at: string
   volunteer_name: string | null
+  region_adcode?: string | null
+  region_name?: string | null
+  province_name?: string | null
+  city_name?: string | null
 }
 
 interface TaskStats {
@@ -54,6 +59,7 @@ export default function PublicTaskHallPage() {
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [deleting, setDeleting] = useState(false)
   const [grabbingId, setGrabbingId] = useState<number | null>(null)
+  const [geoScope, setGeoScope] = useState<AdminGeoScope>({})
 
   const isVolunteer = session?.role === 'volunteer'
   const isAdmin = session?.role === 'admin'
@@ -63,6 +69,11 @@ export default function PublicTaskHallPage() {
     const params = {
       ...(filter !== 'all' ? { status: filter === 'in_progress' ? 'accepted' : filter } : {}),
       viewer_user_id: session?.userId,
+      ...(isAdmin ? {
+        region_adcode: geoScope.regionAdcode,
+        province_name: !geoScope.regionAdcode ? geoScope.provinceName : undefined,
+        city_name: !geoScope.regionAdcode ? geoScope.cityName : undefined,
+      } : {}),
     }
     http
       .get<ApiEnvelope<{ tasks: PublicTask[]; stats: TaskStats }>>('/public/tasks', { params })
@@ -72,7 +83,16 @@ export default function PublicTaskHallPage() {
         // For in_progress filter, also include actual in_progress status
         if (filter === 'in_progress') {
           // Re-fetch without filter and filter client-side
-          http.get<ApiEnvelope<{ tasks: PublicTask[]; stats: TaskStats }>>('/public/tasks', { params: { viewer_user_id: session?.userId } }).then((allRes) => {
+          http.get<ApiEnvelope<{ tasks: PublicTask[]; stats: TaskStats }>>('/public/tasks', {
+            params: {
+              viewer_user_id: session?.userId,
+              ...(isAdmin ? {
+                region_adcode: geoScope.regionAdcode,
+                province_name: !geoScope.regionAdcode ? geoScope.provinceName : undefined,
+                city_name: !geoScope.regionAdcode ? geoScope.cityName : undefined,
+              } : {}),
+            },
+          }).then((allRes) => {
             const allTasks = allRes.data.data.tasks ?? []
             setTasks(allTasks.filter((t) => t.status === 'accepted' || t.status === 'in_progress'))
             setStats(allRes.data.data.stats)
@@ -87,8 +107,7 @@ export default function PublicTaskHallPage() {
         setTasks([])
       })
       .finally(() => setLoading(false))
-  }, [filter, session?.userId])
-
+  }, [filter, session?.userId, isAdmin, geoScope.regionAdcode, geoScope.provinceName, geoScope.cityName])
   useEffect(() => {
     load()
   }, [load])
@@ -224,20 +243,28 @@ export default function PublicTaskHallPage() {
 
         {/* Filter */}
         <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-          <Segmented
-            value={filter}
-            onChange={(val) => {
-              setFilter(val as FilterValue)
-              setSelectedIds([])
-            }}
-            options={[
-              { label: '全部', value: 'all' },
-              { label: '招募志愿者', value: 'pending' },
-              { label: '进行中', value: 'in_progress' },
-              { label: '已完成', value: 'completed' },
-            ]}
-            size="large"
-          />
+          <div className="flex flex-wrap items-center gap-3">
+            <Segmented
+              value={filter}
+              onChange={(val) => {
+                setFilter(val as FilterValue)
+                setSelectedIds([])
+              }}
+              options={[
+                { label: '全部', value: 'all' },
+                { label: '招募志愿者', value: 'pending' },
+                { label: '进行中', value: 'in_progress' },
+                { label: '已完成', value: 'completed' },
+              ]}
+              size="large"
+            />
+            {isAdmin ? (
+              <AdminGeoScopeFilters
+                value={geoScope}
+                onChange={setGeoScope}
+              />
+            ) : null}
+          </div>
           {isAdmin && filter === 'completed' && completedTasks.length > 0 && (
             <Button
               danger
@@ -319,6 +346,10 @@ export default function PublicTaskHallPage() {
                     </Tag>
                   </div>
                   <div className="space-y-1 text-sm text-gray-600 mt-3">
+                    <div>
+                      <EnvironmentOutlined className="mr-1" />
+                      {[task.province_name, task.city_name, task.region_name].filter(Boolean).join(' / ') || '未分区'}
+                    </div>
                     <div>
                       <ClockCircleOutlined className="mr-1" />
                       {task.service_time} · {task.service_hours}小时

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Card, List, Tag, Typography, Button, Modal, Form, Input, Rate, App } from 'antd'
+import { Card, List, Tag, Typography, Button, Modal, Form, Input, Rate, App, Popconfirm, Space } from 'antd'
 import { LikeOutlined, LikeFilled } from '@ant-design/icons'
 
 import { useSession } from '@/features/auth/useSession'
 import { fetchPendingServices, submitServiceReview } from '@/services/adapters/elder-adapter'
+import { cancelElderDispatchOrder, completeElderDispatchOrder } from '@/services/adapters/dispatch-adapter'
 import { likeVolunteer } from '@/services/adapters/volunteer-adapter'
 import type { PendingService } from '@/types/domain'
 
@@ -22,6 +23,8 @@ export default function ElderServicesPage() {
   const [loading, setLoading] = useState(true)
   const [reviewTarget, setReviewTarget] = useState<PendingService | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [completingId, setCompletingId] = useState<number | null>(null)
+  const [cancellingId, setCancellingId] = useState<number | null>(null)
   const [likedOrders, setLikedOrders] = useState<Set<number>>(new Set())
   const [form] = Form.useForm()
 
@@ -34,7 +37,11 @@ export default function ElderServicesPage() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(load, [session])
+  useEffect(() => {
+    load()
+    const timer = window.setInterval(load, 4000)
+    return () => window.clearInterval(timer)
+  }, [session?.userId])
 
   const handleReview = async () => {
     if (!reviewTarget) return
@@ -57,6 +64,32 @@ export default function ElderServicesPage() {
     }
   }
 
+  const handleCompleteService = async (orderId: number) => {
+    if (!session) return
+    setCompletingId(orderId)
+    try {
+      message.success((await completeElderDispatchOrder(orderId, session.userId)).message || '已确认服务完成')
+      load()
+    } catch (err: any) {
+      message.error(err?.message || '确认完成失败')
+    } finally {
+      setCompletingId(null)
+    }
+  }
+
+  const handleCancelService = async (orderId: number) => {
+    if (!session) return
+    setCancellingId(orderId)
+    try {
+      message.success((await cancelElderDispatchOrder(orderId, session.userId)).message || '已取消')
+      load()
+    } catch (err: any) {
+      message.error(err?.message || '取消失败')
+    } finally {
+      setCancellingId(null)
+    }
+  }
+
   const handleLike = async (item: PendingService) => {
     if (!session) return
     if (!item.volunteerId) {
@@ -72,67 +105,119 @@ export default function ElderServicesPage() {
     }
   }
 
+  const active = services.filter((item) => ['pending', 'accepted', 'in_progress'].includes(item.status))
+  const history = services.filter((item) => !['pending', 'accepted', 'in_progress'].includes(item.status))
+
+  const renderActions = (item: PendingService) => {
+    const isLiked = likedOrders.has(item.orderId)
+    const actions: React.ReactNode[] = []
+    const canCancel = ['pending', 'accepted'].includes(item.status)
+    // Volunteer en route or already serving — elder may confirm done.
+    const canComplete = Boolean(item.canComplete) || (['accepted', 'in_progress'].includes(item.status) && Boolean(item.volunteerId))
+
+    if (canCancel) {
+      actions.push(
+        <Popconfirm
+          key="cancel"
+          title="确定取消这次帮助？志愿者将不再赶来。"
+          onConfirm={() => handleCancelService(item.orderId)}
+          okText="确定取消"
+          cancelText="再想想"
+        >
+          <Button danger size="large" block loading={cancellingId === item.orderId} className="!h-11 !text-base">
+            {item.status === 'accepted' ? '取消这次帮助（志愿者正赶来）' : '取消请求'}
+          </Button>
+        </Popconfirm>,
+      )
+    }
+
+    if (canComplete) {
+      actions.push(
+        <Popconfirm
+          key="complete"
+          title="确认服务已经帮完？完成后会话会结束。"
+          onConfirm={() => handleCompleteService(item.orderId)}
+          okText="确认完成"
+          cancelText="取消"
+        >
+          <Button type="primary" size="large" block loading={completingId === item.orderId} className="!h-11 !text-base">
+            确认完成服务
+          </Button>
+        </Popconfirm>,
+      )
+    }
+
+    if (item.status === 'completed' && item.volunteerName) {
+      actions.push(
+        <Button
+          key="like"
+          type={isLiked ? 'primary' : 'default'}
+          size="large"
+          icon={isLiked ? <LikeFilled /> : <LikeOutlined />}
+          disabled={isLiked}
+          onClick={() => handleLike(item)}
+        >
+          {isLiked ? '已点赞' : '点赞'}
+        </Button>,
+      )
+    }
+
+    if (item.canReview && !item.reviewSubmitted) {
+      actions.push(
+        <Button key="review" type="primary" size="large" onClick={() => setReviewTarget(item)}>
+          评价
+        </Button>,
+      )
+    } else if (item.reviewSubmitted) {
+      actions.push(<Tag key="done" color="green">已评价</Tag>)
+    }
+
+    return actions
+  }
+
+  const renderItem = (item: PendingService) => {
+    const st = statusMap[item.status] || { color: 'default', text: item.status }
+    const actions = renderActions(item)
+    return (
+      <List.Item className="!block !px-0">
+        <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-lg font-medium text-slate-900">{item.serviceType}</span>
+            <Tag color={st.color}>{st.text}</Tag>
+          </div>
+          <div className="mt-1 text-base text-slate-600">
+            {item.time}
+            {item.volunteerName ? ` · 志愿者：${item.volunteerName}` : ' · 还在安排志愿者'}
+          </div>
+          {actions.length ? <Space direction="vertical" className="mt-3 w-full" size="small">{actions}</Space> : null}
+        </div>
+      </List.Item>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div>
-        <Typography.Title level={2} className="!mb-1">我的服务</Typography.Title>
-        <Typography.Text className="text-gray-500 text-lg">查看服务安排和评价已完成的服务</Typography.Text>
+        <Typography.Title level={2} className="!mb-1">谁在帮我</Typography.Title>
+        <Typography.Text className="text-gray-500 text-lg">
+          志愿者赶来途中可取消或确认完成；服务中请点「确认完成服务」；结束后可评价和点赞
+        </Typography.Text>
       </div>
 
-      <Card className="!rounded-2xl" loading={loading}>
-        <List
-          dataSource={services}
-          locale={{ emptyText: '暂无服务记录' }}
-          renderItem={(item) => {
-            const st = statusMap[item.status] || { color: 'default', text: item.status }
-            const isLiked = likedOrders.has(item.orderId)
-            const actions: React.ReactNode[] = []
+      <Card title="进行中的服务" className="!rounded-2xl" loading={loading}>
+        {active.length ? (
+          <List dataSource={active} renderItem={renderItem} />
+        ) : (
+          <div className="py-8 text-center text-base text-slate-500">暂无进行中的服务</div>
+        )}
+      </Card>
 
-            if (item.status === 'completed' && item.volunteerName) {
-              actions.push(
-                <Button
-                  key="like"
-                  type={isLiked ? 'primary' : 'default'}
-                  size="small"
-                  icon={isLiked ? <LikeFilled /> : <LikeOutlined />}
-                  disabled={isLiked}
-                  onClick={() => handleLike(item)}
-                >
-                  {isLiked ? '已点赞' : '点赞'}
-                </Button>
-              )
-            }
-
-            if (item.canReview && !item.reviewSubmitted) {
-              actions.push(
-                <Button key="review" type="primary" size="small" onClick={() => setReviewTarget(item)}>
-                  评价
-                </Button>
-              )
-            } else if (item.reviewSubmitted) {
-              actions.push(<Tag key="done" color="green">已评价</Tag>)
-            }
-
-            return (
-              <List.Item actions={actions}>
-                <List.Item.Meta
-                  title={
-                    <span className="text-lg">
-                      {item.serviceType}
-                      <Tag className="ml-2" color={st.color}>{st.text}</Tag>
-                    </span>
-                  }
-                  description={
-                    <span className="text-base">
-                      {item.time}
-                      {item.volunteerName && ` · 志愿者：${item.volunteerName}`}
-                    </span>
-                  }
-                />
-              </List.Item>
-            )
-          }}
-        />
+      <Card title="历史记录" className="!rounded-2xl" loading={loading}>
+        {history.length ? (
+          <List dataSource={history} renderItem={renderItem} />
+        ) : (
+          <div className="py-8 text-center text-base text-slate-500">暂无历史记录</div>
+        )}
       </Card>
 
       <Modal

@@ -16,6 +16,8 @@ interface LoginResponseData {
   real_name: string
   email?: string
   review_status?: ReviewState
+  is_root?: boolean
+  region_scopes?: string[]
 }
 
 function buildSessionUser(data: LoginResponseData): SessionUser {
@@ -28,6 +30,8 @@ function buildSessionUser(data: LoginResponseData): SessionUser {
     tokenState: 'active',
     reviewState: data.review_status ?? 'none',
     lastVisitedRoute: getDefaultRoute(data.role),
+    isRoot: Boolean(data.is_root),
+    regionScopes: Array.isArray(data.region_scopes) ? data.region_scopes.map(String) : [],
   }
 }
 

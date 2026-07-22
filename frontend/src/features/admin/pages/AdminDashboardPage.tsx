@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Card, Typography, Spin, Button, App, Statistic, Table, Tag, Modal, Form, InputNumber, Input, Select, Space } from 'antd'
 import {
   UserOutlined,
@@ -15,7 +15,7 @@ import { fetchVolunteerLeaderboard } from '@/services/adapters/volunteer-adapter
 import type { AwardRequestItem, DashboardMetric, HourReviewItem, VolunteerProfile } from '@/types/domain'
 import { useSession } from '@/features/auth/useSession'
 import { AdminRegionScopeNotice } from '@/features/admin/components/AdminRegionScopeNotice'
-import { fetchAdminDispatchRegions } from '@/services/adapters/dispatch-adapter'
+import { fetchAdminDispatchRegions, fetchManagedDispatchRegions } from '@/services/adapters/dispatch-adapter'
 
 const iconMap: Record<string, React.ReactNode> = {
   total_users: <UserOutlined />,
@@ -29,10 +29,13 @@ const colorPalette = ['#2563eb', '#0284c7', '#d97706', '#dc2626', '#7c3aed', '#0
 export default function AdminDashboardPage() {
   const { message } = App.useApp()
   const { session } = useSession()
+  const isRoot = Boolean(session?.isRoot)
   const [metrics, setMetrics] = useState<DashboardMetric[]>([])
   const [leaderboard, setLeaderboard] = useState<VolunteerProfile[]>([])
-  const [rankingRegions, setRankingRegions] = useState<Array<{ adcode: string; name: string }>>([])
+  const [rankingRegions, setRankingRegions] = useState<Array<{ adcode: string; name: string; province_name?: string; city_name?: string }>>([])
   const [rankingRegion, setRankingRegion] = useState<string | undefined>()
+  const [rankingProvince, setRankingProvince] = useState<string | undefined>()
+  const [rankingCity, setRankingCity] = useState<string | undefined>()
   const [hourReviews, setHourReviews] = useState<HourReviewItem[]>([])
   const [awardRequests, setAwardRequests] = useState<AwardRequestItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -59,19 +62,67 @@ export default function AdminDashboardPage() {
 
   useEffect(() => {
     if (!session) return
+    if (isRoot) {
+      fetchManagedDispatchRegions(session.userId)
+        .then((items) => {
+          setRankingRegions(items.map((item) => ({
+            adcode: item.adcode,
+            name: item.name,
+            province_name: item.province_name,
+            city_name: item.city_name,
+          })))
+        })
+        .catch(() => setRankingRegions([]))
+      return
+    }
     fetchAdminDispatchRegions(session.userId).then((items) => {
       setRankingRegions(items)
       if (items.length === 1) setRankingRegion(items[0].adcode)
     }).catch(() => setRankingRegions([]))
-  }, [session?.userId])
+  }, [session?.userId, isRoot])
+
+  const provinceOptions = useMemo(() => {
+    const names = Array.from(new Set(rankingRegions.map((item) => item.province_name).filter(Boolean) as string[]))
+    return names.sort().map((name) => ({ value: name, label: name }))
+  }, [rankingRegions])
+
+  const cityOptions = useMemo(() => {
+    const names = Array.from(new Set(
+      rankingRegions
+        .filter((item) => !rankingProvince || item.province_name === rankingProvince)
+        .map((item) => item.city_name)
+        .filter(Boolean) as string[],
+    ))
+    return names.sort().map((name) => ({ value: name, label: name }))
+  }, [rankingRegions, rankingProvince])
+
+  const districtOptions = useMemo(() => {
+    return rankingRegions
+      .filter((item) => {
+        if (rankingProvince && item.province_name !== rankingProvince) return false
+        if (rankingCity && item.city_name !== rankingCity) return false
+        return true
+      })
+      .map((region) => ({ value: region.adcode, label: `${region.name}榜` }))
+  }, [rankingRegions, rankingProvince, rankingCity])
+
+  const loadLeaderboard = async () => {
+    if (!session) return
+    try {
+      setLeaderboard(await fetchVolunteerLeaderboard({
+        adminUserId: session.userId,
+        regionAdcode: rankingRegion,
+        provinceName: isRoot && !rankingRegion ? rankingProvince : undefined,
+        cityName: isRoot && !rankingRegion ? rankingCity : undefined,
+      }))
+    } catch {
+      setLeaderboard([])
+    }
+  }
 
   useEffect(() => {
-    if (!session) return
-    fetchVolunteerLeaderboard({ adminUserId: session.userId, regionAdcode: rankingRegion })
-      .then(setLeaderboard)
-      .catch(() => setLeaderboard([]))
-  }, [session?.userId, rankingRegion])
-
+    void loadLeaderboard()
+  }, [session?.userId, rankingRegion, rankingProvince, rankingCity, isRoot])
   const handleSettle = async () => {
     setSettling(true)
     try {
@@ -152,7 +203,7 @@ export default function AdminDashboardPage() {
       })
       message.success(res.message)
       setAwardRequests(await fetchAwardRequests(session!.userId, 'pending'))
-      setLeaderboard(await fetchVolunteerLeaderboard({ adminUserId: session!.userId, regionAdcode: rankingRegion }))
+      await loadLeaderboard()
     } catch (err: any) {
       message.error(err?.message || '审核失败')
     } finally {
@@ -195,6 +246,12 @@ export default function AdminDashboardPage() {
         if (rank === 3) return <span className="text-2xl">🥉</span>
         return <span className="text-gray-500 font-semibold">{rank}</span>
       },
+    },
+    {
+      title: '志愿者',
+      dataIndex: 'realName',
+      key: 'realName',
+      render: (name: string | undefined) => name || '—',
     },
     {
       title: '本周时长',
@@ -338,13 +395,42 @@ export default function AdminDashboardPage() {
           </span>
         }
         extra={<Space wrap>
+          {isRoot ? (
+            <>
+              <Select
+                allowClear
+                placeholder="按省筛选"
+                className="min-w-32"
+                value={rankingProvince}
+                options={provinceOptions}
+                onChange={(value) => {
+                  setRankingProvince(value)
+                  setRankingCity(undefined)
+                  setRankingRegion(undefined)
+                }}
+              />
+              <Select
+                allowClear
+                placeholder="按市筛选"
+                className="min-w-32"
+                value={rankingCity}
+                options={cityOptions}
+                onChange={(value) => {
+                  setRankingCity(value)
+                  setRankingRegion(undefined)
+                }}
+              />
+            </>
+          ) : null}
           <Select
             className="min-w-40"
             value={rankingRegion ?? '__national__'}
             onChange={(value) => setRankingRegion(value === '__national__' ? undefined : value)}
             options={[
-              ...(rankingRegions.length > 1 ? [{ value: '__national__', label: '全国总榜' }] : []),
-              ...rankingRegions.map((region) => ({ value: region.adcode, label: `${region.name}榜` })),
+              ...(isRoot || rankingRegions.length > 1
+                ? [{ value: '__national__', label: isRoot ? (rankingProvince || rankingCity ? '当前省市汇总' : '全国总榜') : '全部管辖区' }]
+                : []),
+              ...(isRoot ? districtOptions : rankingRegions.map((region) => ({ value: region.adcode, label: `${region.name}榜` }))),
             ]}
           />
           <Button

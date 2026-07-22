@@ -11,6 +11,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
 
 import { useSession } from '@/features/auth/useSession'
+import { LiveNoticeHost } from '@/features/shared/LiveNoticeHost'
 import {
   getNavigationForRole,
   getRouteDefinition,
@@ -52,7 +53,7 @@ export function AppShell() {
 
   const navigationItems = useMemo(() => {
     if (!session) return []
-    return getNavigationForRole(session.role)
+    return getNavigationForRole(session.role, { isRoot: Boolean(session.isRoot) })
   }, [session])
 
   const selectedKeys = useMemo(() => {
@@ -170,6 +171,7 @@ export function AppShell() {
           </Space>
         </Header>
         <Content className={`p-4 md:p-6 ${session.role === 'elder' ? 'elder-mode' : ''}`}>
+          <LiveNoticeHost />
           <div className="max-w-6xl mx-auto">
             <Outlet />
           </div>

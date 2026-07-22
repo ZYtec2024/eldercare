@@ -25,6 +25,8 @@ type SimOrder = {
   state: OrderState
   volunteerId?: number
   stage: number
+  /** 0=SOS P0, 1=escalated P1, 2=normal P2 */
+  priorityTier: number
   dispatchAt: number
   phase?: 'top1' | 'top3' | 'top10' | 'fallback'
   manualConfirmAt?: number
@@ -149,6 +151,9 @@ export function DispatchSimulationPanel({ overview }: { overview: DispatchOvervi
         // demo certifications, so the hard skill gate is reproducible.
         skills: simulationSkills[index],
         assigned_today: volunteer.assigned_today + (index >= 3 ? 1 : 0),
+        // Mirror live SOS gates: auto-accept + rating ≥ 4.
+        auto_accept_enabled: true,
+        rating: Math.max(Number(volunteer.rating) || 0, 4.2),
       }
     })
     const usefulElders = overview.elders.slice(0, 15)
@@ -182,7 +187,19 @@ export function DispatchSimulationPanel({ overview }: { overview: DispatchOvervi
     // Most requests demonstrate a Top1 confirmation; every third request is
     // deliberately left unanswered so Top3, Top10 and fallback are visible.
     const manualConfirmAt = urgency === 'normal' && id % 3 !== 0 ? runtime.now + 3.5 + (id % 2) : undefined
-    runtime.orders.push({ id, elderId, serviceType: displayService, requiredSkills: service.skills, urgency, createdAt: runtime.now, dispatchAt: runtime.now + DISPATCH_DELAY_SECONDS, state: 'waiting', stage: 0, manualConfirmAt })
+    runtime.orders.push({
+      id,
+      elderId,
+      serviceType: displayService,
+      requiredSkills: service.skills,
+      urgency,
+      createdAt: runtime.now,
+      dispatchAt: runtime.now + DISPATCH_DELAY_SECONDS,
+      state: 'waiting',
+      stage: 0,
+      priorityTier: urgency === 'sos' ? 0 : 2,
+      manualConfirmAt,
+    })
     const elder = elders.find((item) => item.elder_id === elderId)
     runtime.events.unshift(`${urgency === 'sos' ? 'SOS' : '普通'}请求 #${runtime.nextOrderId - 1}：${elder?.name ?? '老人'} / ${service.label} 已进入队列`)
     setRevision((value) => value + 1)
@@ -242,28 +259,66 @@ export function DispatchSimulationPanel({ overview }: { overview: DispatchOvervi
   }
 
   const dispatch = (runtime: Runtime) => {
-    const queue = runtime.orders.filter((order) => order.state === 'waiting' && runtime.now >= order.dispatchAt).sort((a, b) => {
-      if (a.urgency !== b.urgency) return a.urgency === 'sos' ? -1 : 1
-      return a.createdAt - b.createdAt
+    // P0 SOS → P1 escalated (after 35s fallback) → P2 normal Top windows.
+    const queue = runtime.orders
+      .filter((order) => order.state === 'waiting' && runtime.now >= order.dispatchAt)
+      .sort((a, b) => {
+        if (a.priorityTier !== b.priorityTier) return a.priorityTier - b.priorityTier
+        return a.createdAt - b.createdAt
+      })
+
+    const sosWaiting = queue.filter((order) => order.urgency === 'sos')
+    const reservedForSos = new Set<number>()
+    sosWaiting.forEach((sos) => {
+      runtime.volunteers.forEach((volunteer) => {
+        const skillOK = sos.requiredSkills.every((skill) => volunteer.skills.includes(skill))
+        const available = volunteer.mode === 'idle' || volunteer.mode === 'returning'
+        if (
+          skillOK
+          && available
+          && volunteer.auto_accept_enabled
+          && Number(volunteer.rating) >= 4
+          && !reservedForSos.has(volunteer.volunteer_id)
+        ) {
+          reservedForSos.add(volunteer.volunteer_id)
+        }
+      })
     })
+
     queue.forEach((order) => {
       const elder = elders.find((item) => item.elder_id === order.elderId)
       if (!elder) return
       const waited = runtime.now - order.createdAt
-      const phase: SimOrder['phase'] = order.urgency === 'sos' ? 'fallback' : waited >= 35 ? 'fallback' : waited >= 20 ? 'top10' : waited >= 8 ? 'top3' : 'top1'
+      const phase: SimOrder['phase'] = order.urgency === 'sos'
+        ? 'fallback'
+        : waited >= 35
+          ? 'fallback'
+          : waited >= 20
+            ? 'top10'
+            : waited >= 8
+              ? 'top3'
+              : 'top1'
       const stage = phase === 'top1' ? 1 : phase === 'top3' ? 2 : phase === 'top10' ? 3 : 4
-      if (order.phase !== phase) {
+      const priorityTier = order.urgency === 'sos' ? 0 : phase === 'fallback' ? 1 : 2
+      if (order.phase !== phase || order.priorityTier !== priorityTier) {
         order.phase = phase
         order.stage = stage
-        runtime.events.unshift(order.urgency === 'sos' ? `SOS #${order.id} 跳过人工窗口，立即强制调度。` : `请求 #${order.id} 进入 ${phase === 'top1' ? 'Top1 专属确认' : phase === 'top3' ? 'Top3 抢单' : phase === 'top10' ? 'Top10 扩散抢单' : '自动兜底'} 阶段。`)
+        order.priorityTier = priorityTier
+        runtime.events.unshift(
+          order.urgency === 'sos'
+            ? `SOS #${order.id} 进入 P0 最高优先队列，立即强制调度。`
+            : phase === 'fallback'
+              ? `请求 #${order.id} 升入 P1 升级队列（Top10 + 自动接单兜底）。`
+              : `请求 #${order.id} 处于 P2：${phase === 'top1' ? 'Top1 专属确认' : phase === 'top3' ? 'Top3 抢单' : 'Top10 扩散抢单'}。`,
+        )
       }
       const choices = runtime.volunteers.filter((volunteer) => {
         const skillOK = order.requiredSkills.every((skill) => volunteer.skills.includes(skill))
-        const returningTrip = runtime.trips.find((trip) => trip.volunteerId === volunteer.volunteer_id && trip.kind === 'return')
-        // Returning workers only re-enter allocation near the end of the
-        // purple route. A serving worker is previewed but never pre-assigned.
-        const available = volunteer.mode === 'idle' || (volunteer.mode === 'returning' && (returningTrip?.progress ?? 0) >= .7)
-        return skillOK && available
+        const available = volunteer.mode === 'idle' || volunteer.mode === 'returning'
+        if (!skillOK || !available) return false
+        // P0 SOS capacity hold: do not let P1/P2 drain excellent auto-accept people.
+        if (order.urgency !== 'sos' && reservedForSos.has(volunteer.volunteer_id)) return false
+        return true
       }).map((volunteer) => {
         const km = distanceKm(volunteer.point, [elder.lng, elder.lat])
         const traffic = 58 + (hash(`${order.id}-${volunteer.volunteer_id}-${runtime.trafficVersion}`) % 39)
@@ -272,18 +327,24 @@ export function DispatchSimulationPanel({ overview }: { overview: DispatchOvervi
         const total = Math.max(0, 100 - km * 12) * .4 + traffic * .25 + fatigue * .1 + rating * .25
         return { volunteer, km, total }
       }).sort((a, b) => b.total - a.total)
+
       const visibleCap = phase === 'top1' ? 1 : phase === 'top3' ? 3 : phase === 'top10' ? 10 : choices.length
       const visible = choices.slice(0, visibleCap)
       const picked = order.urgency === 'sos'
-        ? choices[0]
+        ? choices
+          .filter((item) => item.volunteer.auto_accept_enabled && Number(item.volunteer.rating) >= 4)
+          .sort((a, b) => a.km - b.km || b.total - a.total)[0]
         : phase === 'fallback'
-          ? choices.find((item) => item.volunteer.auto_accept_enabled) ?? choices[0]
+          ? choices.find((item) => item.volunteer.auto_accept_enabled)
           : order.manualConfirmAt != null && runtime.now >= order.manualConfirmAt
             ? visible[0]
             : undefined
       if (!picked) return
       if (picked.volunteer.mode === 'returning') runtime.trips = runtime.trips.filter((trip) => trip.volunteerId !== picked.volunteer.volunteer_id)
-      runtime.events.unshift(`${order.urgency === 'sos' ? 'SOS强制派单' : phase === 'fallback' ? '35秒自动兜底' : '手动确认接单'} #${order.id} → ${picked.volunteer.name}（${picked.km.toFixed(2)}km，综合 ${picked.total.toFixed(1)}）`)
+      reservedForSos.delete(picked.volunteer.volunteer_id)
+      runtime.events.unshift(
+        `${order.urgency === 'sos' ? 'P0 SOS强制派单' : phase === 'fallback' ? 'P1 自动兜底' : 'P2 手动确认接单'} #${order.id} → ${picked.volunteer.name}（${picked.km.toFixed(2)}km，综合 ${picked.total.toFixed(1)}）`,
+      )
       void startTrip(runtime, picked.volunteer, order, 'service')
     })
   }
@@ -367,7 +428,7 @@ export function DispatchSimulationPanel({ overview }: { overview: DispatchOvervi
   }, [overview, revision])
 
   const runtime = runtimeRef.current
-  const queue = runtime?.orders.filter((order) => order.state === 'waiting' || order.state === 'routing').sort((a, b) => (a.urgency === b.urgency ? a.createdAt - b.createdAt : a.urgency === 'sos' ? -1 : 1)) ?? []
+  const queue = runtime?.orders.filter((order) => order.state === 'waiting' || order.state === 'routing').sort((a, b) => (a.priorityTier !== b.priorityTier ? a.priorityTier - b.priorityTier : a.createdAt - b.createdAt)) ?? []
   const active = runtime?.orders.filter((order) => ['en_route', 'serving', 'routing'].includes(order.state)) ?? []
 
   if (!overview || !runtime) return <Card className="!rounded-2xl">正在准备智能调度沙盘…</Card>
@@ -383,10 +444,10 @@ export function DispatchSimulationPanel({ overview }: { overview: DispatchOvervi
       <Button icon={<ThunderboltOutlined />} onClick={trafficShock}>SOS 路况突变并重规划</Button>
     </div>
     {rerouteNotice ? <div className="mb-3 rounded-xl border border-red-300 bg-red-50 px-3 py-2 text-sm font-medium text-red-800">✓ {rerouteNotice}</div> : null}
-    <div className="mb-3 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-900">规则：SOS 永远队首并立即强制调度；技能为硬门槛。普通单按 Top1 专属确认（0–8秒）→ Top3 抢单（8–20秒）→ Top10 扩散抢单（20–35秒）→ 自动兜底（35秒后）推进。评分 = 距离 40% + 路况 25% + 疲劳 10% + 服务评分 25%；前往/服务中不派新单，服务结束后返程即可按实时位置再接单。</div>
+    <div className="mb-3 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-900">规则：三级优先队列 <b>P0 SOS</b> → <b>P1 升级</b>（35秒后兜底）→ <b>P2 普通</b>（Top1→Top3→Top10）。SOS 只派给「自动接单 + 技能匹配 + 评分≥4 + 空闲/返程」，并优先占用这些人的运力；普通单不能抢走。评分 = 距离 40% + 路况 25% + 疲劳 10% + 服务评分 25%；前往/服务中不派新单，服务结束后返程即可再接。</div>
     <div className="grid gap-3 lg:grid-cols-3">
       <Card size="small" title={`当前服务 / 出发 (${active.length})`}><div className="space-y-2 text-sm">{active.slice(0, 5).map((order) => { const volunteer = runtime.volunteers.find((item) => item.volunteer_id === order.volunteerId); const elder = elders.find((item) => item.elder_id === order.elderId); const trip = runtime.trips.find((item) => item.orderId === order.id); return <div key={order.id} className="rounded-lg bg-blue-50 p-2"><b>{volunteer?.name}</b> → <b>{elder?.name}</b><div className="text-xs text-blue-700">#{order.id} {order.state === 'serving' ? '服务中' : '沿真实路线前往'} {trip ? `${Math.round(trip.progress * 100)}%` : '规划中'}</div>{trip ? <Progress size="small" percent={Math.round(trip.progress * 100)} showInfo={false} /> : null}</div> }) || <span className="text-slate-400">尚无进行中的请求</span>}</div></Card>
-      <Card size="small" title={`优先队列 (${queue.length})`}><div className="space-y-2 text-sm">{queue.slice(0, 5).map((order, index) => <div key={order.id} className={`rounded-lg p-2 ${order.urgency === 'sos' ? 'bg-red-50 text-red-800' : 'bg-amber-50 text-amber-800'}`}><b>#{index + 1} #{order.id}</b> {order.serviceType} <Tag color={order.urgency === 'sos' ? 'red' : 'orange'}>{order.urgency === 'sos' ? 'SOS 队首' : `第 ${order.stage} 圈`}</Tag><div className="text-xs">{order.state === 'routing' ? '正在锁定最优志愿者和路线' : `等待 ${Math.floor(runtime.now - order.createdAt)} 秒`}</div></div>) || <span className="text-slate-400">队列为空</span>}</div></Card>
+      <Card size="small" title={`优先队列 (${queue.length})`}><div className="space-y-2 text-sm">{queue.slice(0, 5).map((order, index) => <div key={order.id} className={`rounded-lg p-2 ${order.urgency === 'sos' ? 'bg-red-50 text-red-800' : order.priorityTier === 1 ? 'bg-violet-50 text-violet-800' : 'bg-amber-50 text-amber-800'}`}><b>#{index + 1} #{order.id}</b> {order.serviceType} <Tag color={order.urgency === 'sos' ? 'red' : order.priorityTier === 1 ? 'purple' : 'orange'}>{order.urgency === 'sos' ? 'P0 SOS' : order.priorityTier === 1 ? 'P1 升级' : `P2 · 第 ${order.stage || 1} 圈`}</Tag><div className="text-xs">{order.state === 'routing' ? '正在锁定最优志愿者和路线' : `等待 ${Math.floor(runtime.now - order.createdAt)} 秒`}</div></div>) || <span className="text-slate-400">队列为空</span>}</div></Card>
       <Card size="small" title="全员自动调度方案"><div className="max-h-40 space-y-1 overflow-auto text-sm">{runtime.volunteers.map((volunteer) => <div key={volunteer.volunteer_id} className="flex justify-between rounded bg-slate-50 px-2 py-1"><span><b>{volunteer.name}</b> · {label(volunteer.mode)}</span><span className="text-xs text-slate-500">疲劳 {volunteer.fatigue} / 评分 {volunteer.rating}</span></div>)}</div></Card>
     </div>
     <div className="mt-3"><DispatchMap overview={view} height={500} /></div>

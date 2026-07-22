@@ -192,6 +192,36 @@ export async function manuallyAssignDispatchOrder(orderId: number, payload: { ad
   return response.data
 }
 
+export type DispatchTrailVolunteer = { volunteer_id: number; volunteer_name: string; candidate_rank?: number | null; response_status?: string; auto_accept_enabled?: boolean }
+export type DispatchTrailPhase = {
+  label: string
+  invited: DispatchTrailVolunteer[]
+  newly_invited: DispatchTrailVolunteer[]
+  kept: DispatchTrailVolunteer[]
+  at?: string | null
+  reason?: string
+}
+export type DispatchTrail = {
+  order_id: number
+  elder_name?: string
+  service_type?: string
+  urgency?: string
+  dispatch_phase?: string
+  dispatch_state?: string
+  status?: string
+  phases: Record<string, DispatchTrailPhase>
+  assignee?: (DispatchTrailVolunteer & { mode?: string; automatic?: boolean; at?: string | null; message?: string }) | null
+  current_invited: DispatchTrailVolunteer[]
+  events: Array<{ event_id: number; event_type: string; message: string; created_at?: string }>
+}
+
+export async function fetchOrderDispatchTrail(orderId: number, adminUserId: number) {
+  const response = await http.get<ApiEnvelope<DispatchTrail>>(`/dispatch/admin/orders/${orderId}/dispatch-trail`, {
+    params: { admin_user_id: adminUserId },
+  })
+  return response.data.data
+}
+
 export type ManualSosCandidate = {
   volunteer_id: number
   volunteer_name: string
@@ -199,15 +229,46 @@ export type ManualSosCandidate = {
   eta_minutes: number
   total_score: number
   skill_match: string
+  candidate_rank?: number
+  availability?: string
+  auto_accept_enabled?: boolean
+  service_rating?: number
 }
 
-export async function startManualSosService(incidentId: number, adminUserId: number) {
-  const response = await http.post<ApiEnvelope<{ order_id: number; candidates: ManualSosCandidate[] }>>(
-    `/dispatch/admin/incidents/${incidentId}/start-manual-sos-service`,
-    { admin_user_id: adminUserId },
+/** Start / re-trigger SOS auto-assign for an incident (no admin volunteer pick). */
+export async function startAutoSosService(
+  incidentId: number,
+  adminUserId: number,
+  requiredSkills?: string[],
+) {
+  const response = await http.post<ApiEnvelope<{
+    order_id: number
+    assigned?: boolean
+    created?: boolean
+    required_skills?: string[]
+  }>>(
+    `/dispatch/admin/incidents/${incidentId}/start-auto-sos-service`,
+    {
+      admin_user_id: adminUserId,
+      required_skills: requiredSkills ?? ['emergency_response', 'medical_support'],
+    },
   )
   return response.data
 }
+
+/** @deprecated Use startAutoSosService — SOS is auto-assign only. */
+export const startManualSosService = startAutoSosService
+
+export const SOS_SKILL_OPTIONS = [
+  { code: 'emergency_response', label: '急救响应' },
+  { code: 'medical_support', label: '医疗陪护' },
+  { code: 'mobility_assist', label: '行动辅助' },
+  { code: 'errand', label: '代办采购' },
+  { code: 'companion', label: '陪伴沟通' },
+  { code: 'rehab', label: '康复训练' },
+  { code: 'digital_assist', label: '智能设备协助' },
+  { code: 'grooming', label: '生活照护' },
+] as const
 
 export async function fetchElderDispatchOrders(userId: number) {
   const response = await http.get<ApiEnvelope<DispatchOrder[]>>('/dispatch/elder/orders', { params: { user_id: userId } })
@@ -244,15 +305,19 @@ export async function createDispatchOrder(payload: {
   userId: number
   serviceType: string
   serviceHours?: number
+  serviceTime?: string
   notes?: string
   urgent?: boolean
+  requiredSkills?: string[]
 }) {
-  const response = await http.post<ApiEnvelope<{ order_id: number }>>('/dispatch/orders', {
+  const response = await http.post<ApiEnvelope<{ order_id: number; scheduled?: boolean }>>('/dispatch/orders', {
     user_id: payload.userId,
     service_type: payload.serviceType,
     service_hours: payload.serviceHours,
+    service_time: payload.serviceTime,
     notes: payload.notes,
     urgent: payload.urgent,
+    required_skills: payload.requiredSkills,
   })
   return response.data
 }
@@ -267,8 +332,46 @@ export async function completeElderDispatchOrder(orderId: number, userId: number
   return response.data
 }
 
+export async function completeFamilyDispatchOrder(orderId: number, userId: number) {
+  const response = await http.post<ApiEnvelope<unknown>>(`/dispatch/orders/${orderId}/family-complete`, { user_id: userId })
+  return response.data
+}
+
+export async function redispatchDispatchOrder(orderId: number, userId: number, reason?: string) {
+  const response = await http.post<ApiEnvelope<{
+    order_id: number
+    mode: string
+    urgency?: string
+    dispatch_state?: string
+    message: string
+  }>>(`/dispatch/orders/${orderId}/redispatch`, {
+    user_id: userId,
+    reason: reason || '服务中出现问题，需要更换志愿者',
+  })
+  return response.data
+}
+
+export async function requestAdminForDispatchOrder(
+  orderId: number,
+  userId: number,
+  options?: { reason?: string; alsoRedispatch?: boolean },
+) {
+  const response = await http.post<ApiEnvelope<{
+    incident_id: number
+    conversation_id?: number | null
+    upgraded?: boolean
+    created?: boolean
+    redispatch?: unknown
+  }>>(`/dispatch/orders/${orderId}/request-admin`, {
+    user_id: userId,
+    reason: options?.reason || '服务中需要管理员协助',
+    also_redispatch: Boolean(options?.alsoRedispatch),
+  })
+  return response.data
+}
+
 export async function fetchVolunteerDispatchFeed(volunteerId: number) {
-  const response = await http.get<ApiEnvelope<{ tasks: VolunteerDispatchTask[]; completed_tasks: Array<{ order_id: number; service_type: string; elder_name: string; address?: string; completed_at?: string | null }>; state: { availability: string; fatigue_score: number; service_rating: number; assigned_today: number } }>>(
+  const response = await http.get<ApiEnvelope<{ tasks: VolunteerDispatchTask[]; completed_tasks: Array<{ order_id: number; service_type: string; elder_name: string; address?: string; completed_at?: string | null; close_status?: string }>; state: { availability: string; fatigue_score: number; service_rating: number; assigned_today: number } }>>(
     '/dispatch/volunteer/feed', { params: { volunteer_id: volunteerId } },
   )
   return response.data.data

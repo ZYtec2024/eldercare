@@ -34,10 +34,17 @@ const features = [
   },
   {
     icon: <FileTextOutlined className="text-5xl text-sky-600" />,
-    title: '服务管理',
-    desc: '为长辈发布陪诊、上门陪聊、代购等服务需求，并跟踪已发布需求的状态和进度。',
-    path: '/family/orders',
+    title: '代长辈下单',
+    desc: '为绑定长辈发布陪诊、上门陪聊、代购等服务需求，系统会按技能匹配走 Top1→Top3→Top10 智能派单。',
+    path: '/family/new-request',
     color: 'border-sky-200 bg-sky-50/50',
+  },
+  {
+    icon: <FileTextOutlined className="text-5xl text-cyan-600" />,
+    title: '服务管理',
+    desc: '跟踪已发布需求的状态和进度，确认完成并评价志愿者。',
+    path: '/family/orders',
+    color: 'border-cyan-200 bg-cyan-50/50',
   },
   {
     icon: <TrophyOutlined className="text-5xl text-amber-500" />,

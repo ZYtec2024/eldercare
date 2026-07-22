@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { App, Button, Card, Form, Input, Modal, Radio, Select, Space, Switch, Table, Tag, Typography } from 'antd'
 import { EnvironmentOutlined, PlusOutlined, ReloadOutlined, UserAddOutlined, UserDeleteOutlined } from '@ant-design/icons'
+import { Navigate } from 'react-router-dom'
 
 import { useSession } from '@/features/auth/useSession'
 import {
@@ -269,6 +270,10 @@ export default function AdminRegionsPage() {
         }
       },
     })
+  }
+
+  if (session && !session.isRoot) {
+    return <Navigate to="/admin/dashboard" replace />
   }
 
   return (

@@ -3,6 +3,7 @@ import { App, Button, Card, Spin, Table, Tag, Typography } from 'antd'
 import { HeartFilled, HeartOutlined, TrophyOutlined } from '@ant-design/icons'
 
 import { useSession } from '@/features/auth/useSession'
+import { AdminGeoScopeFilters, type AdminGeoScope } from '@/features/admin/components/AdminGeoScopeFilters'
 import { fetchVolunteerLeaderboard } from '@/services/adapters/volunteer-adapter'
 import { likeVolunteer } from '@/services/adapters/volunteer-adapter'
 import type { VolunteerProfile } from '@/types/domain'
@@ -13,17 +14,37 @@ export default function VolunteerLeaderboardPage() {
   const [data, setData] = useState<VolunteerProfile[]>([])
   const [loading, setLoading] = useState(true)
   const [likedVolunteerIds, setLikedVolunteerIds] = useState<Set<number>>(new Set())
+  const [geoScope, setGeoScope] = useState<AdminGeoScope>({})
+  const isAdmin = session?.role === 'admin'
+  const isRoot = Boolean(session?.isRoot)
 
   useEffect(() => {
     if (!session) {
       setLoading(false)
       return
     }
-    fetchVolunteerLeaderboard({ viewerUserId: session.userId })
+    setLoading(true)
+    const request = isAdmin
+      ? fetchVolunteerLeaderboard({
+          adminUserId: session.userId,
+          regionAdcode: geoScope.regionAdcode,
+          provinceName: isRoot && !geoScope.regionAdcode ? geoScope.provinceName : undefined,
+          cityName: isRoot && !geoScope.regionAdcode ? geoScope.cityName : undefined,
+        })
+      : fetchVolunteerLeaderboard({ viewerUserId: session.userId })
+
+    request
       .then(setData)
-      .catch(() => {})
+      .catch(() => setData([]))
       .finally(() => setLoading(false))
-  }, [session?.userId])
+  }, [
+    session?.userId,
+    isAdmin,
+    isRoot,
+    geoScope.regionAdcode,
+    geoScope.provinceName,
+    geoScope.cityName,
+  ])
 
   const handleLike = async (item: VolunteerProfile) => {
     if (!session || !item.userId) return
@@ -60,6 +81,12 @@ export default function VolunteerLeaderboardPage() {
         if (rank === 3) return <span className="text-2xl">🥉</span>
         return <span className="text-gray-500 font-semibold">{rank}</span>
       },
+    },
+    {
+      title: '志愿者',
+      dataIndex: 'realName',
+      key: 'realName',
+      render: (name: string | undefined) => name || '—',
     },
     {
       title: '总服务时长',
@@ -121,13 +148,22 @@ export default function VolunteerLeaderboardPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <Typography.Title level={3} className="!mb-1 flex items-center gap-2">
-          <TrophyOutlined className="text-amber-500" />荣誉墙
-        </Typography.Title>
-        <Typography.Text className="text-gray-500">
-          {roleLabel}可查看志愿者本周时长排行并点赞鼓励
-        </Typography.Text>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <Typography.Title level={3} className="!mb-1 flex items-center gap-2">
+            <TrophyOutlined className="text-amber-500" />荣誉墙
+          </Typography.Title>
+          <Typography.Text className="text-gray-500">
+            {roleLabel}可查看志愿者本周时长排行并点赞鼓励
+            {isAdmin ? '；总管理员可按省市切换，区管理员仅看管辖区' : '（按所属区县）'}
+          </Typography.Text>
+        </div>
+        {isAdmin ? (
+          <AdminGeoScopeFilters
+            value={geoScope}
+            onChange={setGeoScope}
+          />
+        ) : null}
       </div>
 
       <Card className="!rounded-2xl">

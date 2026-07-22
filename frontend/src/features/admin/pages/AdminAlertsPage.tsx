@@ -1,19 +1,65 @@
-import { useEffect, useState } from 'react'
-import { Alert, App, Button, Card, Form, Input, List, Modal, Space, Spin, Tag, Typography } from 'antd'
-import { AlertOutlined, CheckCircleOutlined, WarningOutlined } from '@ant-design/icons'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Empty,
+  Form,
+  Input,
+  Modal,
+  Segmented,
+  Select,
+  Space,
+  Spin,
+  Tag,
+  Typography,
+} from 'antd'
+import {
+  AlertOutlined,
+  ArrowLeftOutlined,
+  CheckCircleOutlined,
+  ReloadOutlined,
+  SendOutlined,
+  WarningOutlined,
+} from '@ant-design/icons'
 
 import { fetchAdminAlerts, handleAdminAlert } from '@/services/adapters/admin-adapter'
-import { manuallyAssignDispatchOrder, startManualSosService, type ManualSosCandidate } from '@/services/adapters/dispatch-adapter'
+import { redispatchDispatchOrder, SOS_SKILL_OPTIONS, startAutoSosService } from '@/services/adapters/dispatch-adapter'
+import {
+  fetchConversationMessages,
+  sendConversationMessage,
+  type ConversationMessage,
+} from '@/services/adapters/conversation-adapter'
+import { AdminGeoScopeFilters, type AdminGeoScope } from '@/features/admin/components/AdminGeoScopeFilters'
 import { AdminRegionScopeNotice } from '@/features/admin/components/AdminRegionScopeNotice'
 import { useSession } from '@/features/auth/useSession'
 import type { AlertItem } from '@/types/domain'
 
-const statusPresentation: Record<string, { label: string; color: string }> = {
-  reported: { label: '待社区接警', color: 'red' },
-  acknowledged: { label: '已接警，正在处置', color: 'blue' },
-  dispatching: { label: '志愿服务调度中', color: 'orange' },
-  awaiting_admin_close: { label: '服务已完成，待确认关闭', color: 'gold' },
-  resolved: { label: '已处理并关闭', color: 'green' },
+const statusPresentation: Record<string, { label: string; color: string; tier: string }> = {
+  reported: { label: '待接警', color: 'red', tier: 'P0' },
+  acknowledged: { label: '已接警处置中', color: 'blue', tier: '进行中' },
+  dispatching: { label: '志愿服务调度中', color: 'orange', tier: '进行中' },
+  awaiting_admin_close: { label: '待确认已处理', color: 'gold', tier: '待确认' },
+  resolved: { label: '已处理', color: 'green', tier: '已归档' },
+}
+
+type StageFilter = 'actionable' | 'active' | 'closing' | 'closed' | 'all'
+
+const quickMessages = ['已确认接警', '正在联系家属', '志愿者已出发', '请保持电话畅通']
+
+function incidentOf(item: AlertItem) {
+  return item.incidentStatus || (item.status === 'handled' ? 'resolved' : 'reported')
+}
+
+function matchesStage(item: AlertItem, stage: StageFilter) {
+  const status = incidentOf(item)
+  if (stage === 'all') return true
+  if (stage === 'actionable') return status === 'reported'
+  if (stage === 'active') return status === 'acknowledged' || status === 'dispatching'
+  if (stage === 'closing') return status === 'awaiting_admin_close'
+  if (stage === 'closed') return status === 'resolved'
+  return true
 }
 
 export default function AdminAlertsPage() {
@@ -21,91 +67,425 @@ export default function AdminAlertsPage() {
   const { session } = useSession()
   const [alerts, setAlerts] = useState<AlertItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [geoScope, setGeoScope] = useState<AdminGeoScope>({})
+  const [stage, setStage] = useState<StageFilter>('actionable')
+  const [activeAlertId, setActiveAlertId] = useState<number | null>(null)
+  const [messages, setMessages] = useState<ConversationMessage[]>([])
+  const [draft, setDraft] = useState('')
+  const [chatLoading, setChatLoading] = useState(false)
   const [actionId, setActionId] = useState<number | null>(null)
   const [closeTarget, setCloseTarget] = useState<AlertItem | null>(null)
-  const [assignmentTarget, setAssignmentTarget] = useState<{ orderId: number; candidates: ManualSosCandidate[] } | null>(null)
   const [closeForm] = Form.useForm<{ summary: string }>()
+  const [skillTarget, setSkillTarget] = useState<AlertItem | null>(null)
+  const [skillForm] = Form.useForm<{ skills: string[] }>()
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!session) return
     setLoading(true)
-    try { setAlerts(await fetchAdminAlerts(session.userId)) } catch { message.error('告警中心加载失败') } finally { setLoading(false) }
-  }
-  useEffect(() => { void load() }, [session?.userId])
+    try {
+      setAlerts(await fetchAdminAlerts(session.userId, {
+        regionAdcode: geoScope.regionAdcode,
+        provinceName: !geoScope.regionAdcode ? geoScope.provinceName : undefined,
+        cityName: !geoScope.regionAdcode ? geoScope.cityName : undefined,
+      }))
+    } catch {
+      message.error('告警中心加载失败')
+    } finally {
+      setLoading(false)
+    }
+  }, [session, geoScope.regionAdcode, geoScope.provinceName, geoScope.cityName, message])
+
+  useEffect(() => { void load() }, [load])
+
+  const activeAlert = useMemo(
+    () => alerts.find((item) => item.alertId === activeAlertId) ?? null,
+    [alerts, activeAlertId],
+  )
+
+  const loadMessages = useCallback(async (conversationId?: number | null) => {
+    if (!session || !conversationId) {
+      setMessages([])
+      return
+    }
+    try {
+      setMessages(await fetchConversationMessages(conversationId, session.userId))
+    } catch {
+      setMessages([])
+    }
+  }, [session])
+
+  useEffect(() => {
+    if (!activeAlert) return
+    void loadMessages(activeAlert.conversationId)
+    const timer = window.setInterval(() => {
+      void loadMessages(activeAlert.conversationId)
+      void load()
+    }, 4000)
+    return () => window.clearInterval(timer)
+  }, [activeAlert?.alertId, activeAlert?.conversationId, loadMessages, load])
+
+  const filtered = useMemo(() => alerts.filter((item) => matchesStage(item, stage)), [alerts, stage])
+
+  const stageCounts = useMemo(() => ({
+    actionable: alerts.filter((item) => matchesStage(item, 'actionable')).length,
+    active: alerts.filter((item) => matchesStage(item, 'active')).length,
+    closing: alerts.filter((item) => matchesStage(item, 'closing')).length,
+    closed: alerts.filter((item) => matchesStage(item, 'closed')).length,
+    all: alerts.length,
+  }), [alerts])
 
   const acknowledge = async (item: AlertItem) => {
     if (!session) return
     setActionId(item.alertId)
-    try { message.success((await handleAdminAlert(item.alertId, session.userId, 'acknowledge')).message); await load() }
-    catch (error: any) { message.error(error?.message || '确认接警失败') }
-    finally { setActionId(null) }
-  }
-  const startService = async (item: AlertItem) => {
-    if (!session || !item.incidentId) return
-    setActionId(item.alertId)
     try {
-      const result = await startManualSosService(item.incidentId, session.userId)
-      setAssignmentTarget({ orderId: result.data.order_id, candidates: result.data.candidates || [] })
-      message.success('已计算本区技能匹配候选人，请确认派单')
+      message.success((await handleAdminAlert(item.alertId, session.userId, 'acknowledge')).message)
       await load()
-    } catch (error: any) { message.error(error?.message || '启动志愿服务失败') }
-    finally { setActionId(null) }
+    } catch (error: any) {
+      message.error(error?.message || '确认接警失败')
+    } finally {
+      setActionId(null)
+    }
   }
-  const assignVolunteer = async (candidate: ManualSosCandidate) => {
-    if (!session || !assignmentTarget) return
-    setActionId(candidate.volunteer_id)
+
+  const openSkillPicker = (item: AlertItem) => {
+    setSkillTarget(item)
+    skillForm.setFieldsValue({ skills: ['emergency_response', 'medical_support'] })
+  }
+
+  const confirmAutoService = async () => {
+    if (!session || !skillTarget?.incidentId) return
+    const values = await skillForm.validateFields()
+    const skills = values.skills || []
+    setActionId(skillTarget.alertId)
     try {
-      message.success((await manuallyAssignDispatchOrder(assignmentTarget.orderId, {
-        adminUserId: session.userId, volunteerId: candidate.volunteer_id,
-        reason: '管理员在 SOS 告警中心人工指定技能匹配志愿者',
-      })).message)
-      setAssignmentTarget(null); await load()
-    } catch (error: any) { message.error(error?.message || '人工派单失败') }
-    finally { setActionId(null) }
+      const result = await startAutoSosService(skillTarget.incidentId, session.userId, skills)
+      message.success(result.message || '已按所选技能启动自动派单')
+      skillForm.resetFields()
+      setSkillTarget(null)
+      await load()
+      if (skillTarget.conversationId) await loadMessages(skillTarget.conversationId)
+    } catch (error: any) {
+      message.error(error?.message || '启动自动派单失败')
+    } finally {
+      setActionId(null)
+    }
   }
+
   const confirmClose = async () => {
     if (!session || !closeTarget) return
     const values = await closeForm.validateFields()
     setActionId(closeTarget.alertId)
     try {
       message.success((await handleAdminAlert(closeTarget.alertId, session.userId, 'close', values.summary)).message)
-      closeForm.resetFields(); setCloseTarget(null); await load()
-    } catch (error: any) { message.error(error?.message || '关闭 SOS 事件失败') }
-    finally { setActionId(null) }
+      closeForm.resetFields()
+      setCloseTarget(null)
+      await load()
+    } catch (error: any) {
+      message.error(error?.message || '标记已处理失败')
+    } finally {
+      setActionId(null)
+    }
   }
 
-  if (loading) return <div className="flex justify-center py-20"><Spin size="large" /></div>
-  return <div className="space-y-6">
-    <AdminRegionScopeNotice />
-    <div><Typography.Title level={3} className="!mb-1"><AlertOutlined className="mr-2 text-red-500" />告警中心</Typography.Title><Typography.Text type="secondary">本区管理员主处置；总管理员同步查看。SOS 的接警、派单、服务完成和关闭全程留痕。</Typography.Text></div>
-    <Alert showIcon type="info" message="SOS 闭环规则" description="确认接警不等于关闭；服务完成后系统自动提示管理员确认风险是否解除。只有填写处置结果后，SOS 才会关闭。" />
-    <Card className="!rounded-2xl">
-      <List dataSource={alerts} locale={{ emptyText: '暂无告警' }} renderItem={(item) => {
-        const isSos = item.category === 'sos' && Boolean(item.incidentId)
-        const incident = item.incidentStatus || (item.status === 'handled' ? 'resolved' : 'reported')
-        const display = statusPresentation[incident] || { label: incident, color: 'default' }
-        const active = isSos && incident !== 'resolved'
-        const serviceState = item.linkedOrderStatus === 'completed' ? '服务已完成' : item.linkedOrderStatus === 'in_progress' ? '正在服务' : item.linkedOrderStatus === 'accepted' ? '志愿者正在前往' : null
-        return <List.Item actions={active ? [
-          ...(incident === 'reported' ? [<Button key="ack" type="primary" size="small" loading={actionId === item.alertId} onClick={() => void acknowledge(item)}>确认接警</Button>] : []),
-          ...(!item.linkedOrderId ? [<Button key="service" type="primary" size="small" loading={actionId === item.alertId} onClick={() => void startService(item)}>安排志愿者</Button>] : []),
-          <Button key="close" danger={incident !== 'awaiting_admin_close'} type={incident === 'awaiting_admin_close' ? 'primary' : 'default'} size="small" loading={actionId === item.alertId} onClick={() => setCloseTarget(item)}>{incident === 'awaiting_admin_close' ? '确认已处理' : '关闭事件'}</Button>,
-        ] : [<Tag key="closed" icon={<CheckCircleOutlined />} color="green">已处理</Tag>] }>
-          <List.Item.Meta
-            avatar={item.category === 'sos' ? <AlertOutlined className="text-2xl text-red-500" /> : <WarningOutlined className="text-2xl text-orange-500" />}
-            title={<Space wrap><b>{item.category === 'sos' ? 'SOS 紧急求助' : '健康异常告警'}</b><Tag color={display.color}>{display.label}</Tag><span className="text-xs text-slate-400">{item.sourceLabel}</span></Space>}
-            description={<div className="space-y-1"><div>{item.createdAt}</div><div>{item.resolutionSummary || '等待处置记录'}</div>{item.linkedOrderId ? <div className="text-blue-700">关联服务 #{item.linkedOrderId} · {item.linkedVolunteerName || '待指派志愿者'} · {serviceState || '正在调度'}</div> : null}</div>}
-          />
-        </List.Item>
-      }} />
-    </Card>
-    <Modal open={Boolean(assignmentTarget)} title="为 SOS 指定志愿者" footer={null} onCancel={() => setAssignmentTarget(null)}>
-      <Typography.Paragraph type="secondary">仅显示本区、技能精确匹配且当前可用的志愿者；确认后系统会锁定订单并从其当前实时位置生成路线。</Typography.Paragraph>
-      <div className="space-y-2">{(assignmentTarget?.candidates || []).map((candidate) => <div key={candidate.volunteer_id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 p-3"><div><b>{candidate.volunteer_name}</b><div className="mt-1 text-xs text-slate-500">{candidate.skill_match} · {candidate.distance_km} km · ETA {candidate.eta_minutes} 分钟 · 综合 {candidate.total_score}</div></div><Button type="primary" loading={actionId === candidate.volunteer_id} onClick={() => void assignVolunteer(candidate)}>确认派单</Button></div>)}{!assignmentTarget?.candidates?.length ? <Typography.Text type="secondary">当前没有技能匹配且可用的志愿者，SOS 会保留在本区等待资源。</Typography.Text> : null}</div>
-    </Modal>
-    <Modal open={Boolean(closeTarget)} title="确认 SOS 已处理" okText="确认关闭" cancelText="取消" onCancel={() => { closeForm.resetFields(); setCloseTarget(null) }} onOk={() => void confirmClose()}>
-      <Typography.Paragraph type="secondary">请确认老人风险已经解除。若志愿服务已完成，建议填写服务结果、老人或家属确认情况。</Typography.Paragraph>
-      <Form form={closeForm} layout="vertical"><Form.Item name="summary" label="处置结果" rules={[{ required: true, message: '请填写处置结果' }]}><Input.TextArea rows={4} maxLength={1000} placeholder="例如：志愿者已完成陪护，家属确认老人安全。" /></Form.Item></Form>
-    </Modal>
-  </div>
+  const sendChat = async (content = draft, type: 'text' | 'quick_status' = 'text') => {
+    if (!session || !activeAlert?.conversationId || !content.trim()) return
+    setChatLoading(true)
+    try {
+      await sendConversationMessage(activeAlert.conversationId, {
+        userId: session.userId,
+        content: content.trim(),
+        type,
+      })
+      setDraft('')
+      await loadMessages(activeAlert.conversationId)
+      await load()
+    } catch (error: any) {
+      message.error(error?.message || '消息发送失败')
+    } finally {
+      setChatLoading(false)
+    }
+  }
+
+  const openThread = (item: AlertItem) => {
+    setActiveAlertId(item.alertId)
+    setDraft('')
+  }
+
+  const backToOverview = () => {
+    setActiveAlertId(null)
+    setMessages([])
+    setDraft('')
+    void load()
+  }
+
+  if (loading && !alerts.length) {
+    return <div className="flex justify-center py-20"><Spin size="large" /></div>
+  }
+
+  // —— WeChat-style chat detail ——
+  if (activeAlert) {
+    const status = incidentOf(activeAlert)
+    const display = statusPresentation[status] || { label: status, color: 'default', tier: '' }
+    const isSos = activeAlert.category === 'sos' && Boolean(activeAlert.incidentId)
+    const active = isSos && status !== 'resolved'
+    const linkedStatus = String(activeAlert.linkedOrderStatus || '')
+    const hasAssignee = Boolean(activeAlert.linkedVolunteerName) || ['accepted', 'in_progress', 'completed'].includes(linkedStatus)
+    const waitingAuto = active && !hasAssignee
+    const needsStartAuto = waitingAuto && !activeAlert.linkedOrderId
+
+    return (
+      <div className="mx-auto flex max-w-3xl flex-col gap-3">
+        <Card className="!rounded-2xl !border-0 !shadow-sm" styles={{ body: { padding: '12px 16px' } }}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <Space wrap>
+              <Button type="text" icon={<ArrowLeftOutlined />} onClick={backToOverview}>返回总览</Button>
+              <Typography.Title level={4} className="!mb-0">
+                {activeAlert.category === 'sos' ? 'SOS' : '健康异常'} · {activeAlert.sourceLabel}
+              </Typography.Title>
+              <Tag color={display.color}>{display.tier} · {display.label}</Tag>
+            </Space>
+            <Button size="small" icon={<ReloadOutlined />} onClick={() => void loadMessages(activeAlert.conversationId)}>刷新</Button>
+          </div>
+          <div className="mt-2 text-xs text-slate-500">
+            {[activeAlert.provinceName, activeAlert.cityName, activeAlert.regionName].filter(Boolean).join(' / ') || '本区'}
+                {activeAlert.linkedOrderId
+                  ? ` · 服务 #${activeAlert.linkedOrderId}${activeAlert.linkedVolunteerName ? ` · ${activeAlert.linkedVolunteerName}` : ' · 等待自动派单'}`
+                  : ''}
+            {` · ${activeAlert.createdAt}`}
+          </div>
+          {waitingAuto ? (
+            <Alert
+              className="!mt-3"
+              type="info"
+              showIcon
+              message={activeAlert.linkedOrderId ? '系统自动派单中' : '尚未启动志愿服务'}
+              description="请先选择需要的志愿者技能，再启动自动派单。系统只会匹配「已开自动接单 + 技能齐全 + 评分≥4 + 空闲/返程」的人；暂时没人会排队重试。"
+            />
+          ) : null}
+          {active ? (
+            <Space wrap className="mt-3">
+              {status === 'reported' ? (
+                <Button type="primary" loading={actionId === activeAlert.alertId} onClick={() => void acknowledge(activeAlert)}>确认接警</Button>
+              ) : null}
+              {needsStartAuto ? (
+                <Button type="primary" loading={actionId === activeAlert.alertId} onClick={() => openSkillPicker(activeAlert)}>
+                  选择技能并自动派单
+                </Button>
+              ) : null}
+              {waitingAuto && activeAlert.linkedOrderId ? (
+                <Button loading={actionId === activeAlert.alertId} onClick={() => openSkillPicker(activeAlert)}>
+                  调整技能并重新匹配
+                </Button>
+              ) : null}
+              {activeAlert.linkedOrderId && ['accepted', 'in_progress'].includes(linkedStatus) ? (
+                <Button
+                  danger
+                  loading={actionId === activeAlert.alertId}
+                  onClick={() => void (async () => {
+                    if (!session || !activeAlert.linkedOrderId) return
+                    setActionId(activeAlert.alertId)
+                    try {
+                      const result = await redispatchDispatchOrder(
+                        activeAlert.linkedOrderId,
+                        session.userId,
+                        '管理员介入：服务异常换人重派',
+                      )
+                      message.success(result.message)
+                      await load()
+                      if (activeAlert.conversationId) await loadMessages(activeAlert.conversationId)
+                    } catch (error: any) {
+                      message.error(error?.message || '重派失败')
+                    } finally {
+                      setActionId(null)
+                    }
+                  })()}
+                >
+                  换人重派
+                </Button>
+              ) : null}
+              <Button
+                danger={status !== 'awaiting_admin_close'}
+                type={status === 'awaiting_admin_close' ? 'primary' : 'default'}
+                onClick={() => setCloseTarget(activeAlert)}
+              >
+                {status === 'awaiting_admin_close' ? '确认已处理' : '已处理'}
+              </Button>
+            </Space>
+          ) : (
+            <Tag icon={<CheckCircleOutlined />} color="green" className="mt-3">已处理</Tag>
+          )}
+        </Card>
+
+        <Card className="!rounded-2xl" styles={{ body: { padding: 0 } }}>
+          <div className="max-h-[52vh] min-h-[320px] space-y-3 overflow-y-auto bg-[#ededed] px-4 py-4">
+            {!activeAlert.conversationId ? (
+              <Empty description="该告警尚未建立会话" />
+            ) : messages.length === 0 ? (
+              <Empty description="暂无消息，可在下方开始沟通" />
+            ) : (
+              messages.map((item) => {
+                const mine = item.sender_user_id === session?.userId
+                const system = item.message_type === 'system'
+                return (
+                  <div key={item.message_id} className={system ? 'text-center' : mine ? 'text-right' : 'text-left'}>
+                    {system ? (
+                      <span className="inline-block rounded-full bg-black/5 px-3 py-1 text-xs text-slate-500">{item.content}</span>
+                    ) : (
+                      <div className={`inline-block max-w-[78%] rounded-2xl px-3 py-2 text-left shadow-sm ${mine ? 'bg-[#95ec69] text-slate-900' : 'bg-white'}`}>
+                        <div className="mb-0.5 text-[11px] text-slate-500">{item.sender_name || (mine ? '我' : '成员')}</div>
+                        <div className="whitespace-pre-wrap break-words text-sm">{item.content}</div>
+                        {item.created_at ? <div className="mt-1 text-[10px] text-slate-400">{item.created_at}</div> : null}
+                      </div>
+                    )}
+                  </div>
+                )
+              })
+            )}
+          </div>
+          {activeAlert.conversationId && status !== 'resolved' ? (
+            <div className="space-y-2 border-t border-slate-200 bg-white p-3">
+              <Space wrap>
+                {quickMessages.map((item) => (
+                  <Button key={item} size="small" onClick={() => void sendChat(item, 'quick_status')}>{item}</Button>
+                ))}
+              </Space>
+              <div className="flex gap-2">
+                <Input.TextArea
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  autoSize={{ minRows: 1, maxRows: 4 }}
+                  maxLength={1000}
+                  placeholder="输入消息…"
+                  onPressEnter={(event) => {
+                    if (!event.shiftKey) {
+                      event.preventDefault()
+                      void sendChat()
+                    }
+                  }}
+                />
+                <Button type="primary" icon={<SendOutlined />} loading={chatLoading} onClick={() => void sendChat()}>发送</Button>
+              </div>
+            </div>
+          ) : (
+            <div className="border-t border-slate-200 bg-slate-50 px-4 py-3 text-center text-sm text-slate-500">
+              会话已归档，仅可查看历史记录
+            </div>
+          )}
+        </Card>
+
+        <Modal open={Boolean(closeTarget)} title="确认 SOS 已处理" okText="确认已处理" cancelText="取消" onCancel={() => { closeForm.resetFields(); setCloseTarget(null) }} onOk={() => void confirmClose()}>
+          <Typography.Paragraph type="secondary">请确认老人风险已经解除，并填写处置结果。确认后该 SOS 将标记为已处理。</Typography.Paragraph>
+          <Form form={closeForm} layout="vertical">
+            <Form.Item name="summary" label="处置结果" rules={[{ required: true, message: '请填写处置结果' }]}>
+              <Input.TextArea rows={4} maxLength={1000} placeholder="例如：志愿者已完成陪护，家属确认老人安全。" />
+            </Form.Item>
+          </Form>
+        </Modal>
+        <Modal
+          open={Boolean(skillTarget)}
+          title="选择所需志愿者技能"
+          okText="按技能自动派单"
+          cancelText="取消"
+          confirmLoading={actionId === skillTarget?.alertId}
+          onCancel={() => { skillForm.resetFields(); setSkillTarget(null) }}
+          onOk={() => void confirmAutoService()}
+        >
+          <Typography.Paragraph type="secondary">
+            系统只会找同时满足：已开自动接单、具备下列全部技能、评分≥4、空闲或返程的志愿者。急救响应会默认保留。
+          </Typography.Paragraph>
+          <Form form={skillForm} layout="vertical">
+            <Form.Item
+              name="skills"
+              label="需要的技能"
+              rules={[{ required: true, type: 'array', min: 1, message: '请至少选择一项技能' }]}
+            >
+              <Select
+                mode="multiple"
+                placeholder="选择技能"
+                options={SOS_SKILL_OPTIONS.map((item) => ({ value: item.code, label: item.label }))}
+              />
+            </Form.Item>
+          </Form>
+        </Modal>
+      </div>
+    )
+  }
+
+  // —— Overview session list ——
+  return (
+    <div className="space-y-5">
+      <AdminRegionScopeNotice />
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <Typography.Title level={3} className="!mb-1">
+            <AlertOutlined className="mr-2 text-red-500" />告警会话总览
+          </Typography.Title>
+          <Typography.Text type="secondary">
+            区管理员只看系统平均分配给自己的 SOS；总管理可看全部。点击进入聊天详情。
+          </Typography.Text>
+        </div>
+        <Space wrap>
+          <AdminGeoScopeFilters value={geoScope} onChange={setGeoScope} />
+          <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
+        </Space>
+      </div>
+
+      <Segmented
+        value={stage}
+        onChange={(value) => setStage(value as StageFilter)}
+        options={[
+          { label: `待接警 (${stageCounts.actionable})`, value: 'actionable' },
+          { label: `处置中 (${stageCounts.active})`, value: 'active' },
+          { label: `待确认 (${stageCounts.closing})`, value: 'closing' },
+          { label: `已处理 (${stageCounts.closed})`, value: 'closed' },
+          { label: `全部 (${stageCounts.all})`, value: 'all' },
+        ]}
+      />
+      <Card className="!rounded-2xl !overflow-hidden" styles={{ body: { padding: 0 } }}>
+        {filtered.length === 0 ? (
+          <div className="py-16"><Empty description="当前分级下暂无告警会话" /></div>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {filtered.map((item) => {
+              const status = incidentOf(item)
+              const display = statusPresentation[status] || { label: status, color: 'default', tier: '' }
+              const isSos = item.category === 'sos'
+              const preview = item.lastMessage || item.resolutionSummary || '点击进入会话详情'
+              const place = [item.cityName || item.provinceName, item.regionName].filter(Boolean).join(' · ')
+              return (
+                <button
+                  key={item.alertId}
+                  type="button"
+                  className="flex w-full items-start gap-3 px-4 py-3 text-left transition hover:bg-slate-50"
+                  onClick={() => openThread(item)}
+                >
+                  <div className={`mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${isSos ? 'bg-red-500 text-white' : 'bg-amber-500 text-white'}`}>
+                    {isSos ? <AlertOutlined /> : <WarningOutlined />}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="truncate font-medium text-slate-900">
+                        {isSos ? 'SOS' : '健康异常'} · {item.sourceLabel}
+                      </div>
+                      <span className="shrink-0 text-xs text-slate-400">{item.lastMessageAt || item.createdAt}</span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1">
+                      <Tag color={display.color}>{display.label}</Tag>
+                      {place ? <span className="text-xs text-slate-400">{place}</span> : null}
+                      {item.linkedVolunteerName ? (
+                        <span className="text-xs text-blue-600">{item.linkedVolunteerName}</span>
+                      ) : isSos && status !== 'resolved' ? (
+                        <span className="text-xs text-rose-600">等待自动派单中</span>
+                      ) : null}
+                    </div>
+                    <div className="mt-1 truncate text-sm text-slate-500">{preview}</div>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </Card>
+    </div>
+  )
 }

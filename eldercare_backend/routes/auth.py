@@ -100,11 +100,20 @@ def login():
 
             if user and user['password_hash'] == password:
                 review_status = 'none'
+                is_root = False
+                region_scopes: list[str] = []
                 if user['role'] == 'volunteer':
                     cursor.execute("SELECT audit_status FROM volunteers_profile WHERE user_id = %s", (user['user_id'],))
                     profile = cursor.fetchone()
                     if profile:
                         review_status = 'pending_review' if profile['audit_status'] == 'pending' else profile['audit_status']
+                if user['role'] == 'admin':
+                    cursor.execute(
+                        "SELECT region_adcode FROM admin_region_scope WHERE admin_user_id = %s",
+                        (user['user_id'],),
+                    )
+                    region_scopes = [str(row['region_adcode']) for row in cursor.fetchall()]
+                    is_root = '*' in region_scopes
 
                 return api_response({
                     "code": 200,
@@ -116,6 +125,8 @@ def login():
                         "real_name": user['real_name'],
                         "email": user.get('email'),
                         "review_status": review_status,
+                        "is_root": is_root,
+                        "region_scopes": region_scopes,
                         "token": f"token-{user['user_id']}" 
                     }
                 }, 200)

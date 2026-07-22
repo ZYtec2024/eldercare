@@ -324,28 +324,9 @@ def update_order_status():
                 return jsonify({"code": 200, "message": "服务已开始！"})
 
             if action == 'cancel':
-                cursor.execute("SELECT order_id FROM dispatch_orders WHERE order_id = %s", (order_id,))
-                is_smart_dispatch = cursor.fetchone()
-                if order.get('status') not in ['accepted', 'in_progress']:
-                    conn.rollback()
-                    return jsonify({"code": 400, "message": "当前状态不支持中止"})
-
-                if is_smart_dispatch:
-                    if order.get('status') != 'accepted':
-                        conn.rollback()
-                        return jsonify({"code": 409, "message": "智能订单服务开始后不能取消，请完成服务"}), 409
-                    from routes.dispatch import _order_context, _release_dispatch_order
-                    smart_order = _order_context(cursor, int(order_id))
-                    _release_dispatch_order(cursor, smart_order, int(volunteer_id), "volunteer_assignment_cancelled", "志愿者从任务详情取消，系统已立即重新计算下一位最优候选。")
-                    conn.commit()
-                    return jsonify({"code": 200, "message": "已取消接单，系统正在重新派单"})
-
-                cursor.execute(
-                    "UPDATE orders SET status = 'pending', volunteer_id = NULL WHERE order_id = %s",
-                    (order_id,),
-                )
-                conn.commit()
-                return jsonify({"code": 200, "message": "任务已中止并回到任务大厅"})
+                # 已接单/服务中视为已出发：志愿者不可取消；老人端可取消。
+                conn.rollback()
+                return jsonify({"code": 403, "message": "已接单出发后不能取消，如需结束请由老人取消本次帮助"}), 403
 
             if action == 'complete':
                 if order.get('status') != 'in_progress':
@@ -486,6 +467,8 @@ def get_leaderboard():
     admin_user_id = request.args.get('admin_user_id')
     viewer_user_id = request.args.get('viewer_user_id')
     requested_region = request.args.get('region_adcode')
+    province_name = (request.args.get('province_name') or '').strip()
+    city_name = (request.args.get('city_name') or '').strip()
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
@@ -509,14 +492,33 @@ def get_leaderboard():
                 if not is_global and requested_region not in regions:
                     return jsonify({"code": 403, "message": "无权查看其他区县排名"}), 403
                 is_global, regions = False, {str(requested_region)}
-            # 💎 高分点：多表 JOIN + 子查询聚合，按本周时长统计荣誉大厅
+            # Root may filter by province / city across opened districts.
+            if admin_user_id and is_global and (province_name or city_name):
+                clauses = ["1=1"]
+                params = []
+                if province_name:
+                    clauses.append("province_name = %s")
+                    params.append(province_name)
+                if city_name:
+                    clauses.append("city_name = %s")
+                    params.append(city_name)
+                cursor.execute(
+                    f"SELECT adcode FROM administrative_regions WHERE {' AND '.join(clauses)}",
+                    tuple(params),
+                )
+                regions = {str(row['adcode']) for row in cursor.fetchall()}
+                if not regions:
+                    return jsonify({"code": 200, "message": "获取榜单成功", "data": []})
+                is_global = False
             sql = """
                 SELECT 
                     u.user_id, u.real_name, 
                     vp.total_hours, vp.weekly_hours, vp.likes_count, vp.awards, vp.skills,
-                    COALESCE(c.completed_count, 0) AS completed_count
+                    COALESCE(c.completed_count, 0) AS completed_count,
+                    loc.service_region_adcode AS region_adcode
                 FROM users u
                 JOIN volunteers_profile vp ON u.user_id = vp.user_id
+                JOIN volunteer_location_state loc ON loc.volunteer_id = u.user_id
                 LEFT JOIN (
                     SELECT volunteer_id, COUNT(*) AS completed_count
                     FROM orders
@@ -525,10 +527,13 @@ def get_leaderboard():
                 ) c ON c.volunteer_id = u.user_id
                 WHERE u.role = 'volunteer'
                 ORDER BY vp.weekly_hours DESC, vp.likes_count DESC, vp.total_hours DESC
-                LIMIT 10
+                LIMIT 20
             """
             if not is_global:
-                sql = sql.replace("WHERE u.role = 'volunteer'", "JOIN volunteer_location_state loc ON loc.volunteer_id = u.user_id WHERE u.role = 'volunteer' AND loc.service_region_adcode IN %s")
+                sql = sql.replace(
+                    "WHERE u.role = 'volunteer'",
+                    "WHERE u.role = 'volunteer' AND loc.service_region_adcode IN %s",
+                )
                 cursor.execute(sql, (tuple(regions),))
             else:
                 cursor.execute(sql)
@@ -596,15 +601,21 @@ def get_my_tasks():
                     o.service_type,
                     o.service_time,
                     o.service_hours,
-                    o.status,
+                    CASE
+                        WHEN c.response_status = 'rejected' AND NOT (o.volunteer_id = %s AND o.status IN ('accepted', 'in_progress', 'completed'))
+                            THEN 'closed'
+                        ELSE o.status
+                    END AS status,
                     e.name AS elder_name,
                     COALESCE(o.address, e.address) AS address_preview
                 FROM orders o
                 JOIN elders e ON o.elder_id = e.elder_id
+                LEFT JOIN dispatch_candidates c ON c.order_id = o.order_id AND c.volunteer_id = %s
                 WHERE o.volunteer_id = %s
+                   OR c.response_status = 'rejected'
                 ORDER BY o.service_time DESC
             """
-            cursor.execute(sql, (volunteer_id,))
+            cursor.execute(sql, (volunteer_id, volunteer_id, volunteer_id))
             rows = cursor.fetchall()
 
             for row in rows:

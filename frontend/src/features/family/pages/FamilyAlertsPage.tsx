@@ -1,86 +1,57 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { App, Button, Card, Empty, Spin, Table, Tag, Typography } from 'antd'
+import { Alert, App, Button, Card, Empty, Spin, Table, Tag, Typography } from 'antd'
 import { BellOutlined, WarningOutlined } from '@ant-design/icons'
+import { useNavigate } from 'react-router-dom'
 
-type FamilyAlertRow = {
-  alertId: number
-  category: 'sos' | 'health_warning'
-  elderName: string
-  description: string
-  timestamp: string
-  handled: boolean
-}
+import { useSession } from '@/features/auth/useSession'
+import { ackFamilyAlert, fetchFamilyAlerts, type FamilyAlertItem } from '@/services/adapters/family-adapter'
 
-function normalizeCategory(value: unknown): 'sos' | 'health_warning' {
-  return String(value) === 'sos' ? 'sos' : 'health_warning'
-}
-
-function normalizeTime(value: unknown): string {
-  if (typeof value === 'string') return value
-  if (value instanceof Date) return value.toLocaleString('zh-CN', { hour12: false })
-  return ''
+const statusText: Record<string, string> = {
+  reported: '已通知，等待社区接警',
+  acknowledged: '社区已接警处置中',
+  dispatching: '正在安排志愿者',
+  awaiting_admin_close: '等待社区结案',
+  resolved: '已结束',
 }
 
 export default function FamilyAlertsPage() {
+  const { session } = useSession()
   const { message } = App.useApp()
-  const [alerts, setAlerts] = useState<FamilyAlertRow[]>([])
+  const navigate = useNavigate()
+  const [alerts, setAlerts] = useState<FamilyAlertItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [handlingId, setHandlingId] = useState<number | null>(null)
+  const [ackingId, setAckingId] = useState<number | null>(null)
 
   const loadAlerts = async () => {
+    if (!session) return
     try {
-      const response = await fetch('/api/admin/alerts', {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      })
-      const json = await response.json()
-      if (json.code === 200 && Array.isArray(json.data)) {
-        const mapped = json.data.map((item: Record<string, unknown>) => ({
-          alertId: Number(item.alert_id ?? item.alertId ?? 0),
-          category: normalizeCategory(item.alert_type ?? item.category),
-          elderName: String(item.elder_name ?? item.elderName ?? '长辈'),
-          description: String(item.description ?? ''),
-          timestamp: normalizeTime(item.created_at ?? item.createdAt),
-          handled: Boolean(item.is_handled ?? item.handled),
-        }))
-        setAlerts(mapped)
-      }
-    } catch (err) {
-      message.error('加载告警列表失败')
+      setAlerts(await fetchFamilyAlerts(session.userId))
+    } catch (err: any) {
+      message.error(err?.message || '加载告警列表失败')
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    loadAlerts()
-    const timer = setInterval(loadAlerts, 5000)
-    return () => clearInterval(timer)
-  }, [message])
+    void loadAlerts()
+    const timer = window.setInterval(() => void loadAlerts(), 5000)
+    return () => window.clearInterval(timer)
+  }, [session?.userId])
 
-  const handleAlert = async (alertId: number) => {
-    setHandlingId(alertId)
+  const unread = alerts.filter((item) => item.unread)
+  const handleAck = async (item: FamilyAlertItem) => {
+    if (!session) return
+    setAckingId(item.notificationId)
     try {
-      const response = await fetch('/api/admin/alerts/handle', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ alert_id: alertId }),
-      })
-      const json = await response.json()
-      if (json.code === 200) {
-        message.success(json.message || '处理成功')
-        await loadAlerts()
-      } else {
-        message.error(json.message || '处理失败')
-      }
-    } catch (err) {
-      message.error('处理失败')
+      await ackFamilyAlert(session.userId, item.notificationId)
+      message.success('已确认收到')
+      await loadAlerts()
+    } catch (err: any) {
+      message.error(err?.message || '确认失败')
     } finally {
-      setHandlingId(null)
+      setAckingId(null)
     }
   }
 
@@ -96,7 +67,7 @@ export default function FamilyAlertsPage() {
       title: '告警类型',
       dataIndex: 'category',
       key: 'category',
-      render: (category: string) => {
+      render: (category: FamilyAlertItem['category']) => {
         const config = alertTypeConfig[category] || { color: 'default', icon: <BellOutlined />, text: category }
         return <Tag color={config.color} icon={config.icon}>{config.text}</Tag>
       },
@@ -113,34 +84,41 @@ export default function FamilyAlertsPage() {
     },
     {
       title: '发生时间',
-      dataIndex: 'timestamp',
-      key: 'timestamp',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
       render: (time: string) => <span className="text-gray-500 text-sm">{time}</span>,
     },
     {
       title: '状态',
-      dataIndex: 'handled',
-      key: 'handled',
-      render: (handled: boolean) => (
-        <Tag color={handled ? 'green' : 'blue'}>
-          {handled ? '已处理' : '待处理'}
+      dataIndex: 'status',
+      key: 'status',
+      render: (status: string, record: FamilyAlertItem) => (
+        <Tag color={record.unread ? 'red' : status === 'resolved' ? 'green' : 'blue'}>
+          {record.unread ? '未读 · ' : ''}{statusText[status] || status}
         </Tag>
       ),
     },
     {
       title: '操作',
       key: 'action',
-      render: (_: unknown, record: FamilyAlertRow) => (
-        record.handled ? null : (
-          <Button
-            type="primary"
-            size="small"
-            loading={handlingId === record.alertId}
-            onClick={() => handleAlert(record.alertId)}
-          >
-            处理
-          </Button>
-        )
+      render: (_: unknown, record: FamilyAlertItem) => (
+        <div className="flex flex-wrap gap-2">
+          {record.conversationId ? (
+            <Button size="small" onClick={() => navigate(`/conversations?id=${record.conversationId}`)}>
+              打开求助群聊
+            </Button>
+          ) : null}
+          {record.unread ? (
+            <Button
+              type="primary"
+              size="small"
+              loading={ackingId === record.notificationId}
+              onClick={() => void handleAck(record)}
+            >
+              我知道了
+            </Button>
+          ) : null}
+        </div>
       ),
     },
   ]
@@ -153,9 +131,25 @@ export default function FamilyAlertsPage() {
           异常告警
         </Typography.Title>
         <Typography.Text className="text-gray-500">
-          查看长辈的健康异常与 SOS 求助等重要告警事件
+          长辈一键求助后，这里和右上角都会出现提示
         </Typography.Text>
       </div>
+
+      {unread.length ? (
+        <Alert
+          type="error"
+          showIcon
+          message={`您有 ${unread.length} 条未读求助提醒`}
+          description={unread.slice(0, 3).map((item) => `${item.elderName}：${item.description}`).join('；')}
+          action={
+            unread[0]?.conversationId ? (
+              <Button size="small" danger onClick={() => navigate(`/conversations?id=${unread[0].conversationId}`)}>
+                立即查看
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : null}
 
       <Card className="!rounded-2xl">
         {alerts.length === 0 ? (
@@ -164,7 +158,7 @@ export default function FamilyAlertsPage() {
           <Table
             dataSource={alerts}
             columns={columns}
-            rowKey="alertId"
+            rowKey="notificationId"
             pagination={{ pageSize: 20 }}
             size="middle"
           />

@@ -145,6 +145,8 @@ export async function fetchAdminUsers(filters: {
   role?: Role | 'all'
   keyword?: string
   regionAdcode?: string
+  provinceName?: string
+  cityName?: string
   page?: number
   pageSize?: number
 }) {
@@ -155,6 +157,8 @@ export async function fetchAdminUsers(filters: {
       role: filters.role && filters.role !== 'all' ? filters.role : undefined,
       keyword: filters.keyword || undefined,
       region_adcode: filters.regionAdcode || undefined,
+      province_name: filters.provinceName || undefined,
+      city_name: filters.cityName || undefined,
       page: filters.page ?? 1,
       limit: filters.pageSize ?? 10,
       admin_user_id: filters.adminUserId,
@@ -178,8 +182,18 @@ export async function fetchAdminUsers(filters: {
   }
 }
 
-export async function fetchAdminAlerts(adminUserId: number) {
-  const response = await http.get<ApiEnvelope<Array<Record<string, unknown>>>>('/admin/alerts', { params: { admin_user_id: adminUserId } })
+export async function fetchAdminAlerts(
+  adminUserId: number,
+  geo?: { regionAdcode?: string; provinceName?: string; cityName?: string },
+) {
+  const response = await http.get<ApiEnvelope<Array<Record<string, unknown>>>>('/admin/alerts', {
+    params: {
+      admin_user_id: adminUserId,
+      region_adcode: geo?.regionAdcode,
+      province_name: geo?.provinceName,
+      city_name: geo?.cityName,
+    },
+  })
   const payload = response.data.data
 
   if (!Array.isArray(payload)) {
@@ -195,9 +209,11 @@ export async function fetchAdminAlerts(adminUserId: number) {
       ? 'acknowledged'
       : alert.incident_status === 'dispatching'
         ? 'dispatching'
-        : alert.is_handled || alert.incident_status === 'resolved'
-          ? 'handled'
-          : 'new') as AlertItem['status'],
+        : alert.incident_status === 'awaiting_admin_close'
+          ? 'dispatching'
+          : alert.is_handled || alert.incident_status === 'resolved'
+            ? 'handled'
+            : 'new') as AlertItem['status'],
     sourceLabel: String(alert.elder_name ?? alert.sourceLabel ?? '老人告警'),
     linkedEntityId: toNumber(alert.linkedEntityId ?? alert.elder_id),
     resolutionSummary: typeof alert.resolution_summary === 'string'
@@ -211,6 +227,12 @@ export async function fetchAdminAlerts(adminUserId: number) {
     linkedVolunteerName: typeof alert.linked_volunteer_name === 'string' ? alert.linked_volunteer_name : null,
     acknowledgedAt: typeof alert.acknowledged_at === 'string' ? alert.acknowledged_at : undefined,
     resolvedAt: typeof alert.resolved_at === 'string' ? alert.resolved_at : undefined,
+    lastMessage: typeof alert.last_message === 'string' ? alert.last_message : null,
+    lastMessageAt: typeof alert.last_message_at === 'string' ? alert.last_message_at : formatDateTime(alert.last_message_at) || null,
+    regionAdcode: alert.region_adcode == null ? null : String(alert.region_adcode),
+    regionName: typeof alert.region_name === 'string' ? alert.region_name : null,
+    provinceName: typeof alert.province_name === 'string' ? alert.province_name : null,
+    cityName: typeof alert.city_name === 'string' ? alert.city_name : null,
   }))
 }
 

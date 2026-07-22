@@ -6,6 +6,17 @@ import { useNavigate } from 'react-router-dom'
 import { useSession } from '@/features/auth/useSession'
 import { createEmergencyIncident, fetchEmergencyIncidents, type EmergencyIncident } from '@/services/adapters/elder-adapter'
 
+const volunteerSkillOptions = [
+  { value: 'emergency_response', label: '急救响应' },
+  { value: 'medical_support', label: '医疗陪护' },
+  { value: 'mobility_assist', label: '行动辅助' },
+  { value: 'errand', label: '代办采购' },
+  { value: 'companion', label: '陪伴沟通' },
+  { value: 'rehab', label: '康复训练' },
+  { value: 'digital_assist', label: '智能设备协助' },
+  { value: 'grooming', label: '生活照护' },
+]
+
 function statusLabel(status: string) {
   if (status === 'reported') return '已通知家人，请稍等'
   if (status === 'acknowledged') return '社区已收到，正在处理'
@@ -45,6 +56,7 @@ export default function ElderSosPage() {
         incidentType: values.incidentType,
         description: values.description,
         dispatchService,
+        requiredSkills: values.requiredSkills,
       })
       message.success(dispatchService ? '已通知家人，并开始帮您找志愿者' : '已通知家人和社区')
       if (dispatchService) {
@@ -120,7 +132,7 @@ export default function ElderSosPage() {
             </Button>
           </div>
         ) : (
-          <Form form={form} layout="vertical" initialValues={{ incidentType: 'unwell' }}>
+          <Form form={form} layout="vertical" initialValues={{ incidentType: 'unwell', requiredSkills: ['emergency_response', 'medical_support'] }}>
             <Typography.Title level={4} className="!mt-0">说明一下情况</Typography.Title>
             <Form.Item name="incidentType" label="遇到了什么" rules={[{ required: true }]}>
               <Select
@@ -135,8 +147,15 @@ export default function ElderSosPage() {
               />
             </Form.Item>
             <Form.Item
+              name="requiredSkills"
+              label="想找什么类型的志愿者"
+              rules={[{ required: true, message: '请至少选一种能力' }]}
+            >
+              <Select mode="multiple" size="large" options={volunteerSkillOptions} placeholder="可多选" />
+            </Form.Item>
+            <Form.Item
               name="description"
-              label="再补充几句（可选写清楚更好）"
+              label="说明情况"
               rules={[{ required: true, message: '请简单说一下需要什么帮助' }]}
             >
               <Input.TextArea
@@ -174,9 +193,15 @@ export default function ElderSosPage() {
               return (
                 <div key={incident.incidentId} className="rounded-xl border border-slate-100 p-4">
                   <Space wrap>
-                    <Tag color={active ? 'red' : 'green'} className="!text-sm !px-2 !py-0.5">
-                      {statusLabel(incident.status)}
-                    </Tag>
+                    {active ? (
+                      <Tag color="red" className="!text-sm !px-2 !py-0.5">
+                        {statusLabel(incident.status)}
+                      </Tag>
+                    ) : (
+                      <Tag color="success" className="!text-sm !px-2 !py-0.5 !border-emerald-300 !bg-emerald-50 !text-emerald-700">
+                        这件事已经结束
+                      </Tag>
+                    )}
                     <span className="text-gray-500">{incident.createdAt}</span>
                   </Space>
                   <div className="mt-2 text-base text-slate-700">{incident.description}</div>
@@ -188,9 +213,9 @@ export default function ElderSosPage() {
                       className="mt-3"
                       size="large"
                       type="default"
-                      onClick={() => navigate('/conversations')}
+                      onClick={() => navigate(`/conversations?id=${incident.conversationId}`)}
                     >
-                      和家人说话
+                      打开求助群聊
                     </Button>
                   ) : null}
                 </div>

@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Button, Card, Empty, Form, Input, InputNumber, Select, DatePicker, Typography, App, List, Tag, Popconfirm, Modal, Rate } from 'antd'
+import { Button, Card, Empty, Form, Input, InputNumber, Select, DatePicker, Typography, App, List, Tag, Popconfirm, Modal, Rate, Alert } from 'antd'
 import { LikeOutlined, LikeFilled } from '@ant-design/icons'
 import { PlusOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
 
 import { useSession } from '@/features/auth/useSession'
 import { fetchFamilyElders, createFamilyServiceRequest, fetchFamilyOrders, cancelFamilyOrder, confirmFamilyOrderHours, reviewFamilyOrder } from '@/services/adapters/family-adapter'
+import { completeFamilyDispatchOrder } from '@/services/adapters/dispatch-adapter'
 import { likeVolunteer } from '@/services/adapters/volunteer-adapter'
 import type { ElderSummary, ServiceRequestCard } from '@/types/domain'
 
@@ -33,9 +35,9 @@ export default function FamilyOrdersPage() {
   const [confirmForm] = Form.useForm()
   const [reviewForm] = Form.useForm()
 
-  const load = () => {
+  const load = (opts?: { silent?: boolean }) => {
     if (!session) return
-    setLoading(true)
+    if (!opts?.silent) setLoading(true)
     Promise.allSettled([
       fetchFamilyOrders(session.userId),
       fetchFamilyElders(session.userId),
@@ -48,10 +50,18 @@ export default function FamilyOrdersPage() {
           setElders(eldersResult.value)
         }
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (!opts?.silent) setLoading(false)
+      })
   }
 
-  useEffect(load, [session])
+  useEffect(() => {
+    load()
+    const timer = window.setInterval(() => load({ silent: true }), 5000)
+    return () => window.clearInterval(timer)
+  }, [session?.userId])
+
+  const activeOrders = orders.filter((item) => ['pending', 'accepted', 'in_progress'].includes(item.status))
 
   const handlePublish = async (values: any) => {
     if (!session) return
@@ -85,6 +95,16 @@ export default function FamilyOrdersPage() {
       load()
     } catch (err: any) {
       message.error(err?.message || '撤销失败')
+    }
+  }
+
+  const handleCompleteService = async (orderId: number) => {
+    if (!session) return
+    try {
+      message.success((await completeFamilyDispatchOrder(orderId, session.userId)).message || '已确认服务完成')
+      load()
+    } catch (err: any) {
+      message.error(err?.message || '确认完成失败')
     }
   }
 
@@ -137,7 +157,7 @@ export default function FamilyOrdersPage() {
       <div className="flex items-center justify-between">
         <div>
           <Typography.Title level={3} className="!mb-1">服务管理</Typography.Title>
-          <Typography.Text className="text-gray-500">发布服务需求并跟踪状态</Typography.Text>
+          <Typography.Text className="text-gray-500">发布普通服务需求并跟踪状态（SOS 请由长辈本人发起）</Typography.Text>
         </div>
         <Button
           type="primary"
@@ -148,10 +168,19 @@ export default function FamilyOrdersPage() {
         </Button>
       </div>
 
+      {activeOrders.length ? (
+        <Alert
+          type="info"
+          showIcon
+          message={`长辈当前有 ${activeOrders.length} 单进行中的服务`}
+          description={activeOrders.slice(0, 3).map((item) => `${item.elderName || '长辈'} · ${item.serviceType} · ${statusMap[item.status]?.text || item.status}`).join('；')}
+        />
+      ) : null}
+
       {/* Publish Form */}
       {showForm && (
         <Card title="发布新需求" className="!rounded-2xl">
-          <Form form={form} layout="vertical" onFinish={handlePublish} size="large" className="max-w-xl">
+          <Form form={form} layout="vertical" onFinish={handlePublish} size="large" className="max-w-xl" initialValues={{ serviceHours: 1, serviceTime: dayjs() }}>
             <Form.Item name="elderId" label="选择长辈" rules={[{ required: true, message: '请选择长辈' }]}>
               <Select placeholder="请选择" options={elders.map((e) => ({ value: e.elderId, label: `${e.name}（${e.addressPreview}）` }))} />
             </Form.Item>
@@ -160,14 +189,22 @@ export default function FamilyOrdersPage() {
                 { value: '陪同就医', label: '陪同就医' },
                 { value: '上门陪聊', label: '上门陪聊' },
                 { value: '代买药品', label: '代买药品' },
-                { value: '代买物资', label: '代买物资' },
+                { value: '代购物资', label: '代购物资' },
                 { value: '上门理发', label: '上门理发' },
                 { value: '陪同复诊', label: '陪同复诊' },
+                { value: '康复训练', label: '康复训练' },
+                { value: '健康咨询', label: '健康咨询' },
+                { value: '智能设备协助', label: '智能设备协助' },
               ]} />
             </Form.Item>
             <div className="grid grid-cols-2 gap-x-4">
-              <Form.Item name="serviceTime" label="服务时间" rules={[{ required: true, message: '请选择时间' }]}>
-                <DatePicker showTime className="!w-full" placeholder="选择日期时间" />
+              <Form.Item
+                name="serviceTime"
+                label="服务时间"
+                rules={[{ required: true, message: '请选择时间' }]}
+                extra="选现在（或约1分钟内）：立刻找人。选任意更晚时间：到点才开始找人。"
+              >
+                <DatePicker showTime className="!w-full" placeholder="选择日期时间" format="YYYY-MM-DD HH:mm" />
               </Form.Item>
               <Form.Item name="serviceHours" label="预计时长(小时)" rules={[{ required: true, message: '请输入时长' }]}>
                 <InputNumber min={0.5} step={0.5} className="!w-full" placeholder="如 2" />
@@ -207,6 +244,20 @@ export default function FamilyOrdersPage() {
                   cancelText="取消"
                 >
                   <Button size="small" danger>撤销</Button>
+                </Popconfirm>,
+              )
+            }
+
+            if (item.status === 'accepted' || item.status === 'in_progress') {
+              actions.push(
+                <Popconfirm
+                  key="complete"
+                  title="确认服务已完成？完成后会话将结束。"
+                  onConfirm={() => handleCompleteService(item.requestId)}
+                  okText="确认完成"
+                  cancelText="取消"
+                >
+                  <Button size="small" type="primary">确认完成服务</Button>
                 </Popconfirm>,
               )
             }

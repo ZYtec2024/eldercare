@@ -236,6 +236,9 @@ def publish_order():
                            (family_user_id, elder_id))
             if not cursor.fetchone():
                 return jsonify({"code": 403, "message": "您只能替已绑定的长辈发布服务请求"}), 403
+            # Family proxy orders are always normal dispatch (never SOS).
+            if str(service_type) == 'SOS紧急救助' or bool(data.get('urgent')):
+                return jsonify({"code": 400, "message": "家属代下单只能发普通服务，紧急求助请由长辈本人发起"}), 400
             from routes.dispatch import create_smart_order_for_elder
             try:
                 order_id, message = create_smart_order_for_elder(
@@ -247,6 +250,7 @@ def publish_order():
                     service_time=str(service_time),
                     notes=str(notes or ""),
                     address=str(address or "") or None,
+                    urgent=False,
                     proxy_created_by=int(family_user_id),
                     proxy_reason="家属代老人下单",
                 )
@@ -479,6 +483,88 @@ def confirm_order_hours():
     finally:
         conn.close()
 
+        conn.close()
+
+
+@family_bp.route('/alerts', methods=['GET'])
+def get_family_alerts():
+    """SOS / health notices for a bound family account (not the admin desk)."""
+    family_user_id = request.args.get('family_user_id', type=int)
+    if not family_user_id:
+        return jsonify({"code": 400, "message": "缺少家属账号"}), 400
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT role FROM users WHERE user_id = %s", (family_user_id,))
+            account = cursor.fetchone()
+            if not account or account.get('role') != 'family':
+                return jsonify({"code": 403, "message": "仅家属可查看"}), 403
+            cursor.execute(
+                """
+                SELECT en.notification_id, en.read_at, ei.incident_id, ei.status, ei.description,
+                       ei.incident_type, e.name AS elder_name, ei.created_at,
+                       c.conversation_id, a.alert_id,
+                       COALESCE(a.alert_type, 'sos') AS alert_type
+                FROM emergency_notifications en
+                JOIN emergency_incidents ei ON ei.incident_id = en.incident_id
+                JOIN elders e ON e.elder_id = ei.elder_id
+                LEFT JOIN conversations c ON c.incident_id = ei.incident_id AND c.conversation_type = 'sos'
+                LEFT JOIN alerts a ON a.emergency_incident_id = ei.incident_id
+                WHERE en.recipient_user_id = %s
+                ORDER BY en.notification_id DESC
+                LIMIT 50
+                """,
+                (family_user_id,),
+            )
+            rows = []
+            for item in cursor.fetchall():
+                created = item.get('created_at')
+                if isinstance(created, datetime.datetime):
+                    created = format_datetime(created)
+                rows.append({
+                    'notification_id': int(item['notification_id']),
+                    'alert_id': int(item['alert_id']) if item.get('alert_id') else None,
+                    'incident_id': int(item['incident_id']),
+                    'category': 'sos' if str(item.get('alert_type') or 'sos') == 'sos' else 'health_warning',
+                    'elder_name': item.get('elder_name') or '长辈',
+                    'description': item.get('description') or '紧急求助',
+                    'status': item.get('status') or 'reported',
+                    'created_at': created,
+                    'conversation_id': int(item['conversation_id']) if item.get('conversation_id') else None,
+                    'unread': item.get('read_at') is None and str(item.get('status') or '') != 'resolved',
+                })
+            return jsonify({"code": 200, "message": "ok", "data": rows})
+    except Exception as exc:
+        return jsonify({"code": 500, "message": f"加载家属告警失败: {exc}"}), 500
+    finally:
+        conn.close()
+
+
+@family_bp.route('/alerts/ack', methods=['POST'])
+def ack_family_alert():
+    data = request.get_json() or {}
+    family_user_id = data.get('family_user_id')
+    notification_id = data.get('notification_id')
+    if not family_user_id or not notification_id:
+        return jsonify({"code": 400, "message": "缺少家属账号或通知编号"}), 400
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """UPDATE emergency_notifications
+                   SET read_at = CURRENT_TIMESTAMP
+                   WHERE notification_id = %s AND recipient_user_id = %s""",
+                (int(notification_id), int(family_user_id)),
+            )
+            conn.commit()
+            return jsonify({"code": 200, "message": "已确认收到"})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"code": 500, "message": f"确认失败: {exc}"}), 500
+    finally:
+        conn.close()
+
+
 # 5.撤销订单 
 @family_bp.route('/orders/cancel', methods=['POST'])
 def cancel_order():
@@ -512,20 +598,21 @@ def cancel_order():
             # 更新订单状态为 cancelled
             cursor.execute("SELECT order_id FROM dispatch_orders WHERE order_id = %s", (order_id,))
             if cursor.fetchone():
-                from routes.dispatch import _create_return_route
-                volunteer_id = int(order.get('volunteer_id') or 0)
-                if volunteer_id:
-                    cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order_id,))
-                    return_route = _create_return_route(cursor, volunteer_id)
-                    cursor.execute("UPDATE volunteer_location_state SET availability = %s WHERE volunteer_id = %s",
-                                   ('returning' if return_route else 'idle', volunteer_id))
-                cursor.execute("UPDATE dispatch_orders SET dispatch_state = 'cancelled' WHERE order_id = %s", (order_id,))
-                cursor.execute("UPDATE dispatch_candidates SET response_status = 'expired', responded_at = CURRENT_TIMESTAMP WHERE order_id = %s", (order_id,))
-            sql_cancel = "UPDATE orders SET status = 'cancelled' WHERE order_id = %s"
-            cursor.execute(sql_cancel, (order_id,))
+                from routes.dispatch import finalize_cancelled_dispatch_order
+                finalize_cancelled_dispatch_order(
+                    cursor,
+                    int(order_id),
+                    actor_user_id=int(family_user_id),
+                    event_type="family_order_cancelled",
+                    event_message="家属已取消服务请求，已停止后续调度；志愿者任务已同步清除。",
+                    emergency_summary="家属已取消紧急服务，关联志愿者任务已关闭",
+                )
+            else:
+                sql_cancel = "UPDATE orders SET status = 'cancelled' WHERE order_id = %s"
+                cursor.execute(sql_cancel, (order_id,))
             conn.commit()
 
-            return jsonify({"code": 200, "message": "订单已成功撤销"})
+            return jsonify({"code": 200, "message": "订单已成功撤销，相关任务已同步关闭"})
     except Exception as e:
         conn.rollback()
         return jsonify({"code": 500, "message": f"撤单失败: {str(e)}"})

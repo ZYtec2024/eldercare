@@ -180,19 +180,21 @@ export async function fetchFamilyOrders(familyUserId = 101) {
   return rawList.map((item) => {
     const row = item as unknown as Record<string, unknown>
     return {
-      requestId: Number(row.requestId ?? row.orderId ?? 0),
+      requestId: Number(row.requestId ?? row.orderId ?? row.order_id ?? 0),
       familyUserId,
-      elderId: Number(row.elderId ?? 0),
-      elderName: String(row.elderName ?? ''),
-      serviceType: String(row.serviceType ?? ''),
-      serviceTime: String(row.serviceTime ?? ''),
-      serviceHours: Number(row.serviceHours ?? 1),
+      elderId: Number(row.elderId ?? row.elder_id ?? 0),
+      elderName: String(row.elderName ?? row.elder_name ?? ''),
+      serviceType: String(row.serviceType ?? row.service_type ?? ''),
+      serviceTime: String(row.serviceTime ?? row.service_time ?? ''),
+      serviceHours: Number(row.serviceHours ?? row.service_hours ?? 1),
       address: String(row.address ?? ''),
       notes: String(row.notes ?? ''),
       status: String(row.status ?? 'pending') as ServiceRequestCard['status'],
-      assignedVolunteerId: row.volunteerId ? Number(row.volunteerId) : undefined,
+      assignedVolunteerId: Number(row.assignedVolunteerId ?? row.volunteerId ?? row.volunteer_id ?? 0) || undefined,
       assignedVolunteerName:
-        typeof row.assignedVolunteerName === 'string' ? row.assignedVolunteerName : undefined,
+        typeof (row.assignedVolunteerName ?? row.assigned_volunteer_name) === 'string'
+          ? String(row.assignedVolunteerName ?? row.assigned_volunteer_name)
+          : undefined,
       hourReviewStatus: typeof row.hourReviewStatus === 'string'
         ? row.hourReviewStatus as ServiceRequestCard['hourReviewStatus']
         : typeof row.hour_review_status === 'string'
@@ -242,6 +244,46 @@ export async function confirmFamilyOrderHours(payload: {
 export async function reviewFamilyOrder(payload: { orderId: number; familyUserId: number; rating: number; comment?: string }) {
   const response = await http.post<ApiEnvelope<unknown>>('/family/orders/review', {
     order_id: payload.orderId, family_user_id: payload.familyUserId, rating: payload.rating, comment: payload.comment ?? '',
+  })
+  return response.data
+}
+
+export type FamilyAlertItem = {
+  notificationId: number
+  alertId?: number
+  incidentId: number
+  category: 'sos' | 'health_warning'
+  elderName: string
+  description: string
+  status: string
+  createdAt: string
+  conversationId?: number
+  unread: boolean
+}
+
+export async function fetchFamilyAlerts(familyUserId: number) {
+  const response = await http.get<ApiEnvelope<Array<Record<string, unknown>>>>('/family/alerts', {
+    params: { family_user_id: familyUserId },
+  })
+  const rawList = Array.isArray(response.data.data) ? response.data.data : []
+  return rawList.map((row) => ({
+    notificationId: Number(row.notificationId ?? row.notification_id ?? 0),
+    alertId: Number(row.alertId ?? row.alert_id ?? 0) || undefined,
+    incidentId: Number(row.incidentId ?? row.incident_id ?? 0),
+    category: String(row.category ?? 'sos') === 'sos' ? 'sos' as const : 'health_warning' as const,
+    elderName: String(row.elderName ?? row.elder_name ?? '长辈'),
+    description: String(row.description ?? ''),
+    status: String(row.status ?? 'reported'),
+    createdAt: String(row.createdAt ?? row.created_at ?? ''),
+    conversationId: Number(row.conversationId ?? row.conversation_id ?? 0) || undefined,
+    unread: Boolean(row.unread),
+  } satisfies FamilyAlertItem))
+}
+
+export async function ackFamilyAlert(familyUserId: number, notificationId: number) {
+  const response = await http.post<ApiEnvelope<null>>('/family/alerts/ack', {
+    family_user_id: familyUserId,
+    notification_id: notificationId,
   })
   return response.data
 }

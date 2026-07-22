@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { App, Button, Card, Empty, Form, Input, InputNumber, Spin, Table, Tag, Typography } from 'antd'
+import { Navigate } from 'react-router-dom'
 
 import { fetchHourReviews, reviewHourRequest } from '@/services/adapters/admin-adapter'
 import type { HourReviewItem } from '@/types/domain'
@@ -25,6 +26,10 @@ export default function AdminHourReviewsPage() {
   }
 
   useEffect(load, [session?.userId])
+
+  if (session?.isRoot) {
+    return <Navigate to="/admin/dashboard" replace />
+  }
 
   const openApprove = (review: HourReviewItem) => {
     setActiveReview(review)

@@ -1,7 +1,7 @@
 # routes/admin.py
 from flask import Blueprint, request, jsonify
 from db import get_db_connection
-from utils import format_datetime, split_awards_text, merge_awards_text, get_pagination_params
+from utils import format_datetime, split_awards_text, merge_awards_text, get_pagination_params, shanghai_now
 import datetime
 
 admin_bp = Blueprint('admin', __name__)
@@ -30,6 +30,33 @@ def _admin_regions(cursor, raw_admin_user_id):
     if not scopes:
         return None, False, set(), (jsonify({"code": 403, "message": "该管理员未分配区县管理范围"}), 403)
     return admin_user_id, False, scopes, None
+
+
+def _apply_admin_geo_scope(cursor, is_global, regions, *, region_adcode=None, province_name=None, city_name=None):
+    """Narrow root/global alert views by cascading 全国→省→市→区 selection."""
+    requested = (region_adcode or '').strip()
+    province = (province_name or '').strip()
+    city = (city_name or '').strip()
+    if requested:
+        if not is_global and requested not in regions:
+            return None
+        return False, {requested}
+    if is_global and (province or city):
+        clauses = ["1=1"]
+        params = []
+        if province:
+            clauses.append("province_name = %s")
+            params.append(province)
+        if city:
+            clauses.append("city_name = %s")
+            params.append(city)
+        cursor.execute(
+            f"SELECT adcode FROM administrative_regions WHERE {' AND '.join(clauses)}",
+            tuple(params),
+        )
+        narrowed = {str(row['adcode']) for row in cursor.fetchall()}
+        return False, narrowed
+    return is_global, regions
 
 
 def _user_regions(cursor, user_id):
@@ -167,6 +194,8 @@ def get_user_list():
     role = request.args.get('role')
     keyword = (request.args.get('keyword') or '').strip()
     requested_region = (request.args.get('region_adcode') or '').strip()
+    province_name = (request.args.get('province_name') or '').strip()
+    city_name = (request.args.get('city_name') or '').strip()
     page = int(request.args.get('page', 1))
     limit = int(request.args.get('limit', 10))
     offset = (page - 1) * limit
@@ -178,14 +207,19 @@ def get_user_list():
             if error:
                 return error
 
-            filter_regions = None
-            if requested_region:
-                if is_global or requested_region in regions:
-                    filter_regions = {requested_region}
-                else:
-                    return jsonify({"code": 403, "message": "无权查看该区县用户"}), 403
-            elif not is_global:
-                filter_regions = set(regions)
+            narrowed = _apply_admin_geo_scope(
+                cursor, is_global, regions,
+                region_adcode=requested_region or None,
+                province_name=province_name or None,
+                city_name=city_name or None,
+            )
+            if narrowed is None:
+                return jsonify({"code": 403, "message": "无权查看该区县用户"}), 403
+            is_global, regions = narrowed
+
+            filter_regions = None if is_global else set(regions)
+            if filter_regions is not None and not filter_regions:
+                return jsonify({"code": 200, "message": "获取成功", "data": {"total": 0, "list": []}})
 
             region_filter = ""
             scope_params = []
@@ -287,39 +321,85 @@ def get_alerts():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            _, is_global, regions, error = _admin_regions(cursor, request.args.get('admin_user_id'))
+            admin_user_id, is_global, regions, error = _admin_regions(cursor, request.args.get('admin_user_id'))
             if error:
                 return error
-            # 关联老人的姓名查询
+            narrowed = _apply_admin_geo_scope(
+                cursor, is_global, regions,
+                region_adcode=request.args.get('region_adcode'),
+                province_name=request.args.get('province_name'),
+                city_name=request.args.get('city_name'),
+            )
+            if narrowed is None:
+                return jsonify({"code": 403, "message": "无权查看其他区县告警"}), 403
+            is_global, regions = narrowed
+            if not is_global and not regions:
+                return jsonify({"code": 200, "message": "获取报警列表成功", "data": []})
             # An alert is a notification row. For SOS, the linked incident is
             # the lifecycle source of truth: acknowledged is still active.
+            # District admins only see the SOS desk they were exclusively assigned;
+            # root keeps the full scoped list. Health alerts stay region-scoped.
             sql = """
                 SELECT a.alert_id, e.name AS elder_name, a.alert_type,
                        a.description, a.is_handled, a.created_at,
                        a.emergency_incident_id,
+                       e.region_adcode,
+                       ar.name AS region_name, ar.province_name, ar.city_name,
                        ei.status AS incident_status, ei.incident_type,
                        ei.acknowledged_at, ei.resolved_at, ei.resolution_summary,
-                       ei.linked_order_id, c.conversation_id,
-                       o.status AS linked_order_status, vu.real_name AS linked_volunteer_name
+                       ei.linked_order_id, ei.assigned_admin_id, c.conversation_id,
+                       o.status AS linked_order_status, vu.real_name AS linked_volunteer_name,
+                       (SELECT content FROM conversation_messages cm
+                        WHERE cm.conversation_id = c.conversation_id
+                        ORDER BY cm.created_at DESC, cm.message_id DESC LIMIT 1) AS last_message,
+                       (SELECT created_at FROM conversation_messages cm
+                        WHERE cm.conversation_id = c.conversation_id
+                        ORDER BY cm.created_at DESC, cm.message_id DESC LIMIT 1) AS last_message_at
                 FROM alerts a
                 JOIN elders e ON a.elder_id = e.elder_id
+                LEFT JOIN administrative_regions ar ON ar.adcode = e.region_adcode
                 LEFT JOIN emergency_incidents ei ON ei.incident_id = a.emergency_incident_id
                 LEFT JOIN conversations c ON c.incident_id = ei.incident_id AND c.conversation_type = 'sos'
                 LEFT JOIN orders o ON o.order_id = ei.linked_order_id
                 LEFT JOIN users vu ON vu.user_id = o.volunteer_id
             """
             params = []
+            where_parts = []
             if not is_global:
-                sql += " WHERE e.region_adcode IN %s"
+                where_parts.append("e.region_adcode IN %s")
                 params.append(tuple(regions))
-            sql += " ORDER BY CASE WHEN COALESCE(ei.status, CASE WHEN a.is_handled THEN 'resolved' ELSE 'reported' END) = 'resolved' THEN 1 ELSE 0 END, a.created_at DESC"
+                where_parts.append(
+                    """(
+                        a.emergency_incident_id IS NULL
+                        OR ei.assigned_admin_id = %s
+                        OR EXISTS (
+                            SELECT 1 FROM emergency_notifications en
+                             WHERE en.incident_id = a.emergency_incident_id
+                               AND en.recipient_user_id = %s
+                        )
+                    )"""
+                )
+                params.extend([admin_user_id, admin_user_id])
+            if where_parts:
+                sql += " WHERE " + " AND ".join(where_parts)
+            sql += """
+                ORDER BY
+                  CASE COALESCE(ei.status, CASE WHEN a.is_handled THEN 'resolved' ELSE 'reported' END)
+                    WHEN 'reported' THEN 0
+                    WHEN 'acknowledged' THEN 1
+                    WHEN 'dispatching' THEN 2
+                    WHEN 'awaiting_admin_close' THEN 3
+                    ELSE 4
+                  END,
+                  a.created_at DESC
+            """
             cursor.execute(sql, params)
             alerts = cursor.fetchall()
             
             for a in alerts:
-                for field in ('created_at', 'acknowledged_at', 'resolved_at'):
+                for field in ('created_at', 'acknowledged_at', 'resolved_at', 'last_message_at'):
                     if isinstance(a.get(field), datetime.datetime):
-                        a[field] = a[field].strftime('%Y-%m-%d %H:%M:%S')
+                        a[field] = format_datetime(a.get(field))
 
             return jsonify({"code": 200, "message": "获取报警列表成功", "data": alerts})
     finally:
@@ -433,7 +513,7 @@ def handle_alert():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            _, is_global, regions, error = _admin_regions(cursor, data.get('admin_user_id'))
+            admin_user_id, is_global, regions, error = _admin_regions(cursor, data.get('admin_user_id'))
             if error:
                 return error
             cursor.execute("""SELECT a.is_handled, e.region_adcode FROM alerts a
@@ -452,12 +532,22 @@ def handle_alert():
             incident_link = cursor.fetchone()
             incident_id = incident_link.get('emergency_incident_id') if incident_link else None
             if incident_id:
-                cursor.execute("""SELECT incident_id, status, linked_order_id
+                cursor.execute("""SELECT incident_id, status, linked_order_id, assigned_admin_id
                                   FROM emergency_incidents WHERE incident_id = %s FOR UPDATE""", (incident_id,))
                 incident = cursor.fetchone()
                 if not incident:
                     return jsonify({"code": 404, "message": "关联紧急事件不存在"}), 404
-                admin_user_id = int(data.get('admin_user_id'))
+                if not is_global:
+                    owns = incident.get('assigned_admin_id') and int(incident['assigned_admin_id']) == int(admin_user_id)
+                    if not owns:
+                        cursor.execute(
+                            """SELECT 1 FROM emergency_notifications
+                                WHERE incident_id = %s AND recipient_user_id = %s""",
+                            (incident_id, admin_user_id),
+                        )
+                        owns = bool(cursor.fetchone())
+                    if not owns:
+                        return jsonify({"code": 403, "message": "该 SOS 已分配给其他区管理员，您不能处理"}), 403
                 if action == 'acknowledge':
                     if incident['status'] == 'resolved':
                         return jsonify({"code": 200, "message": "该紧急事件已关闭"})
@@ -478,6 +568,49 @@ def handle_alert():
 
                 if incident['status'] == 'resolved':
                     return jsonify({"code": 200, "message": "该紧急事件已关闭"})
+
+                # Closing the SOS desk must also clear any still-open linked order;
+                # otherwise elder「谁在帮我」keeps a pending/active service while
+                # admin alerts look fully done.
+                linked_order_id = int(incident['linked_order_id']) if incident.get('linked_order_id') else None
+                if linked_order_id:
+                    cursor.execute(
+                        "SELECT order_id, status FROM orders WHERE order_id = %s FOR UPDATE",
+                        (linked_order_id,),
+                    )
+                    linked_order = cursor.fetchone()
+                    if linked_order and linked_order['status'] in ('pending', 'accepted', 'in_progress'):
+                        from routes.dispatch import finalize_cancelled_dispatch_order
+                        finalize_cancelled_dispatch_order(
+                            cursor,
+                            linked_order_id,
+                            actor_user_id=admin_user_id,
+                            event_type='admin_sos_closed',
+                            event_message=f'管理员结案关闭紧急事件，关联服务已同步取消：{resolution_summary}',
+                            archive_message=f'紧急事件已关闭：{resolution_summary}。关联服务已结束。',
+                            emergency_summary=resolution_summary,
+                        )
+                        # Keep the admin-authored close wording even if finalize already resolved.
+                        cursor.execute(
+                            """UPDATE emergency_incidents
+                               SET status = 'resolved',
+                                   resolved_at = COALESCE(resolved_at, CURRENT_TIMESTAMP),
+                                   resolved_by = COALESCE(resolved_by, %s),
+                                   resolution_summary = %s
+                               WHERE incident_id = %s""",
+                            (admin_user_id, resolution_summary, incident_id),
+                        )
+                        cursor.execute(
+                            "UPDATE alerts SET is_handled = TRUE WHERE emergency_incident_id = %s",
+                            (incident_id,),
+                        )
+                        conn.commit()
+                        return jsonify({
+                            "code": 200,
+                            "message": "紧急事件已关闭，关联未完成服务已同步取消",
+                            "data": {"status": "resolved", "cancelled_order_id": linked_order_id},
+                        })
+
                 cursor.execute("""UPDATE emergency_incidents
                                   SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP,
                                       resolved_by = %s, resolution_summary = %s
@@ -545,7 +678,7 @@ def weekly_settlement():
             awarded_count = 0
             if top_volunteers:
                 # 动态生成本周的荣誉称号字符串
-                today_str = datetime.date.today().strftime('%Y年%m月%d日')
+                today_str = shanghai_now().strftime('%Y年%m月%d日')
                 award_title = f"【{today_str}结算】社区服务之星★"
 
                 # 第二步：给 TOP 3 颁奖。

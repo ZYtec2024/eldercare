@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Button, Card, Form, Input, InputNumber, Select, DatePicker, Typography, App } from 'antd'
+import dayjs from 'dayjs'
 import { useNavigate } from 'react-router-dom'
 
 import { useSession } from '@/features/auth/useSession'
@@ -44,10 +45,10 @@ export default function NewServiceRequestPage() {
     <div className="space-y-6">
       <div>
         <Typography.Title level={3} className="!mb-1">发布服务需求</Typography.Title>
-        <Typography.Text className="text-gray-500">为长辈安排公益服务</Typography.Text>
+          <Typography.Text className="text-gray-500">为长辈安排普通服务（不能代发 SOS 紧急求助）</Typography.Text>
       </div>
       <Card className="!rounded-2xl max-w-xl">
-        <Form layout="vertical" onFinish={onFinish} size="large">
+        <Form layout="vertical" onFinish={onFinish} size="large" initialValues={{ serviceHours: 1, serviceTime: dayjs() }}>
           <Form.Item name="elderId" label="选择长辈" rules={[{ required: true, message: '请选择长辈' }]}>
             <Select placeholder="请选择" options={elders.map((e) => ({ value: e.elderId, label: `${e.name}（${e.addressPreview}）` }))} />
           </Form.Item>
@@ -56,14 +57,22 @@ export default function NewServiceRequestPage() {
               { value: '陪同就医', label: '陪同就医' },
               { value: '上门陪聊', label: '上门陪聊' },
               { value: '代买药品', label: '代买药品' },
-              { value: '代买物资', label: '代买物资' },
+              { value: '代购物资', label: '代购物资' },
               { value: '上门理发', label: '上门理发' },
               { value: '陪同复诊', label: '陪同复诊' },
+              { value: '康复训练', label: '康复训练' },
+              { value: '健康咨询', label: '健康咨询' },
+              { value: '智能设备协助', label: '智能设备协助' },
             ]} />
           </Form.Item>
           <div className="grid grid-cols-2 gap-x-4">
-            <Form.Item name="serviceTime" label="服务时间" rules={[{ required: true, message: '请选择时间' }]}>
-              <DatePicker showTime className="!w-full" placeholder="选择日期时间" />
+            <Form.Item
+              name="serviceTime"
+              label="服务时间"
+              rules={[{ required: true, message: '请选择时间' }]}
+              extra="选现在（或约1分钟内）：立刻开始找人。选任意更晚时间（如10分钟后、1小时后）：到那个时间点才开始找人。"
+            >
+              <DatePicker showTime className="!w-full" placeholder="选择日期时间" format="YYYY-MM-DD HH:mm" />
             </Form.Item>
             <Form.Item name="serviceHours" label="预计时长(小时)" rules={[{ required: true, message: '请输入时长' }]}>
               <InputNumber min={0.5} step={0.5} className="!w-full" placeholder="如 2" />

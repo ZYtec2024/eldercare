@@ -34,6 +34,7 @@ import {
   FamilyDashboardPage,
   FamilyLiveTrackingPage,
   FamilyOrdersPage,
+  NewServiceRequestPage,
   ForgotPasswordPage,
   HealthKnowledgePage,
   HomePage,
@@ -153,6 +154,15 @@ export const appRoutes: AppRouteDefinition[] = [
     navigation: { label: '我的消息', description: '', iconKey: 'document' },
     element: ConversationPage,
   },
+  {
+    key: 'conversation-alias',
+    path: '/conversation',
+    roles: allRoles,
+    title: '我的消息',
+    description: '和家人、社区、志愿者沟通',
+    showInNavigation: false,
+    element: ConversationPage,
+  },
   // ── Family ──
   {
     key: 'family-dashboard',
@@ -197,6 +207,18 @@ export const appRoutes: AppRouteDefinition[] = [
     isHomeAction: true,
     navigation: { label: '服务管理', description: '', iconKey: 'service' },
     element: FamilyOrdersPage,
+  },
+  {
+    key: 'family-new-request',
+    path: '/family/new-request',
+    roles: ['family'],
+    title: '代长辈下单',
+    description: '家属为绑定长辈发布服务需求',
+    showInNavigation: true,
+    navigationOrder: 31,
+    isHomeAction: true,
+    navigation: { label: '代长辈下单', description: '', iconKey: 'service' },
+    element: NewServiceRequestPage,
   },
   {
     key: 'family-alerts',
@@ -451,11 +473,26 @@ export const appRoutes: AppRouteDefinition[] = [
   },
 ]
 
-export function getNavigationForRole(role: Role) {
+export function getNavigationForRole(role: Role, options?: { isRoot?: boolean }) {
   const navigationItems = appRoutes
-    .filter(
-      (route) => !route.isPublic && route.showInNavigation && route.roles.includes(role),
-    )
+    .filter((route) => {
+      if (route.isPublic || !route.showInNavigation || !route.roles.includes(role)) {
+        return false
+      }
+      // District admins must not manage official region polygons.
+      if (route.key === 'admin-regions' && !options?.isRoot) {
+        return false
+      }
+      // Hour reviews are operational work for district admins; root uses看板抽查.
+      if (route.key === 'admin-hour-reviews' && options?.isRoot) {
+        return false
+      }
+      // Admin SOS lives in 告警中心; hide duplicate 我的消息 inbox for admins.
+      if (route.key === 'conversations' && role === 'admin') {
+        return false
+      }
+      return true
+    })
     .sort(
       (left, right) =>
         (left.navigationOrder ?? Number.MAX_SAFE_INTEGER) -

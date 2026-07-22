@@ -31,6 +31,7 @@ export interface DispatchOrder {
   dispatch_version?: number
   forced_assignment: boolean
   created_at?: string
+  service_time?: string | null
   lng?: number
   lat?: number
   eta_minutes?: number | null
@@ -60,6 +61,7 @@ export interface DispatchCandidate {
   service_type: string
   search_stage: number
   dispatch_phase?: 'top1' | 'top3' | 'top10' | 'fallback' | string
+  auto_accept_enabled?: boolean
 }
 
 export interface DispatchMapData {
@@ -80,10 +82,12 @@ export interface DispatchOverview extends DispatchMapData {
   events: Array<{ event_id: number; order_id?: number | null; event_type: string; message: string; created_at?: string }>
   summary: { pending: number; assigned: number; sos: number; admin_watch: number; idle_volunteers: number }
   service_catalog: Array<{ code: string; label: string; skills: string[]; skill_labels: string[]; hours: number; urgent: boolean }>
+  skill_options?: Array<{ code: string; label: string }>
 }
 
 export interface DispatchTracking extends DispatchMapData {
   service_catalog: DispatchOverview['service_catalog']
+  skill_options?: Array<{ code: string; label: string }>
   privacy_message?: string
   return_route?: DispatchRoute
   next_assignment_preview?: {
@@ -113,6 +117,8 @@ export interface VolunteerDispatchTask extends DispatchCandidate {
   urgency: 'normal' | 'sos'
   forced_assignment: boolean
   elder_name: string
+  /** Elder-written situation note, e.g. 腿脚不适. */
+  notes?: string
   required_skills: string[]
   required_skill_labels: string[]
   route?: DispatchRoute | null
@@ -120,4 +126,6 @@ export interface VolunteerDispatchTask extends DispatchCandidate {
   lat?: number
   address?: string
   amap_marker_url?: string
+  /** Exact elder pin is only present after accept. */
+  location_unlocked?: boolean
 }

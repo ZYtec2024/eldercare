@@ -12,6 +12,7 @@ type CompletedTask = {
   elder_name: string
   address?: string
   completed_at?: string | null
+  close_status?: string
 }
 
 const activeStatuses = new Set(['accepted', 'in_progress'])
@@ -82,19 +83,27 @@ export default function VolunteerTasksPage() {
         )}
       </Card>
 
-      <Card title="已完成服务记录" className="!rounded-2xl">
+      <Card title="已结束服务记录" className="!rounded-2xl">
         {loading ? <Spin /> : completedTasks.length === 0 ? (
-          <Empty description="暂无已完成服务记录" />
+          <Empty description="暂无已结束服务记录" />
         ) : (
           <List
             size="small"
             dataSource={completedTasks}
             renderItem={(task) => (
               <List.Item>
-                <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Tag color={task.close_status === 'closed' ? 'default' : 'green'}>
+                    {task.close_status === 'closed' ? '已关闭' : '已完成'}
+                  </Tag>
                   <Typography.Text strong>{task.service_type}</Typography.Text>
-                  <Typography.Text className="ml-2 text-gray-500">{task.elder_name}</Typography.Text>
-                  {task.completed_at && <Typography.Text className="ml-2 text-gray-400">完成于 {task.completed_at}</Typography.Text>}
+                  <Typography.Text className="text-gray-500">{task.elder_name}</Typography.Text>
+                  <Typography.Text className="text-gray-400">#{task.order_id}</Typography.Text>
+                  {task.completed_at ? (
+                    <Typography.Text className="text-gray-400">{task.completed_at}</Typography.Text>
+                  ) : task.close_status === 'closed' ? (
+                    <Typography.Text className="text-gray-400">已换人重派</Typography.Text>
+                  ) : null}
                 </div>
               </List.Item>
             )}

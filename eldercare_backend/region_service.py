@@ -16,6 +16,93 @@ from typing import Any
 from db import get_db_connection
 
 AMAP_DISTRICT_URL = "https://restapi.amap.com/v3/config/district"
+
+# GB/T 2260 style province prefixes used when AMap omits parent names.
+PROVINCE_BY_PREFIX = {
+    "11": "北京市", "12": "天津市", "13": "河北省", "14": "山西省", "15": "内蒙古自治区",
+    "21": "辽宁省", "22": "吉林省", "23": "黑龙江省",
+    "31": "上海市", "32": "江苏省", "33": "浙江省", "34": "安徽省", "35": "福建省",
+    "36": "江西省", "37": "山东省",
+    "41": "河南省", "42": "湖北省", "43": "湖南省", "44": "广东省", "45": "广西壮族自治区",
+    "46": "海南省",
+    "50": "重庆市", "51": "四川省", "52": "贵州省", "53": "云南省", "54": "西藏自治区",
+    "61": "陕西省", "62": "甘肃省", "63": "青海省", "64": "宁夏回族自治区", "65": "新疆维吾尔自治区",
+}
+MUNICIPALITY_PREFIXES = {"11", "12", "31", "50"}
+
+
+def infer_province_city(adcode: str, district_name: str = "") -> tuple[str, str]:
+    """Infer province/city for a district adcode (esp. 直辖市)."""
+    code = str(adcode or "").strip()
+    if len(code) < 2:
+        return "", ""
+    prefix = code[:2]
+    province = PROVINCE_BY_PREFIX.get(prefix, "")
+    if prefix in MUNICIPALITY_PREFIXES:
+        # In municipalities the "city" layer is the same as the province.
+        return province, province
+    return province, ""
+
+
+def fetch_district_detail(adcode_or_keyword: str) -> dict[str, Any]:
+    payload = _amap_get({
+        "keywords": adcode_or_keyword,
+        "subdistrict": 0,
+        "extensions": "all",
+    })
+    districts = payload.get("districts") or []
+    if not districts:
+        raise RuntimeError("未找到该行政区")
+    chosen = None
+    for item in districts:
+        if str(item.get("adcode")) == str(adcode_or_keyword):
+            chosen = item
+            break
+    chosen = chosen or districts[0]
+    level = str(chosen.get("level") or "")
+    polygons = parse_amap_polyline(chosen.get("polyline"))
+    center_lng, center_lat = None, None
+    center = chosen.get("center") or ""
+    if isinstance(center, str) and "," in center:
+        try:
+            center_lng, center_lat = [float(x) for x in center.split(",")[:2]]
+        except ValueError:
+            center_lng = center_lat = None
+    bounds = bounds_from_polygons(polygons)
+    if not bounds and center_lng is not None and center_lat is not None:
+        bounds = {
+            "west": center_lng - 0.05,
+            "east": center_lng + 0.05,
+            "south": center_lat - 0.05,
+            "north": center_lat + 0.05,
+        }
+    if not bounds:
+        raise RuntimeError("该行政区未返回可用边界，请换一个区县或检查 Key 权限")
+    if center_lng is None:
+        center_lng, center_lat = center_from_bounds(bounds)
+    name = str(chosen.get("name") or "")
+    adcode = str(chosen.get("adcode") or adcode_or_keyword)
+    province_name, city_name = infer_province_city(adcode, name)
+    # Prefer any parent names AMap may include; otherwise keep inference.
+    city_name = str(chosen.get("city") or chosen.get("cityname") or city_name or "")
+    province_name = str(chosen.get("province") or chosen.get("pname") or province_name or "")
+    if not province_name or not city_name or city_name == name:
+        inferred_province, inferred_city = infer_province_city(adcode, name)
+        province_name = province_name or inferred_province
+        if not city_name or city_name == name:
+            city_name = inferred_city or city_name
+    return {
+        "adcode": adcode,
+        "name": name,
+        "level": level or "district",
+        "city_name": city_name or name,
+        "province_name": province_name,
+        "polygons": polygons,
+        "bounds": bounds,
+        "center": (round(center_lng, 6), round(center_lat, 6)),
+    }
+
+
 _catalog_lock = threading.RLock()
 _ACTIVE_CATALOG: dict[str, dict[str, Any]] = {}
 
@@ -108,55 +195,6 @@ def point_in_polygons(lng: float, lat: float, polygons: list[list[tuple[float, f
 
 def point_in_bounds(lng: float, lat: float, bounds: dict[str, float]) -> bool:
     return bounds["west"] <= lng <= bounds["east"] and bounds["south"] <= lat <= bounds["north"]
-
-
-def fetch_district_detail(adcode_or_keyword: str) -> dict[str, Any]:
-    payload = _amap_get({
-        "keywords": adcode_or_keyword,
-        "subdistrict": 0,
-        "extensions": "all",
-    })
-    districts = payload.get("districts") or []
-    if not districts:
-        raise RuntimeError("未找到该行政区")
-    chosen = None
-    for item in districts:
-        if str(item.get("adcode")) == str(adcode_or_keyword):
-            chosen = item
-            break
-    chosen = chosen or districts[0]
-    level = str(chosen.get("level") or "")
-    polygons = parse_amap_polyline(chosen.get("polyline"))
-    center_lng, center_lat = None, None
-    center = chosen.get("center") or ""
-    if isinstance(center, str) and "," in center:
-        try:
-            center_lng, center_lat = [float(x) for x in center.split(",")[:2]]
-        except ValueError:
-            center_lng = center_lat = None
-    bounds = bounds_from_polygons(polygons)
-    if not bounds and center_lng is not None and center_lat is not None:
-        bounds = {
-            "west": center_lng - 0.05,
-            "east": center_lng + 0.05,
-            "south": center_lat - 0.05,
-            "north": center_lat + 0.05,
-        }
-    if not bounds:
-        raise RuntimeError("该行政区未返回可用边界，请换一个区县或检查 Key 权限")
-    if center_lng is None:
-        center_lng, center_lat = center_from_bounds(bounds)
-    name = str(chosen.get("name") or "")
-    return {
-        "adcode": str(chosen.get("adcode")),
-        "name": name,
-        "level": level or "district",
-        "city_name": name,
-        "province_name": "",
-        "polygons": polygons,
-        "bounds": bounds,
-        "center": (round(center_lng, 6), round(center_lat, 6)),
-    }
 
 
 def fetch_district_children(keywords: str, subdistrict: int = 1) -> list[dict[str, str]]:
@@ -338,12 +376,25 @@ def enrich_missing_polygons(conn: Any, seed_adcodes: list[str] | None = None) ->
         for row in rows:
             try:
                 detail = fetch_district_detail(str(row["adcode"]))
+                # Never wipe an existing province/city hierarchy with blank AMap fields.
+                cursor.execute(
+                    "SELECT province_name, city_name, name FROM administrative_regions WHERE adcode = %s",
+                    (row["adcode"],),
+                )
+                existing = cursor.fetchone() or {}
+                province = detail.get("province_name") or existing.get("province_name") or ""
+                city = detail.get("city_name") or existing.get("city_name") or ""
+                if not province or city == (detail.get("name") or existing.get("name")):
+                    inferred_p, inferred_c = infer_province_city(str(row["adcode"]))
+                    province = province or inferred_p
+                    if not city or city == (detail.get("name") or existing.get("name")):
+                        city = inferred_c or city
                 upsert_region(
                     cursor,
                     adcode=detail["adcode"],
                     name=detail["name"] or row["name"],
-                    city_name=detail["city_name"],
-                    province_name=detail.get("province_name") or "",
+                    city_name=city or detail["name"] or row["name"],
+                    province_name=province,
                     region_level=detail.get("level") or "district",
                     bounds=detail["bounds"],
                     center=detail["center"],
