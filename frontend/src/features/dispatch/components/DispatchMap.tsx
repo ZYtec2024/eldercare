@@ -1,11 +1,64 @@
 import { useEffect, useRef, useState } from 'react'
 
-import type { DispatchMapData, DispatchRoute } from '../dispatch-types'
+import type { DispatchMapData, DispatchRoute, NavigationMode } from '../dispatch-types'
 import { http } from '@/services/http'
 
 type Point = [number, number]
-type AnimatedTrip = { marker: any; volunteerId: number; path: Point[]; displayed: number; target: number; trafficVersion: number; rate: number; motionRate: number }
-export type AmapDrivingRoute = { path: Point[]; distanceKm: number; etaMinutes: number; trafficSegments: Array<{ path: Point[]; status: string }> }
+type AnimatedTrip = { marker: any; volunteerId: number; journeyKey: string; path: Point[]; displayed: number; target: number; trafficVersion: number; rate: number; motionRate: number }
+export type AmapNavStep = {
+  instruction: string
+  distanceMeters: number
+  road?: string
+}
+
+export type AmapDrivingRoute = {
+  path: Point[]
+  geometryResolved: boolean
+  distanceKm: number
+  etaMinutes: number
+  trafficSegments: Array<{ path: Point[]; status: string }>
+  steps: AmapNavStep[]
+}
+
+export function formatNavDistance(meters: number) {
+  if (meters >= 1000) return `${(meters / 1000).toFixed(1)} 公里`
+  return `${Math.max(1, Math.round(meters))} 米`
+}
+
+export function pickUpcomingNavSteps(steps: AmapNavStep[], progressPercent = 0, limit = 4): AmapNavStep[] {
+  if (!steps.length) return []
+  const total = steps.reduce((sum, step) => sum + Math.max(0, step.distanceMeters), 0)
+  if (total <= 0) return steps.slice(0, limit)
+  const progress = Math.max(0, Math.min(100, progressPercent))
+  if (progress >= 99.8) return []
+  const traveled = total * progress / 100
+  let passed = 0
+  for (let index = 0; index < steps.length; index++) {
+    const next = passed + Math.max(0, steps[index].distanceMeters)
+    if (traveled < next) {
+      const upcoming = steps.slice(index, index + limit)
+      if (!upcoming.length) return []
+      return [
+        { ...upcoming[0], distanceMeters: Math.max(1, next - traveled) },
+        ...upcoming.slice(1),
+      ]
+    }
+    passed = next
+  }
+  return []
+}
+
+function routeNavSteps(result: any): AmapNavStep[] {
+  const steps = result?.routes?.[0]?.steps
+  if (!Array.isArray(steps)) return []
+  return steps
+    .map((step: any) => ({
+      instruction: String(step.instruction || step.action || '').trim(),
+      distanceMeters: Number(step.distance ?? 0),
+      road: typeof step.road === 'string' && step.road ? step.road : undefined,
+    }))
+    .filter((step: AmapNavStep) => step.instruction || step.distanceMeters > 0)
+}
 
 declare global {
   interface Window {
@@ -15,7 +68,7 @@ declare global {
 }
 
 let amapLoader: Promise<any> | null = null
-const drivingRouteCache = new Map<string, Promise<AmapDrivingRoute>>()
+const routePlanCache = new Map<string, Promise<AmapDrivingRoute>>()
 
 function loadAmap() {
   if (window.AMap) return Promise.resolve(window.AMap)
@@ -29,7 +82,7 @@ function loadAmap() {
     }
     window._AMapSecurityConfig = { securityJsCode }
     const script = document.createElement('script')
-    script.src = `https://webapi.amap.com/maps?v=2.0&key=${key}&plugin=AMap.Driving,AMap.Traffic,AMap.ToolBar,AMap.Scale,AMap.MoveAnimation`
+    script.src = `https://webapi.amap.com/maps?v=2.0&key=${key}&plugin=AMap.Driving,AMap.Walking,AMap.Riding,AMap.Traffic,AMap.ToolBar,AMap.Scale,AMap.MoveAnimation`
     script.async = true
     script.onload = () => window.AMap ? resolve(window.AMap) : reject(new Error('高德地图加载失败'))
     script.onerror = () => reject(new Error('无法连接高德地图服务'))
@@ -76,14 +129,12 @@ function pointAlongPath(path: Point[], progress: number): Point {
   return path[path.length - 1]
 }
 
-function trafficColor(route: DispatchRoute, segment: number, status?: string): string {
-  if (status?.includes('严重拥堵')) return '#991b1b'
-  if (status?.includes('拥堵')) return '#dc2626'
-  if (status?.includes('缓行')) return '#eab308'
-  if (status?.includes('畅通')) return '#16a34a'
-  if (route.congested && segment === 2) return '#dc2626'
-  const palette = ['#22c55e', '#22c55e', '#eab308', '#ef4444']
-  return palette[(route.order_id * 3 + route.traffic_version * 5 + segment * 7) % palette.length]
+function trafficStyle(status?: string): { color: string; severity: number } | null {
+  if (status?.includes('严重拥堵')) return { color: '#991b1b', severity: 4 }
+  if (status?.includes('拥堵')) return { color: '#dc2626', severity: 3 }
+  if (status?.includes('缓行')) return { color: '#eab308', severity: 2 }
+  if (status?.includes('畅通')) return { color: '#16a34a', severity: 1 }
+  return null
 }
 
 function trafficSegments(path: Point[], route: DispatchRoute): Point[][] {
@@ -102,19 +153,46 @@ function compactPath(path: Point[], maxPoints: number) {
 }
 
 export async function getAmapDrivingRoute(start: Point, end: Point, policyName = 'LEAST_TIME', refreshSlot = ''): Promise<AmapDrivingRoute> {
-  const key = `${refreshSlot}:${policyName}:${start[0].toFixed(5)},${start[1].toFixed(5)}:${end[0].toFixed(5)},${end[1].toFixed(5)}`
-  if (!drivingRouteCache.has(key)) {
-    drivingRouteCache.set(key, loadAmap().then((AMap) => new Promise<AmapDrivingRoute>((resolve) => {
-      const policy = AMap.DrivingPolicy[policyName] ?? AMap.DrivingPolicy.LEAST_TIME
-      const driving = new AMap.Driving({ policy, extensions: 'all', showTraffic: true, map: null, hideMarkers: true })
-      driving.search(new AMap.LngLat(start[0], start[1]), new AMap.LngLat(end[0], end[1]), (status: string, result: any) => {
+  return getAmapRoute(start, end, 'driving', policyName, refreshSlot)
+}
+
+export async function getAmapRoute(start: Point, end: Point, mode: NavigationMode = 'driving', policyName = 'LEAST_TIME', refreshSlot = ''): Promise<AmapDrivingRoute> {
+  const key = `${refreshSlot}:${mode}:${policyName}:${start[0].toFixed(5)},${start[1].toFixed(5)}:${end[0].toFixed(5)},${end[1].toFixed(5)}`
+  if (!routePlanCache.has(key)) {
+    const routePromise = loadAmap().then((AMap) => new Promise<AmapDrivingRoute>((resolve) => {
+      const planner = mode === 'walking'
+        ? new AMap.Walking({ map: null, hideMarkers: true })
+        : mode === 'riding'
+          ? new AMap.Riding({ map: null, hideMarkers: true })
+          : new AMap.Driving({
+              policy: AMap.DrivingPolicy[policyName] ?? AMap.DrivingPolicy.LEAST_TIME,
+              extensions: 'all',
+              showTraffic: true,
+              map: null,
+              hideMarkers: true,
+            })
+      planner.search(new AMap.LngLat(start[0], start[1]), new AMap.LngLat(end[0], end[1]), (status: string, result: any) => {
         const points = status === 'complete' ? routePoints(result) : []
         const route = result?.routes?.[0]
-        resolve({ path: points.length > 1 ? points : [start, end], distanceKm: Number(route?.distance ?? 0) / 1000, etaMinutes: Math.max(1, Math.round(Number(route?.time ?? 0) / 60)), trafficSegments: status === 'complete' ? routeTrafficSegments(result) : [] })
+        const geometryResolved = status === 'complete' && points.length > 2
+        resolve({
+          path: geometryResolved ? points : [start, end],
+          geometryResolved,
+          distanceKm: Number(route?.distance ?? 0) / 1000,
+          etaMinutes: Math.max(1, Math.round(Number(route?.time ?? 0) / 60)),
+          trafficSegments: geometryResolved && mode === 'driving' ? routeTrafficSegments(result) : [],
+          steps: geometryResolved ? routeNavSteps(result) : [],
+        })
       })
-    })))
+    }))
+    routePlanCache.set(key, routePromise)
+    void routePromise.then((route) => {
+      if (!route.geometryResolved && routePlanCache.get(key) === routePromise) routePlanCache.delete(key)
+    }, () => {
+      if (routePlanCache.get(key) === routePromise) routePlanCache.delete(key)
+    })
   }
-  return drivingRouteCache.get(key)!
+  return routePlanCache.get(key)!
 }
 
 export async function getAmapDrivingPath(start: Point, end: Point, policyName = 'LEAST_TIME'): Promise<Point[]> {
@@ -125,11 +203,24 @@ export async function getAmapPointAtProgress(start: Point, end: Point, progress:
   return pointAlongPath(await getAmapDrivingPath(start, end), progress)
 }
 
-export function DispatchMap({ overview, height = 390 }: { overview: DispatchMapData | null; height?: number }) {
+export function DispatchMap({
+  overview,
+  height = 390,
+  expandable = false,
+  onExpand,
+}: {
+  overview: DispatchMapData | null
+  height?: number
+  expandable?: boolean
+  onExpand?: () => void
+}) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<any>(null)
   const overlaysRef = useRef<any[]>([])
-  const routeCache = useRef(new Map<string, Point[]>())
+  const routeCache = useRef(new Map<string, {
+    path: Point[]
+    trafficSegments: AmapDrivingRoute['trafficSegments']
+  }>())
   const routeProgressRef = useRef(new Map<number, number>())
   const sosRouteHistoryRef = useRef(new Map<number, { version: number; path: Point[]; oldPath?: Point[]; expiresAt?: number }>())
   const animatedTripsRef = useRef(new Map<number, AnimatedTrip>())
@@ -279,6 +370,14 @@ export function DispatchMap({ overview, height = 390 }: { overview: DispatchMapD
         content: markerHtml(order.urgency === 'sos' ? '#dc2626' : '#ea580c', order.urgency === 'sos' ? 'SOS' : '单', order.service_type), zIndex: 50,
       }))
     })
+    // Include the persisted road endpoints when fitting the command map.
+    // Returning volunteers do not have an active order marker, so without
+    // these points the map could frame only the district markers and make the
+    // actual return road appear clipped or visually like a straight shortcut.
+    overview.routes.forEach((route) => {
+      if (route.path.length < 2) return
+      focusPoints.push(route.path[0], route.path[route.path.length - 1])
+    })
 
     // Fit once per privacy scope change (region + who is visible), so idle
     // elder/volunteer maps center on self instead of the whole district.
@@ -311,13 +410,15 @@ export function DispatchMap({ overview, height = 390 }: { overview: DispatchMapD
       if (fallback.length < 2) return
       const start = fallback[0]
       const end = fallback[fallback.length - 1]
+      const journeyKey = route.journey_id
+        || `${route.order_id}:${start[0].toFixed(5)},${start[1].toFixed(5)}:${end[0].toFixed(5)},${end[1].toFixed(5)}`
       const key = `${route.order_id}:${route.traffic_version}:${start[0].toFixed(5)},${start[1].toFixed(5)}:${end[0].toFixed(5)},${end[1].toFixed(5)}`
       const isSos = overview.orders.some((order) => order.order_id === route.order_id && order.urgency === 'sos')
       const publishGeometry = (points: Point[], segments: AmapDrivingRoute['trafficSegments']) => {
         // The first portal that resolves the AMap driving route publishes a
         // compact road polyline.  Thereafter every portal and the backend
         // movement clock use the identical geometry, just like the sandbox.
-        const signature = `${route.order_id}:${route.traffic_version}`
+        const signature = `${journeyKey}:${route.traffic_version}`
         if (publishedGeometryRef.current.has(signature) || points.length < 3) return
         publishedGeometryRef.current.add(signature)
         void http.post(`/dispatch/routes/${route.order_id}/geometry`, {
@@ -332,28 +433,34 @@ export function DispatchMap({ overview, height = 390 }: { overview: DispatchMapD
         const oldPath = isSos && history?.version !== route.traffic_version ? history?.path : history?.expiresAt && history.expiresAt > Date.now() ? history.oldPath : undefined
         if (isSos && oldPath?.length && oldPath.length > 1) add(new AMap.Polyline({ path: oldPath, strokeColor: '#94a3b8', strokeWeight: 4, strokeOpacity: .8, strokeStyle: 'dashed', zIndex: 21 }))
         if (isSos) sosRouteHistoryRef.current.set(route.order_id, { version: route.traffic_version, path: points, oldPath: history?.version !== route.traffic_version ? history?.path : history?.oldPath, expiresAt: history?.version !== route.traffic_version ? Date.now() + 6000 : history?.expiresAt })
-        if (route.journey_type === 'returning') {
-          add(new AMap.Polyline({ path: points, strokeColor: '#7c3aed', strokeWeight: 4, strokeOpacity: .92, strokeStyle: isFallback ? 'dashed' : 'solid', zIndex: 20 }))
-        } else {
-          const segments = routeWithTraffic.traffic_segments?.length ? routeWithTraffic.traffic_segments : trafficSegments(points, route).map((path) => ({ path, status: '' }))
-          // Traffic (TMC) data only contains the road sections for which AMap
-          // has a traffic classification.  It is not guaranteed to cover every
-          // step of the navigation route, so drawing *only* those sections
-          // leaves apparent gaps in the middle of a journey.  A complete base
-          // polyline keeps the route continuous; coloured TMC sections are then
-          // layered above it wherever traffic information is available.
+        const segments = routeWithTraffic.traffic_segments?.length ? routeWithTraffic.traffic_segments : []
+        // Normal road is green. Real AMap yellow/red TMC sections are drawn
+        // wider and above it, matching the familiar traffic-map convention.
+        add(new AMap.Polyline({
+          path: points,
+          strokeColor: '#16a34a',
+          strokeWeight: 6,
+          strokeOpacity: .94,
+          strokeStyle: isFallback ? 'dashed' : 'solid',
+          lineJoin: 'round',
+          lineCap: 'round',
+          zIndex: 19,
+        }))
+        segments.forEach((segment) => {
+          const style = trafficStyle(segment.status)
+          if (!style) return
           add(new AMap.Polyline({
-            path: points,
-            strokeColor: isSos ? '#dc2626' : '#0f766e',
-            strokeWeight: isSos ? 8 : 6,
-            strokeOpacity: .92,
+            path: segment.path,
+            strokeColor: style.color,
+            strokeWeight: 6 + style.severity * .6,
+            strokeOpacity: 1,
             strokeStyle: isFallback ? 'dashed' : 'solid',
             lineJoin: 'round',
             lineCap: 'round',
-            zIndex: isSos ? 24 : 19,
+            // Red overlays yellow; yellow overlays green.
+            zIndex: 20 + style.severity,
           }))
-          segments.forEach((segment, index) => add(new AMap.Polyline({ path: segment.path, strokeColor: trafficColor(routeWithTraffic, index, segment.status), strokeWeight: isSos ? 8 : 6, strokeOpacity: .95, strokeStyle: isFallback ? 'dashed' : 'solid', lineJoin: 'round', lineCap: 'round', zIndex: isSos ? 25 : 20 })))
-        }
+        })
         if (route.progress != null && route.progress <= 100) {
           const previous = routeProgressRef.current.get(route.order_id)
           const history = sosRouteHistoryRef.current.get(route.order_id)
@@ -369,9 +476,10 @@ export function DispatchMap({ overview, height = 390 }: { overview: DispatchMapD
             if (!trip) {
               const marker = new AMap.Marker({ position, offset: new AMap.Pixel(-14, -14), content: markerHtml(availabilityColor(volunteer.availability), '车', `${volunteer.name} 行驶中`), zIndex: 60 })
               marker.setMap(map)
-              trip = { marker, volunteerId: route.volunteer_id, path: points, displayed: fromProgress, target: route.progress, trafficVersion: route.traffic_version, rate: route.journey_type === 'returning' ? .003 : .006, motionRate: route.motion_rate ?? 0 }
+              trip = { marker, volunteerId: route.volunteer_id, journeyKey, path: points, displayed: fromProgress, target: route.progress, trafficVersion: route.traffic_version, rate: route.journey_type === 'returning' ? .003 : .006, motionRate: route.motion_rate ?? 0 }
               animatedTripsRef.current.set(route.order_id, trip)
-            } else if (trip.trafficVersion !== route.traffic_version) {
+            } else if (trip.trafficVersion !== route.traffic_version || trip.journeyKey !== journeyKey) {
+              trip.journeyKey = journeyKey
               trip.path = points
               trip.displayed = route.progress
               trip.target = route.progress
@@ -411,13 +519,20 @@ export function DispatchMap({ overview, height = 390 }: { overview: DispatchMapD
       }
       if (fallback.length > 2) { paint(fallback); return }
       const cached = routeCache.current.get(key)
-      if (cached) { paint(cached); return }
+      if (cached) {
+        paint(cached.path, false, { ...route, traffic_segments: cached.trafficSegments })
+        return
+      }
       const driving = new AMap.Driving({ policy: AMap.DrivingPolicy.REAL_TRAFFIC ?? AMap.DrivingPolicy.LEAST_TIME, extensions: 'all', showTraffic: true, map: null, hideMarkers: true })
       driving.search(new AMap.LngLat(...start), new AMap.LngLat(...end), (resultStatus: string, result: any) => {
         const points = resultStatus === 'complete' ? routePoints(result) : []
         if (points.length > 1) {
           const segments = routeTrafficSegments(result)
-          routeCache.current.set(key, points)
+          // Keep the TMC colours together with the geometry. Polling can hit
+          // this cache before the shared backend write returns; caching only
+          // `path` repainted the same road green one second after red/yellow
+          // segments had first appeared.
+          routeCache.current.set(key, { path: points, trafficSegments: segments })
           publishGeometry(points, segments)
           paint(points, false, { ...route, traffic_segments: segments })
         } else paint(fallback, true)
@@ -426,10 +541,37 @@ export function DispatchMap({ overview, height = 390 }: { overview: DispatchMapD
     overview.routes.forEach(drawActualRoute)
   }, [overview, status])
 
+  const routeTrafficStatuses = (overview?.routes ?? [])
+    .flatMap((route) => route.traffic_segments ?? [])
+    .map((segment) => segment.status)
+    .filter(Boolean)
+  const hasCongestion = routeTrafficStatuses.some((status) => status.includes('拥堵'))
+  const hasSlowTraffic = routeTrafficStatuses.some((status) => status.includes('缓行'))
+  const hasClearTraffic = routeTrafficStatuses.some((status) => status.includes('畅通'))
+  const trafficSummary = hasCongestion
+    ? '高德本次规划：存在拥堵路段'
+    : hasSlowTraffic
+      ? '高德本次规划：存在缓行路段'
+      : hasClearTraffic
+        ? '高德本次规划：返回路段均为畅通'
+        : '高德未返回分段路况，绿色仅为默认路线底色'
+
   return <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-slate-100" style={{ height }}>
     <div ref={containerRef} className="h-full w-full" />
     {status !== 'ready' ? <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80 text-sm text-white">{status === 'loading' ? '正在加载高德真实地图与路况…' : `高德地图不可用：${error}`}</div> : null}
-    <div className="pointer-events-none absolute left-3 top-3 rounded-xl bg-slate-950/85 px-3 py-2 text-xs text-white shadow-lg"><div className="font-semibold">{overview?.region_name || '当前服务区县'} · 高德真实道路与实时路况</div><div className="mt-1 text-[11px] text-slate-300">红：老人/订单 · 绿/蓝/紫：志愿者状态 · 蓝：普通路线 · 红虚线：SOS重规划</div><div className="mt-2 flex gap-3 text-[11px]"><span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-emerald-400" />畅通</span><span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-amber-400" />缓行</span><span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-red-500" />拥堵</span></div></div>
-    <div className="pointer-events-none absolute bottom-3 right-3 rounded-lg bg-white/95 px-2 py-1 text-[11px] font-medium text-slate-700">高德驾驶策略：躲避拥堵 · 路况自动刷新</div>
+    <div className="pointer-events-none absolute left-3 top-3 rounded-xl bg-slate-950/85 px-3 py-2 text-xs text-white shadow-lg"><div className="font-semibold">{overview?.region_name || '当前服务区县'} · 高德真实道路与规划路况</div><div className="mt-1 text-[11px] text-slate-300">红：老人/订单 · 绿/蓝/紫：志愿者状态 · 高德返回黄/红路况时覆盖绿色底线</div><div className="mt-2 flex gap-3 text-[11px]"><span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-emerald-400" />默认/畅通</span><span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-amber-400" />缓行</span><span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-red-500" />拥堵</span></div></div>
+    {(expandable || onExpand) ? (
+      <button
+        type="button"
+        className="absolute right-3 top-3 z-10 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-[11px] font-medium text-white shadow hover:bg-emerald-500"
+        onClick={(event) => {
+          event.stopPropagation()
+          onExpand?.()
+        }}
+      >
+        导航大图
+      </button>
+    ) : null}
+    <div className="pointer-events-none absolute bottom-3 right-3 rounded-lg bg-white/95 px-2 py-1 text-[11px] font-medium text-slate-700">{trafficSummary}</div>
   </div>
 }

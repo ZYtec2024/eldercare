@@ -15,11 +15,13 @@ type RegionOption = {
   name: string
   province_name?: string
   city_name?: string
+  active?: boolean
 }
 
 type CascaderOption = {
   value: string
   label: string
+  disabled?: boolean
   children?: CascaderOption[]
 }
 
@@ -27,12 +29,14 @@ type Props = {
   value: AdminGeoScope
   onChange: (next: AdminGeoScope) => void
   className?: string
+  /** Dispatch maps need an exact district; reporting pages may stop at any level. */
+  leafOnly?: boolean
 }
 
 const NATIONAL = '__national__'
 
 /** Single cascader: 全国 → 省 → 市 → 区县. Pick any level to filter. */
-export function AdminGeoScopeFilters({ value, onChange, className }: Props) {
+export function AdminGeoScopeFilters({ value, onChange, className, leafOnly = false }: Props) {
   const { session } = useSession()
   const isRoot = Boolean(session?.isRoot)
   const [regions, setRegions] = useState<RegionOption[]>([])
@@ -42,12 +46,24 @@ export function AdminGeoScopeFilters({ value, onChange, className }: Props) {
     if (isRoot) {
       fetchManagedDispatchRegions(session.userId)
         .then((items) => {
-          setRegions(items.map((item) => ({
+          const nextRegions = items.map((item) => ({
             adcode: item.adcode,
             name: item.name,
             province_name: item.province_name,
             city_name: item.city_name,
-          })))
+            active: item.active,
+          }))
+          setRegions(nextRegions)
+          if (leafOnly && !value.regionAdcode) {
+            const initial = nextRegions.find((item) => item.active !== false) ?? nextRegions[0]
+            if (initial) {
+              onChange({
+                regionAdcode: initial.adcode,
+                provinceName: initial.province_name,
+                cityName: initial.city_name,
+              })
+            }
+          }
         })
         .catch(() => setRegions([]))
       return
@@ -55,7 +71,7 @@ export function AdminGeoScopeFilters({ value, onChange, className }: Props) {
     fetchAdminDispatchRegions(session.userId)
       .then((items) => {
         setRegions(items)
-        if (items.length === 1 && !value.regionAdcode) {
+        if ((leafOnly || items.length === 1) && !value.regionAdcode && items[0]) {
           onChange({ regionAdcode: items[0].adcode })
         }
       })
@@ -89,19 +105,24 @@ export function AdminGeoScopeFilters({ value, onChange, className }: Props) {
           .sort(([a], [b]) => a.localeCompare(b, 'zh-CN'))
           .map(([city, districts]) => ({
             value: `c:${city}`,
-            label: city,
+            label: city === province ? '市辖区' : city,
             children: districts
               .slice()
               .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
               .map((district) => ({
                 value: district.adcode,
                 label: district.name,
+                disabled: leafOnly && district.active === false,
               })),
           })),
       }))
 
-    return [{ value: NATIONAL, label: '全国' }, ...provinceNodes]
-  }, [regions, isRoot])
+    return [{
+      value: NATIONAL,
+      label: '全国',
+      children: provinceNodes,
+    }]
+  }, [regions, isRoot, leafOnly])
 
   const cascaderValue = useMemo(() => {
     if (!value.regionAdcode && !value.provinceName && !value.cityName) {
@@ -113,32 +134,40 @@ export function AdminGeoScopeFilters({ value, onChange, className }: Props) {
     if (value.regionAdcode) {
       const hit = regions.find((item) => item.adcode === value.regionAdcode)
       if (hit?.province_name && hit.city_name) {
-        return [`p:${hit.province_name}`, `c:${hit.city_name}`, hit.adcode]
+        return [NATIONAL, `p:${hit.province_name}`, `c:${hit.city_name}`, hit.adcode]
       }
-      return [value.regionAdcode]
+      return [NATIONAL, value.regionAdcode]
     }
     if (value.provinceName && value.cityName) {
-      return [`p:${value.provinceName}`, `c:${value.cityName}`]
+      return [NATIONAL, `p:${value.provinceName}`, `c:${value.cityName}`]
     }
     if (value.provinceName) {
-      return [`p:${value.provinceName}`]
+      return [NATIONAL, `p:${value.provinceName}`]
     }
     return [NATIONAL]
   }, [value, isRoot, regions])
 
   const handleChange = (path: (string | number)[] | undefined) => {
     const values = (path ?? []).map(String)
-    if (!values.length || values[0] === NATIONAL) {
+    if (!values.length) {
       onChange({})
       return
     }
     if (!isRoot) {
-      onChange({ regionAdcode: values[0] })
+      onChange(values[0] === NATIONAL ? {} : { regionAdcode: values[0] })
       return
     }
-    const province = values[0]?.startsWith('p:') ? values[0].slice(2) : undefined
-    const city = values[1]?.startsWith('c:') ? values[1].slice(2) : undefined
-    const district = values[2]
+    if (values[0] !== NATIONAL) {
+      onChange({})
+      return
+    }
+    if (values.length === 1) {
+      onChange({})
+      return
+    }
+    const province = values[1]?.startsWith('p:') ? values[1].slice(2) : undefined
+    const city = values[2]?.startsWith('c:') ? values[2].slice(2) : undefined
+    const district = values[3]
     if (district) {
       onChange({ provinceName: province, cityName: city, regionAdcode: district })
       return
@@ -160,10 +189,11 @@ export function AdminGeoScopeFilters({ value, onChange, className }: Props) {
       options={options}
       value={cascaderValue}
       onChange={handleChange}
-      changeOnSelect
+      changeOnSelect={!leafOnly}
       allowClear={false}
       expandTrigger="hover"
       displayRender={(labels) => labels.join(' / ')}
+      showSearch
       placeholder="全国 → 省 → 市 → 区"
     />
   )

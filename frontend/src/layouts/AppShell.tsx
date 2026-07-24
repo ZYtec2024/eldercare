@@ -1,4 +1,4 @@
-import { useMemo, useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   HomeOutlined,
   LogoutOutlined,
@@ -6,9 +6,8 @@ import {
   MenuUnfoldOutlined,
   UserOutlined,
 } from '@ant-design/icons'
-import { Avatar, Button, Layout, Menu, Space, Typography } from 'antd'
+import { App, Avatar, Button, Layout, Menu, Space, Typography } from 'antd'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { useState } from 'react'
 
 import { useSession } from '@/features/auth/useSession'
 import { LiveNoticeHost } from '@/features/shared/LiveNoticeHost'
@@ -21,6 +20,7 @@ import {
   isRoleAllowedPath,
 } from '@/routes/role-defaults'
 import { roleLabels } from '@/types/domain'
+import { fetchAdminUsers } from '@/services/adapters/admin-adapter'
 
 const { Header, Sider, Content } = Layout
 
@@ -46,6 +46,7 @@ function ElderLogo({ className }: { className?: string }) {
 }
 
 export function AppShell() {
+  const { modal } = App.useApp()
   const navigate = useNavigate()
   const location = useLocation()
   const { session, logout, updateLastVisitedRoute } = useSession()
@@ -76,6 +77,56 @@ export function AppShell() {
     }
     updateLastVisitedRoute(location.pathname)
   }, [activeRoute, location.pathname, session, updateLastVisitedRoute])
+
+  useEffect(() => {
+    if (!session || session.role !== 'admin') return
+    let stopped = false
+    const storageKey = `pending-volunteer-review:${session.userId}`
+
+    const checkPendingVolunteers = async () => {
+      try {
+        const result = await fetchAdminUsers({
+          adminUserId: session.userId,
+          role: 'volunteer',
+          page: 1,
+          pageSize: 100,
+        })
+        if (stopped) return
+        const pending = result.items.filter((item) => item.status === 'pending_review')
+        const signature = pending.map((item) => item.userId).sort((a, b) => a - b).join(',')
+        if (!signature) {
+          window.sessionStorage.removeItem(storageKey)
+          return
+        }
+        if (window.sessionStorage.getItem(storageKey) === signature) return
+        window.sessionStorage.setItem(storageKey, signature)
+        modal.confirm({
+          title: `发现 ${pending.length} 位待认证志愿者`,
+          content: (
+            <div className="space-y-2">
+              <div>请查看注册说明、核验资质并分配可接单技能。</div>
+              <div className="rounded-lg bg-amber-50 p-3 text-amber-900">
+                {pending.slice(0, 5).map((item) => item.name || item.username).join('、')}
+                {pending.length > 5 ? ` 等 ${pending.length} 人` : ''}
+              </div>
+            </div>
+          ),
+          okText: '现在去认证',
+          cancelText: '稍后处理',
+          onOk: () => navigate('/admin/users?role=volunteer'),
+        })
+      } catch {
+        // A transient network failure must not interrupt normal admin work.
+      }
+    }
+
+    void checkPendingVolunteers()
+    const timer = window.setInterval(() => void checkPendingVolunteers(), 20_000)
+    return () => {
+      stopped = true
+      window.clearInterval(timer)
+    }
+  }, [modal, navigate, session?.role, session?.userId])
 
   if (!session) return null
 

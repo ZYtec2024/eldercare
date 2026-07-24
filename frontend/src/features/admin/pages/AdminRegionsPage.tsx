@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { App, Button, Card, Form, Input, Modal, Radio, Select, Space, Switch, Table, Tag, Typography } from 'antd'
+import { useEffect, useMemo, useState } from 'react'
+import { App, Button, Card, Modal, Select, Space, Switch, Table, Tag, Typography } from 'antd'
 import { EnvironmentOutlined, PlusOutlined, ReloadOutlined, UserAddOutlined, UserDeleteOutlined } from '@ant-design/icons'
 import { Navigate } from 'react-router-dom'
 
@@ -17,16 +17,6 @@ import {
   type RegionCatalogNode,
 } from '@/services/adapters/dispatch-adapter'
 
-type AdminMode = 'existing' | 'create'
-
-type DistrictAdminForm = {
-  username: string
-  password: string
-  real_name: string
-  phone: string
-  email: string
-}
-
 export default function AdminRegionsPage() {
   const { session } = useSession()
   const { message, modal } = App.useApp()
@@ -39,13 +29,43 @@ export default function AdminRegionsPage() {
   const [province, setProvince] = useState<RegionCatalogNode>()
   const [city, setCity] = useState<RegionCatalogNode>()
   const [district, setDistrict] = useState<RegionCatalogNode>()
-  const [adminMode, setAdminMode] = useState<AdminMode>('create')
   const [managerUserId, setManagerUserId] = useState<number>()
   const [saving, setSaving] = useState(false)
   const [unbindTarget, setUnbindTarget] = useState<ManagedDispatchRegion>()
   const [unbindSelectedIds, setUnbindSelectedIds] = useState<number[]>([])
   const [unbinding, setUnbinding] = useState(false)
-  const [form] = Form.useForm<DistrictAdminForm>()
+  const [configuredProvince, setConfiguredProvince] = useState<string>()
+  const [configuredCity, setConfiguredCity] = useState<string>()
+  const [configuredAdcode, setConfiguredAdcode] = useState<string>()
+
+  const configuredProvinceOptions = useMemo(
+    () => Array.from(new Set(regions.map((item) => item.province_name).filter(Boolean) as string[]))
+      .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+      .map((name) => ({ label: name, value: name })),
+    [regions],
+  )
+  const configuredCityOptions = useMemo(
+    () => Array.from(new Set(regions
+      .filter((item) => !configuredProvince || item.province_name === configuredProvince)
+      .map((item) => item.city_name)
+      .filter(Boolean) as string[]))
+      .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+      .map((name) => ({ label: name === configuredProvince ? '市辖区' : name, value: name })),
+    [configuredProvince, regions],
+  )
+  const configuredDistrictOptions = useMemo(
+    () => regions
+      .filter((item) => (!configuredProvince || item.province_name === configuredProvince)
+        && (!configuredCity || item.city_name === configuredCity))
+      .map((item) => ({ label: `${item.name}（${item.adcode}）`, value: item.adcode })),
+    [configuredCity, configuredProvince, regions],
+  )
+  const filteredRegions = useMemo(
+    () => regions.filter((item) => (!configuredProvince || item.province_name === configuredProvince)
+      && (!configuredCity || item.city_name === configuredCity)
+      && (!configuredAdcode || item.adcode === configuredAdcode)),
+    [configuredAdcode, configuredCity, configuredProvince, regions],
+  )
 
   const loadManaged = async () => {
     if (!session) return
@@ -55,7 +75,15 @@ export default function AdminRegionsPage() {
         fetchManagedDispatchRegions(session.userId),
         fetchCandidateDistrictManagers(session.userId),
       ])
-      setRegions(managed)
+      setRegions([...managed].sort((a, b) => {
+        const provinceCmp = String(a.province_name || '').localeCompare(String(b.province_name || ''), 'zh-CN')
+        if (provinceCmp) return provinceCmp
+        const cityCmp = String(a.city_name || '').localeCompare(String(b.city_name || ''), 'zh-CN')
+        if (cityCmp) return cityCmp
+        const nameCmp = String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN')
+        if (nameCmp) return nameCmp
+        return String(a.adcode).localeCompare(String(b.adcode))
+      }))
       setCandidates(managers)
     } catch (err: any) {
       message.error(err?.message || '加载区域失败（需要总管理员权限）')
@@ -100,34 +128,25 @@ export default function AdminRegionsPage() {
     setDistricts(children.filter((item) => item.level === 'district' || item.level === 'biz_area' || item.level === 'city'))
   }
 
-  const resolveAdminPayload = async () => {
-    if (adminMode === 'existing') {
-      if (!managerUserId) {
-        throw new Error('请选择已有区管理员')
-      }
-      return { managerUserId }
-    }
-    const values = await form.validateFields()
-    return { districtAdmin: values }
-  }
-
   const addRegion = async () => {
     if (!session || !district) {
       message.warning('请先选择到区县')
       return
     }
+    if (!managerUserId) {
+      message.warning('请选择已有区管理员')
+      return
+    }
     setSaving(true)
     try {
-      const adminPayload = await resolveAdminPayload()
       const result = await createManagedDispatchRegion({
         adminUserId: session.userId,
         adcode: district.adcode,
         provinceName: province?.name,
         cityName: city?.name,
-        ...adminPayload,
+        managerUserId,
       })
       message.success(result.message || '已开通区域')
-      form.resetFields()
       setManagerUserId(undefined)
       await loadManaged()
     } catch (err: any) {
@@ -145,17 +164,6 @@ export default function AdminRegionsPage() {
       await loadManaged()
     } catch (err: any) {
       message.error(err?.message || '更新失败')
-    }
-  }
-
-  const refreshPolygon = async (row: ManagedDispatchRegion) => {
-    if (!session) return
-    try {
-      await patchManagedDispatchRegion(row.adcode, { adminUserId: session.userId, refreshPolygon: true })
-      message.success('已从高德刷新官方边界')
-      await loadManaged()
-    } catch (err: any) {
-      message.error(err?.message || '刷新边界失败')
     }
   }
 
@@ -200,37 +208,22 @@ export default function AdminRegionsPage() {
 
   const bindManager = (row: ManagedDispatchRegion) => {
     if (!session) return
-    let mode: AdminMode = 'existing'
     let selectedId: number | undefined
-    let createValues: DistrictAdminForm = {
-      username: '',
-      password: '',
-      real_name: '',
-      phone: '',
-      email: '',
-    }
 
     modal.confirm({
       title: `为 ${row.name} 绑定区管理员`,
       width: 520,
       content: (
         <div className="space-y-3 pt-2">
-          <Radio.Group
-            defaultValue="existing"
-            onChange={(event) => {
-              mode = event.target.value
-            }}
-          >
-            <Radio value="existing">绑定已有管理员</Radio>
-            <Radio value="create">新建区管理员</Radio>
-          </Radio.Group>
           <Select
             className="w-full"
             placeholder="选择已有区管理员"
-            options={candidates.map((item) => ({
-              value: item.user_id,
-              label: `${item.real_name}（${item.username}）`,
-            }))}
+            options={candidates
+              .filter((item) => !item.region_adcodes.includes(row.adcode))
+              .map((item) => ({
+                value: item.user_id,
+                label: `${item.real_name}（${item.username}）`,
+              }))}
             onChange={(value) => {
               selectedId = value
             }}
@@ -238,30 +231,20 @@ export default function AdminRegionsPage() {
             optionFilterProp="label"
           />
           <Typography.Paragraph type="secondary" className="!mb-0 text-xs">
-            若选「新建」，请在确认前先在下方填写账号（弹窗确认时会再次校验；建议优先绑定已有账号）。
+            这里只绑定已有管理员；已绑定当前区县的账号已自动排除。
           </Typography.Paragraph>
-          <Input placeholder="新建用户名" onChange={(e) => { createValues = { ...createValues, username: e.target.value } }} />
-          <Input.Password placeholder="新建密码" onChange={(e) => { createValues = { ...createValues, password: e.target.value } }} />
-          <Input placeholder="姓名" onChange={(e) => { createValues = { ...createValues, real_name: e.target.value } }} />
-          <Input placeholder="手机" onChange={(e) => { createValues = { ...createValues, phone: e.target.value } }} />
-          <Input placeholder="邮箱" onChange={(e) => { createValues = { ...createValues, email: e.target.value } }} />
         </div>
       ),
       onOk: async () => {
         try {
-          const payload =
-            mode === 'existing'
-              ? { adminUserId: session.userId, managerUserId: selectedId }
-              : { adminUserId: session.userId, districtAdmin: createValues }
-          if (mode === 'existing' && !selectedId) {
+          if (!selectedId) {
             message.warning('请选择已有管理员')
             return Promise.reject()
           }
-          if (mode === 'create' && !Object.values(createValues).every(Boolean)) {
-            message.warning('请完整填写新区管理员信息')
-            return Promise.reject()
-          }
-          const result = await bindManagedDispatchRegionManager(row.adcode, payload)
+          const result = await bindManagedDispatchRegionManager(row.adcode, {
+            adminUserId: session.userId,
+            managerUserId: selectedId,
+          })
           message.success(result.message || '已绑定')
           await loadManaged()
         } catch (err: any) {
@@ -281,7 +264,7 @@ export default function AdminRegionsPage() {
       <div>
         <Typography.Title level={2} className="!mb-1">区域管理</Typography.Title>
         <Typography.Text type="secondary">
-          总管理员先开通区县并绑定区管理员；仅已启用区县可落点、下单与 SOS。停用后该区不再接受新业务。
+          上方只负责开通新区县；下方负责启用、停用、绑定和解绑。区域管理不再创建管理员账号。
         </Typography.Text>
       </div>
 
@@ -318,51 +301,20 @@ export default function AdminRegionsPage() {
           />
         </Space>
 
-        <div className="mb-3">
-          <Typography.Text strong>区管理员（开通时必填）</Typography.Text>
-          <div className="mt-2">
-            <Radio.Group value={adminMode} onChange={(event) => setAdminMode(event.target.value)}>
-              <Radio value="create">新建区管理员</Radio>
-              <Radio value="existing">绑定已有管理员</Radio>
-            </Radio.Group>
-          </div>
-        </div>
-
-        {adminMode === 'existing' ? (
-          <Select
-            className="min-w-72 mb-4"
-            placeholder="选择区管理员账号"
-            value={managerUserId}
-            options={candidates.map((item) => ({
-              value: item.user_id,
-              label: `${item.real_name}（${item.username}${item.region_adcodes.length ? ` · 已管 ${item.region_adcodes.join('/')}` : ''}）`,
-            }))}
-            onChange={setManagerUserId}
-            showSearch
-            optionFilterProp="label"
-            allowClear
-          />
-        ) : (
-          <Form form={form} layout="vertical" className="max-w-xl">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
-              <Form.Item name="username" label="登录用户名" rules={[{ required: true, message: '必填' }]}>
-                <Input placeholder="例如 admin_pudong" />
-              </Form.Item>
-              <Form.Item name="password" label="初始密码" rules={[{ required: true, message: '必填' }]}>
-                <Input.Password placeholder="设置初始密码" />
-              </Form.Item>
-              <Form.Item name="real_name" label="姓名" rules={[{ required: true, message: '必填' }]}>
-                <Input />
-              </Form.Item>
-              <Form.Item name="phone" label="手机" rules={[{ required: true, message: '必填' }]}>
-                <Input />
-              </Form.Item>
-              <Form.Item name="email" label="邮箱" className="md:col-span-2" rules={[{ required: true, message: '必填' }]}>
-                <Input />
-              </Form.Item>
-            </div>
-          </Form>
-        )}
+        <div className="mb-3"><Typography.Text strong>绑定已有区管理员（开通时必填）</Typography.Text></div>
+        <Select
+          className="min-w-72 mb-4"
+          placeholder="选择已有区管理员账号"
+          value={managerUserId}
+          options={candidates.map((item) => ({
+            value: item.user_id,
+            label: `${item.real_name}（${item.username}${item.region_adcodes.length ? ` · 已管 ${item.region_adcodes.join('/')}` : ' · 尚未指派'}）`,
+          }))}
+          onChange={setManagerUserId}
+          showSearch
+          optionFilterProp="label"
+          allowClear
+        />
 
         <Button type="primary" icon={<PlusOutlined />} loading={saving} onClick={() => void addRegion()}>
           开通区县并绑定管理员
@@ -371,20 +323,65 @@ export default function AdminRegionsPage() {
 
       <Card
         className="!rounded-2xl"
-        title="已配置区域"
+        title={`已配置区域（${filteredRegions.length}/${regions.length}）`}
         extra={<Button icon={<ReloadOutlined />} onClick={() => void loadManaged()}>刷新</Button>}
       >
-        <Table
+        <Space wrap size="middle" className="mb-4 w-full">
+          <Select
+            className="min-w-48"
+            placeholder="全部省 / 直辖市"
+            allowClear
+            value={configuredProvince}
+            options={configuredProvinceOptions}
+            onChange={(value) => {
+              setConfiguredProvince(value)
+              setConfiguredCity(undefined)
+              setConfiguredAdcode(undefined)
+            }}
+          />
+          <Select
+            className="min-w-48"
+            placeholder="全部市"
+            allowClear
+            value={configuredCity}
+            options={configuredCityOptions}
+            onChange={(value) => {
+              setConfiguredCity(value)
+              setConfiguredAdcode(undefined)
+            }}
+          />
+          <Select
+            className="min-w-56"
+            placeholder="全部区 / 县"
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            value={configuredAdcode}
+            options={configuredDistrictOptions}
+            onChange={setConfiguredAdcode}
+          />
+        </Space>
+        <Table<ManagedDispatchRegion>
           rowKey="adcode"
           loading={loading}
-          dataSource={regions}
-          pagination={false}
+          dataSource={filteredRegions}
+          pagination={{ pageSize: 10, showSizeChanger: false }}
           columns={[
-            { title: '区县', dataIndex: 'name' },
-            { title: 'adcode', dataIndex: 'adcode', width: 110 },
             {
-              title: '省市',
-              render: (_, row) => `${row.province_name || ''} ${row.city_name || ''}`.trim() || '—',
+              title: '省 / 直辖市',
+              dataIndex: 'province_name',
+              width: 150,
+            },
+            {
+              title: '市',
+              dataIndex: 'city_name',
+              width: 140,
+              render: (value, row) => value === row.province_name ? '市辖区' : (value || '—'),
+            },
+            {
+              title: '区 / 县',
+              width: 190,
+              render: (_, row) => <><b>{row.name}</b><div className="text-xs text-slate-400">{row.adcode}</div></>,
             },
             {
               title: '区管理员',
@@ -401,40 +398,35 @@ export default function AdminRegionsPage() {
                   : <Tag color="orange">未绑定</Tag>,
             },
             {
-              title: '官方多边形',
-              dataIndex: 'has_polygon',
+              title: '状态',
               width: 110,
-              render: (value: boolean) => (value ? <Tag color="green">已就绪</Tag> : <Tag color="orange">仅矩形</Tag>),
-            },
-            {
-              title: '启用',
-              dataIndex: 'active',
-              width: 90,
-              render: (value: boolean, row) => (
-                <Switch checked={value} onChange={(checked) => void toggleActive(row, checked)} />
+              render: (_, row) => (
+                <Space>
+                  <Switch checked={row.active} onChange={(checked) => void toggleActive(row, checked)} />
+                  <Tag color={row.active ? 'green' : 'default'}>{row.active ? '启用' : '停用'}</Tag>
+                </Space>
               ),
             },
             {
               title: '操作',
-              width: 280,
+              width: 240,
               render: (_, row) => (
-                <Space wrap>
-                  <Button size="small" onClick={() => void refreshPolygon(row)}>刷新边界</Button>
-                  <Button size="small" icon={<UserAddOutlined />} onClick={() => bindManager(row)}>绑定管理员</Button>
-                  <Button
-                    size="small"
-                    danger
-                    icon={<UserDeleteOutlined />}
-                    disabled={!row.managers?.length}
-                    onClick={() => openUnbindManager(row)}
-                  >
-                    解绑管理员
-                  </Button>
-                </Space>
-              ),
+                  <Space wrap>
+                    <Button size="small" icon={<UserAddOutlined />} onClick={() => bindManager(row)}>绑定管理员</Button>
+                    <Button
+                      size="small"
+                      danger
+                      icon={<UserDeleteOutlined />}
+                      disabled={!row.managers?.length}
+                      onClick={() => openUnbindManager(row)}
+                    >
+                      解绑管理员
+                    </Button>
+                  </Space>
+                ),
             },
           ]}
-          scroll={{ x: 1100 }}
+          scroll={{ x: 980 }}
         />
       </Card>
 

@@ -1,6 +1,90 @@
 import { http, type ApiEnvelope } from '@/services/http'
 import type { ProfileSnapshot, Role } from '@/types/domain'
 
+export interface ElderAddress {
+  addressId: number
+  label: string
+  provinceName: string
+  cityName: string
+  districtName: string
+  regionAdcode: string
+  detailAddress: string
+  fullAddress: string
+  isCurrent: boolean
+}
+
+export interface AddressPoiSuggestion {
+  id: string
+  name: string
+  displayName: string
+  fullAddress: string
+  address: string
+  districtName: string
+  regionAdcode: string
+  lng: number
+  lat: number
+}
+
+export interface ResolvedLiveLocation {
+  formattedAddress: string
+  provinceName: string
+  cityName: string
+  districtName: string
+  regionAdcode: string
+  lng: number
+  lat: number
+}
+
+export async function fetchAddressSuggestions(keywords: string, regionAdcode: string): Promise<AddressPoiSuggestion[]> {
+  const response = await http.get<ApiEnvelope<Array<Record<string, unknown>>>>('/profile/address-suggestions', {
+    params: { keywords, region_adcode: regionAdcode },
+  })
+  return (response.data.data || []).map((item) => ({
+    id: String(item.id ?? ''),
+    name: String(item.name ?? ''),
+    displayName: String(item.display_name ?? item.displayName ?? item.name ?? ''),
+    fullAddress: String(item.full_address ?? item.fullAddress ?? ''),
+    address: String(item.address ?? ''),
+    districtName: String(item.district_name ?? item.districtName ?? ''),
+    regionAdcode: String(item.adcode ?? item.region_adcode ?? ''),
+    lng: Number(item.lng),
+    lat: Number(item.lat),
+  }))
+}
+
+export async function resolveBrowserLocation(
+  userId: number,
+  role: 'elder' | 'volunteer',
+  lng: number,
+  lat: number,
+): Promise<ResolvedLiveLocation> {
+  const response = await http.post<ApiEnvelope<Record<string, unknown>>>('/profile/location/resolve', {
+    user_id: userId,
+    role,
+    lng,
+    lat,
+  })
+  const item = response.data.data
+  return {
+    formattedAddress: String(item.formatted_address ?? item.formattedAddress ?? '实时位置'),
+    provinceName: String(item.province_name ?? item.provinceName ?? ''),
+    cityName: String(item.city_name ?? item.cityName ?? ''),
+    districtName: String(item.district_name ?? item.districtName ?? ''),
+    regionAdcode: String(item.adcode ?? item.region_adcode ?? ''),
+    lng: Number(item.lng),
+    lat: Number(item.lat),
+  }
+}
+
+export async function updateVolunteerLiveLocation(userId: number, lng: number, lat: number) {
+  const response = await http.post<ApiEnvelope<Record<string, unknown>>>('/profile/volunteer/location', {
+    user_id: userId,
+    lng,
+    lat,
+  })
+  return response.data
+}
+
 function toNumber(value: unknown) {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : undefined
@@ -80,4 +164,89 @@ export async function updateProfileInfo(payload: {
   )
 
   return response.data.data
+}
+
+export async function fetchElderAddresses(userId: number): Promise<ElderAddress[]> {
+  const response = await http.get<ApiEnvelope<Array<Record<string, unknown>>>>('/profile/addresses', {
+    params: { user_id: userId },
+  })
+  return (response.data.data || []).map((item) => ({
+    addressId: Number(item.address_id ?? item.addressId),
+    label: String(item.label ?? '家'),
+    provinceName: String(item.province_name ?? item.provinceName ?? ''),
+    cityName: String(item.city_name ?? item.cityName ?? ''),
+    districtName: String(item.district_name ?? item.districtName ?? ''),
+    regionAdcode: String(item.region_adcode ?? item.regionAdcode ?? ''),
+    detailAddress: String(item.detail_address ?? item.detailAddress ?? ''),
+    fullAddress: String(item.full_address ?? item.fullAddress ?? ''),
+    isCurrent: Boolean(item.is_current ?? item.isCurrent),
+  }))
+}
+
+export async function addElderAddress(payload: {
+  userId: number
+  label: string
+  provinceName: string
+  cityName: string
+  districtName: string
+  regionAdcode: string
+  detailAddress: string
+  addressSupplement?: string
+  poi?: AddressPoiSuggestion
+}) {
+  const response = await http.post<ApiEnvelope<{ address_id: number }>>('/profile/addresses', {
+    user_id: payload.userId,
+    label: payload.label,
+    province_name: payload.provinceName,
+    city_name: payload.cityName,
+    district_name: payload.districtName,
+    region_adcode: payload.regionAdcode,
+    detail_address: payload.detailAddress,
+    address_supplement: payload.addressSupplement,
+    poi_lng: payload.poi?.lng,
+    poi_lat: payload.poi?.lat,
+    poi_name: payload.poi?.name,
+    poi_full_address: payload.poi?.fullAddress,
+    is_current: true,
+  })
+  return response.data
+}
+
+export async function updateElderAddress(payload: {
+  addressId: number
+  userId: number
+  label: string
+  provinceName: string
+  cityName: string
+  districtName: string
+  regionAdcode: string
+  detailAddress: string
+  isCurrent: boolean
+  addressSupplement?: string
+  poi?: AddressPoiSuggestion
+}) {
+  const response = await http.put<ApiEnvelope<{ address_id: number }>>(`/profile/addresses/${payload.addressId}`, {
+    user_id: payload.userId,
+    label: payload.label,
+    province_name: payload.provinceName,
+    city_name: payload.cityName,
+    district_name: payload.districtName,
+    region_adcode: payload.regionAdcode,
+    detail_address: payload.detailAddress,
+    address_supplement: payload.addressSupplement,
+    poi_lng: payload.poi?.lng,
+    poi_lat: payload.poi?.lat,
+    poi_name: payload.poi?.name,
+    poi_full_address: payload.poi?.fullAddress,
+    is_current: payload.isCurrent,
+  })
+  return response.data
+}
+
+export async function selectElderAddress(userId: number, addressId: number) {
+  const response = await http.post<ApiEnvelope<null>>('/profile/addresses/select', {
+    user_id: userId,
+    address_id: addressId,
+  })
+  return response.data
 }

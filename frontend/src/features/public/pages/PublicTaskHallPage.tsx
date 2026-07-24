@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Card, Tag, Typography, Button, Empty, App, Segmented, Statistic, Row, Col, Modal, Checkbox } from 'antd'
+import { Card, Tag, Typography, Button, Empty, App, Segmented, Statistic, Row, Col, Modal, Checkbox, Pagination } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import {
   ClockCircleOutlined,
@@ -60,6 +60,8 @@ export default function PublicTaskHallPage() {
   const [deleting, setDeleting] = useState(false)
   const [grabbingId, setGrabbingId] = useState<number | null>(null)
   const [geoScope, setGeoScope] = useState<AdminGeoScope>({})
+  const [page, setPage] = useState(1)
+  const pageSize = 9
 
   const isVolunteer = session?.role === 'volunteer'
   const isAdmin = session?.role === 'admin'
@@ -101,6 +103,7 @@ export default function PublicTaskHallPage() {
           return
         }
         setTasks(taskList)
+        setPage(1)
         setStats(data.stats)
       })
       .catch(() => {
@@ -249,6 +252,7 @@ export default function PublicTaskHallPage() {
               onChange={(val) => {
                 setFilter(val as FilterValue)
                 setSelectedIds([])
+                setPage(1)
               }}
               options={[
                 { label: '全部', value: 'all' },
@@ -261,7 +265,10 @@ export default function PublicTaskHallPage() {
             {isAdmin ? (
               <AdminGeoScopeFilters
                 value={geoScope}
-                onChange={setGeoScope}
+                onChange={(next) => {
+                  setGeoScope(next)
+                  setPage(1)
+                }}
               />
             ) : null}
           </div>
@@ -291,7 +298,7 @@ export default function PublicTaskHallPage() {
           </Card>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            {tasks.map((task) => {
+            {tasks.slice((page - 1) * pageSize, page * pageSize).map((task) => {
               const st = statusConfig[task.status] || { color: 'default', text: task.status, icon: null }
               const isCompleted = task.status === 'completed'
               return (
@@ -371,6 +378,17 @@ export default function PublicTaskHallPage() {
             })}
           </div>
         )}
+        {!loading && tasks.length > pageSize ? (
+          <div className="mt-7 flex justify-center">
+            <Pagination
+              current={page}
+              pageSize={pageSize}
+              total={tasks.length}
+              showSizeChanger={false}
+              onChange={setPage}
+            />
+          </div>
+        ) : null}
 
         {/* Tip for non-volunteers */}
         {!session && (

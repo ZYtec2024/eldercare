@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react'
-import { Alert, App, Button, Card, DatePicker, Form, Input, InputNumber, Select, Space, Tag, Typography } from 'antd'
+import { Alert, App, Button, Card, DatePicker, Form, Input, InputNumber, Segmented, Select, Space, Tag, Typography } from 'antd'
+import { ClockCircleOutlined } from '@ant-design/icons'
 import { AimOutlined, EnvironmentOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { useNavigate } from 'react-router-dom'
 
 import { DispatchMap } from '@/features/dispatch/components/DispatchMap'
+import { LiveArrivalEstimate } from '@/features/dispatch/components/LiveArrivalEstimate'
 import type { DispatchTracking } from '@/features/dispatch/dispatch-types'
 import { useSession } from '@/features/auth/useSession'
-import { cancelElderDispatchOrder, completeElderDispatchOrder, createDispatchOrder, fetchDispatchTracking, redispatchDispatchOrder, requestAdminForDispatchOrder, updateElderDispatchLocation } from '@/services/adapters/dispatch-adapter'
+import { cancelElderDispatchOrder, completeElderDispatchOrder, createDispatchOrder, fetchDispatchTracking, redispatchDispatchOrder, requestAdminForDispatchOrder } from '@/services/adapters/dispatch-adapter'
+import { resolveBrowserLocation, type ResolvedLiveLocation } from '@/services/adapters/profile-adapter'
 
 const stateLabel: Record<string, string> = {
   matching: '正在找人', waiting_response: '等待志愿者答应', accepted: '志愿者正在赶来', serving: '志愿者正在帮忙',
@@ -24,26 +27,54 @@ export default function ElderDispatchPage() {
   const navigate = useNavigate()
   const { message } = App.useApp()
   const [form] = Form.useForm()
-  const [locationForm] = Form.useForm()
   const [tracking, setTracking] = useState<DispatchTracking | null>(null)
   const [sending, setSending] = useState(false)
-  const [savingLocation, setSavingLocation] = useState(false)
   const [cancellingOrder, setCancellingOrder] = useState<number | null>(null)
   const [completingOrder, setCompletingOrder] = useState<number | null>(null)
   const [redispatchingOrder, setRedispatchingOrder] = useState<number | null>(null)
   const [requestingAdminOrder, setRequestingAdminOrder] = useState<number | null>(null)
+  const [locationMode, setLocationMode] = useState<'address' | 'live'>('address')
+  const [liveLocation, setLiveLocation] = useState<ResolvedLiveLocation | null>(null)
+  const [locating, setLocating] = useState(false)
 
   const load = async () => {
     if (!session) return
     const data = await fetchDispatchTracking('elder', session.userId)
     setTracking(data)
-    const elder = data.elders[0]
-    if (elder) locationForm.setFieldsValue({ address: elder.address, lng: elder.lng, lat: elder.lat })
   }
-  useEffect(() => { load().catch(() => {}); const timer = window.setInterval(() => load().catch(() => {}), 3500); return () => window.clearInterval(timer) }, [session?.userId])
+  useEffect(() => { load().catch(() => {}); const timer = window.setInterval(() => load().catch(() => {}), 1200); return () => window.clearInterval(timer) }, [session?.userId])
+
+  const captureLiveLocation = () => {
+    if (!session || !navigator.geolocation) {
+      message.warning('当前浏览器暂不支持定位；接口已保留，正式联网环境可直接使用')
+      return
+    }
+    setLocating(true)
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        resolveBrowserLocation(session.userId, 'elder', position.coords.longitude, position.coords.latitude)
+          .then((resolved) => {
+            setLiveLocation(resolved)
+            setLocationMode('live')
+            message.success('已获取本次派单实时位置')
+          })
+          .catch((err: any) => message.error(err?.message || '实时位置不在当前登记区县内'))
+          .finally(() => setLocating(false))
+      },
+      () => {
+        message.warning('未获得定位授权；可继续使用默认地址')
+        setLocating(false)
+      },
+      { enableHighAccuracy: true, timeout: 12_000, maximumAge: 10_000 },
+    )
+  }
 
   const submit = async (values: { serviceType: string; serviceHours?: number; serviceTime?: dayjs.Dayjs; notes?: string; requiredSkills?: string[] }) => {
     if (!session) return
+    if (locationMode === 'live' && !liveLocation) {
+      message.warning('请先点击“获取实时位置”，或改用默认地址')
+      return
+    }
     setSending(true)
     try {
       const selected = tracking?.service_catalog.find((item) => item.code === values.serviceType)
@@ -58,21 +89,15 @@ export default function ElderDispatchPage() {
         serviceTime,
         notes: values.notes,
         requiredSkills,
+        locationMode,
+        lng: liveLocation?.lng,
+        lat: liveLocation?.lat,
       })
       message.success(result.message)
       form.resetFields(['notes', 'requiredSkills'])
       form.setFieldsValue({ serviceTime: dayjs() })
       await load()
     } catch (err: any) { message.error(err?.message || '请求创建失败') } finally { setSending(false) }
-  }
-  const saveLocation = async (values: { address: string; lng: number; lat: number }) => {
-    if (!session) return
-    setSavingLocation(true)
-    try {
-      const result = await updateElderDispatchLocation({ userId: session.userId, address: values.address, lng: values.lng, lat: values.lat, source: 'fixed_home' })
-      message.success(result.message)
-      await load()
-    } catch (err: any) { message.error(err?.message || '保存固定住址失败') } finally { setSavingLocation(false) }
   }
   const cancelOrder = async (orderId: number) => {
     if (!session) return
@@ -119,7 +144,6 @@ export default function ElderDispatchPage() {
 
   const orders = tracking?.orders ?? []
   const activeOrders = orders.filter((order) => ['pending', 'accepted', 'in_progress'].includes(order.status))
-  const endedOrders = orders.filter((order) => order.status === 'completed')
 
   return <div className="space-y-6">
     <div className="rounded-3xl bg-gradient-to-r from-indigo-700 via-blue-700 to-cyan-700 p-6 text-white shadow-xl">
@@ -132,12 +156,31 @@ export default function ElderDispatchPage() {
     <Alert showIcon type="info" message="大概会怎样" description="系统会先找附近合适的志愿者。有人答应后，您可以在下面看到谁正在赶来；赶来途中可取消，也可确认完成；开始服务后请确认完成。" />
     <div className="grid gap-6 xl:grid-cols-[380px_1fr]">
       <div className="space-y-6">
-        <Card className="!rounded-2xl" title={<Space><EnvironmentOutlined />我家地址</Space>}>
-          <Form form={locationForm} layout="vertical" onFinish={saveLocation}>
-            <Form.Item name="address" label="详细地址" rules={[{ required: true, message: '请填写地址' }]}><Input placeholder="例如：上海市宝山区友谊路 88 号" /></Form.Item>
-            <div className="grid grid-cols-2 gap-3"><Form.Item name="lng" label="经度" rules={[{ required: true }]}><InputNumber precision={6} className="!w-full" /></Form.Item><Form.Item name="lat" label="纬度" rules={[{ required: true }]}><InputNumber precision={6} className="!w-full" /></Form.Item></div>
-            <Button htmlType="submit" block size="large" loading={savingLocation}>保存地址</Button>
-          </Form>
+        <Card className="!rounded-2xl" title={<Space><EnvironmentOutlined />本次派单位置</Space>}>
+          <Segmented
+            block
+            value={locationMode}
+            options={[
+              { label: '使用默认地址', value: 'address' },
+              { label: '使用实时位置', value: 'live' },
+            ]}
+            onChange={(value) => setLocationMode(value as 'address' | 'live')}
+          />
+          <div className="rounded-xl bg-slate-50 p-4 text-base text-slate-700">
+            {locationMode === 'live'
+              ? (liveLocation?.formattedAddress || '尚未获取实时位置')
+              : (tracking?.elders[0]?.address || '尚未设置当前地址')}
+          </div>
+          {locationMode === 'live' ? (
+            <Button className="mt-3" block size="large" icon={<AimOutlined />} loading={locating} onClick={captureLiveLocation}>
+              获取实时位置
+            </Button>
+          ) : null}
+          {locationMode === 'address' ? (
+            <Button className="mt-3" block size="large" onClick={() => navigate('/profile')}>
+              修改、添加或切换地址
+            </Button>
+          ) : null}
         </Card>
         <Card className="!rounded-2xl"><Typography.Title level={4}>我要什么帮助</Typography.Title><Form form={form} layout="vertical" onFinish={submit} initialValues={{ serviceHours: 1, serviceTime: dayjs() }}>
           <Form.Item name="serviceType" label="帮助类型" rules={[{ required: true, message: '请选择' }]}><Select size="large" placeholder="请选择" options={tracking?.service_catalog.filter((item) => !item.urgent).map((item) => ({ value: item.code, label: item.label }))} onChange={(code) => {
@@ -156,13 +199,13 @@ export default function ElderDispatchPage() {
             />
           </Form.Item>
           <Form.Item noStyle shouldUpdate>{() => { const selected = tracking?.service_catalog.find((item) => item.code === form.getFieldValue('serviceType')); return selected ? <div className="mb-4 rounded-xl bg-indigo-50 p-3 text-sm text-indigo-800"><AimOutlined className="mr-2" />这类帮助通常需要：{selected.skill_labels.map((skill) => <Tag color="blue" key={skill}>{skill}</Tag>)}，您也可以按上面自己改</div> : null }}</Form.Item>
-          <Form.Item
-            name="serviceTime"
-            label="希望什么时候开始"
-            rules={[{ required: true, message: '请选择时间' }]}
-            extra="选现在（或约1分钟内）：立刻找人。选任意更晚时间（10分钟后、1小时后都行）：到那个点才开始找志愿者。"
-          >
-            <DatePicker showTime className="!w-full" size="large" format="YYYY-MM-DD HH:mm" disabledDate={(current) => !!current && current.isBefore(dayjs().startOf('day'))} />
+          <Form.Item label="希望什么时候开始" extra="选现在（或约1分钟内）：立刻找人。选任意更晚时间（10分钟后、1小时后都行）：到那个点才开始找志愿者。">
+            <div className="flex gap-2">
+              <Form.Item name="serviceTime" noStyle rules={[{ required: true, message: '请选择时间' }]}>
+                <DatePicker showTime className="!w-full" size="large" format="YYYY-MM-DD HH:mm" disabledDate={(current) => !!current && current.isBefore(dayjs().startOf('day'))} />
+              </Form.Item>
+              <Button size="large" icon={<ClockCircleOutlined />} onClick={() => form.setFieldValue('serviceTime', dayjs())}>现在</Button>
+            </div>
           </Form.Item>
           <Form.Item name="serviceHours" label="大概多久"><InputNumber min={0.5} max={8} step={0.5} className="!w-full" addonAfter="小时" /></Form.Item>
           <Form.Item name="notes" label="说明情况" rules={[{ required: true, message: '请简单说一下情况' }]}>
@@ -200,6 +243,9 @@ export default function ElderDispatchPage() {
                 </Tag>
               ) : null}
               {order.location_sharing_active ? <Tag color="green">正在共享位置</Tag> : null}
+              {order.location_sharing_active ? (
+                <LiveArrivalEstimate route={tracking?.routes.find((route) => route.order_id === order.order_id)} />
+              ) : null}
               <Space wrap>
                 {order.amap_navigation_url ? <Button size="large" onClick={() => window.open(order.amap_navigation_url, '_blank', 'noopener,noreferrer')}>查看路线</Button> : null}
                 {['accepted', 'in_progress'].includes(order.status) ? (
@@ -224,25 +270,5 @@ export default function ElderDispatchPage() {
         )) : <Card className="!rounded-2xl text-slate-500 text-base">还没有进行中的帮助。提交需求后，进度会出现在这里。</Card>}
       </div>
     </div>
-    {endedOrders.length ? (
-      <div>
-        <Typography.Title level={3}>已结束的帮助</Typography.Title>
-        <div className="grid gap-4 md:grid-cols-2">
-          {endedOrders.map((order) => (
-            <Card
-              key={order.order_id}
-              className="!rounded-2xl"
-              title={<Space><Tag>已结束</Tag><span>{order.service_type}</span></Space>}
-              extra={<Tag>{stateLabel.completed}</Tag>}
-            >
-              <div className="space-y-2 text-base text-slate-600">
-                <div>地点：{order.address || '家里地址'}</div>
-                <div>帮忙的人：{order.volunteer_name || '—'}</div>
-              </div>
-            </Card>
-          ))}
-        </div>
-      </div>
-    ) : null}
   </div>
 }

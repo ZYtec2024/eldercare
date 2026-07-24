@@ -59,6 +59,7 @@ function mapUserRow(row: Record<string, unknown>): AdminUserRow {
     .map((item) => ({
       elderId: toNumber(item.elderId ?? item.elder_id),
       name: String(item.name ?? ''),
+      address: typeof item.address === 'string' ? item.address : undefined,
       regionAdcode: item.region_adcode == null && item.regionAdcode == null
         ? undefined
         : String(item.regionAdcode ?? item.region_adcode),
@@ -87,13 +88,33 @@ function mapUserRow(row: Record<string, unknown>): AdminUserRow {
     regionAdcodes,
     regionNames,
     address: typeof row.address === 'string' ? row.address : undefined,
+    skillsDescription: typeof row.skills_description === 'string'
+      ? row.skills_description
+      : typeof row.skillsDescription === 'string'
+        ? row.skillsDescription
+        : undefined,
+    verifiedSkills: Array.isArray(row.verified_skills)
+      ? row.verified_skills.map(String)
+      : Array.isArray(row.verifiedSkills)
+        ? row.verifiedSkills.map(String)
+        : [],
     relatedElders,
   }
 }
 
-export async function fetchAdminDashboard(adminUserId: number) {
+export async function fetchAdminDashboard(
+  adminUserId: number,
+  geo?: { regionAdcode?: string; provinceName?: string; cityName?: string },
+) {
   const response = await http.get<ApiEnvelope<DashboardMetric[] | Record<string, unknown>>>(
-    '/admin/dashboard/stats', { params: { admin_user_id: adminUserId } },
+    '/admin/dashboard/stats', {
+      params: {
+        admin_user_id: adminUserId,
+        region_adcode: geo?.regionAdcode,
+        province_name: geo?.provinceName,
+        city_name: geo?.cityName,
+      },
+    },
   )
 
   const payload = response.data.data
@@ -236,13 +257,19 @@ export async function fetchAdminAlerts(
   }))
 }
 
-export async function auditVolunteer(userId: number, action: 'approve' | 'reject', adminUserId: number) {
-  const response = await http.post<ApiEnvelope<{ review_status: string }>>(
+export async function auditVolunteer(
+  userId: number,
+  action: 'approve' | 'reject',
+  adminUserId: number,
+  skillTags: string[] = [],
+) {
+  const response = await http.post<ApiEnvelope<{ review_status: string; verified_skills: string[] }>>(
     '/admin/volunteers/audit',
     {
       user_id: userId,
       action,
       admin_user_id: adminUserId,
+      skill_tags: skillTags,
     },
   )
   return response.data

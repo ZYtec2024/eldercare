@@ -6,6 +6,24 @@
 
 SET search_path TO public;
 
+DROP TABLE IF EXISTS conversation_messages CASCADE;
+DROP TABLE IF EXISTS conversation_members CASCADE;
+DROP TABLE IF EXISTS conversations CASCADE;
+DROP TABLE IF EXISTS emergency_notifications CASCADE;
+DROP TABLE IF EXISTS emergency_incidents CASCADE;
+DROP TABLE IF EXISTS volunteer_return_routes CASCADE;
+DROP TABLE IF EXISTS dispatch_events CASCADE;
+DROP TABLE IF EXISTS dispatch_routes CASCADE;
+DROP TABLE IF EXISTS dispatch_candidates CASCADE;
+DROP TABLE IF EXISTS dispatch_orders CASCADE;
+DROP TABLE IF EXISTS volunteer_skill_tags CASCADE;
+DROP TABLE IF EXISTS elder_addresses CASCADE;
+DROP TABLE IF EXISTS elder_location_state CASCADE;
+DROP TABLE IF EXISTS volunteer_location_state CASCADE;
+DROP TABLE IF EXISTS admin_region_scope CASCADE;
+DROP TABLE IF EXISTS administrative_regions CASCADE;
+DROP TABLE IF EXISTS dispatch_system_state CASCADE;
+DROP TABLE IF EXISTS donation_records CASCADE;
 DROP TABLE IF EXISTS volunteer_award_requests CASCADE;
 DROP TABLE IF EXISTS volunteer_hour_reviews CASCADE;
 DROP TABLE IF EXISTS volunteer_likes CASCADE;
@@ -39,6 +57,7 @@ CREATE TABLE elders (
     age INT NOT NULL,
     gender VARCHAR(4) NOT NULL CHECK (gender IN ('男', '女')),
     address VARCHAR(255) NOT NULL,
+    region_adcode VARCHAR(12) NOT NULL DEFAULT '310113',
     medical_history TEXT,
     alert_sys_threshold INT DEFAULT 140,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -99,6 +118,9 @@ CREATE TABLE orders (
     service_hours NUMERIC(8,2) DEFAULT 1,
     reward_points INT NOT NULL DEFAULT 0,
     address VARCHAR(255) DEFAULT NULL,
+    region_adcode VARCHAR(12) NOT NULL DEFAULT '310113',
+    proxy_created_by INT DEFAULT NULL,
+    proxy_reason TEXT,
     status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'in_progress', 'completed', 'cancelled')),
     notes TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -124,6 +146,7 @@ CREATE TABLE alerts (
     alert_type VARCHAR(20) NOT NULL CHECK (alert_type IN ('sos', 'health_warning')),
     description VARCHAR(255) NOT NULL,
     is_handled BOOLEAN DEFAULT FALSE,
+    emergency_incident_id INT DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (elder_id) REFERENCES elders(elder_id) ON DELETE CASCADE
 );
@@ -167,12 +190,241 @@ CREATE TABLE volunteer_award_requests (
     FOREIGN KEY (volunteer_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
+-- 12. 爱心捐赠沙盘记录（仅模拟支付，不接入真实资金渠道）
+CREATE TABLE donation_records (
+    donation_id SERIAL PRIMARY KEY,
+    donor_name VARCHAR(80) NOT NULL,
+    contact VARCHAR(120),
+    amount NUMERIC(10,2) NOT NULL CHECK (amount > 0),
+    payment_method VARCHAR(20) NOT NULL CHECK (payment_method IN ('wechat', 'alipay')),
+    payment_status VARCHAR(20) NOT NULL DEFAULT 'success',
+    transaction_no VARCHAR(64) NOT NULL UNIQUE,
+    message VARCHAR(500),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 13. 智能调度、区域权限、会话与定位运行时表
+-- 按外键依赖顺序创建。Python 中的 ensure_dispatch_schema() 只负责
+-- 老版本数据卷的幂等升级，空数据库不再依赖启动时临时补表。
+CREATE TABLE dispatch_system_state (
+    state_key VARCHAR(64) PRIMARY KEY,
+    state_value VARCHAR(255) NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE administrative_regions (
+    adcode VARCHAR(12) PRIMARY KEY,
+    name VARCHAR(80) NOT NULL,
+    city_name VARCHAR(80) NOT NULL,
+    province_name VARCHAR(80),
+    region_level VARCHAR(20) NOT NULL DEFAULT 'district',
+    bounds_json TEXT NOT NULL,
+    polygon_json TEXT,
+    center_lng NUMERIC(10,6),
+    center_lat NUMERIC(10,6),
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE admin_region_scope (
+    admin_user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    region_adcode VARCHAR(12) NOT NULL,
+    permission VARCHAR(20) NOT NULL DEFAULT 'manage',
+    PRIMARY KEY (admin_user_id, region_adcode)
+);
+
+CREATE TABLE volunteer_location_state (
+    volunteer_id INT PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+    lng NUMERIC(10,6) NOT NULL,
+    lat NUMERIC(10,6) NOT NULL,
+    availability VARCHAR(20) NOT NULL DEFAULT 'idle',
+    fatigue_score INT NOT NULL DEFAULT 0 CHECK (fatigue_score BETWEEN 0 AND 100),
+    service_rating NUMERIC(3,2) NOT NULL DEFAULT 4.50,
+    assigned_today INT NOT NULL DEFAULT 0,
+    location_source VARCHAR(24) NOT NULL DEFAULT 'simulated',
+    home_lng NUMERIC(10,6),
+    home_lat NUMERIC(10,6),
+    auto_accept_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    return_started_at TIMESTAMP NULL,
+    fatigue_updated_at TIMESTAMP NULL,
+    service_region_adcode VARCHAR(12) NOT NULL DEFAULT '310113',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE elder_location_state (
+    elder_id INT PRIMARY KEY REFERENCES elders(elder_id) ON DELETE CASCADE,
+    lng NUMERIC(10,6) NOT NULL,
+    lat NUMERIC(10,6) NOT NULL,
+    location_source VARCHAR(24) NOT NULL DEFAULT 'simulated',
+    is_home_fixed BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE elder_addresses (
+    address_id SERIAL PRIMARY KEY,
+    elder_id INT NOT NULL REFERENCES elders(elder_id) ON DELETE CASCADE,
+    label VARCHAR(40) NOT NULL DEFAULT '家',
+    province_name VARCHAR(80) NOT NULL,
+    city_name VARCHAR(80) NOT NULL,
+    district_name VARCHAR(80) NOT NULL,
+    region_adcode VARCHAR(12) NOT NULL,
+    detail_address VARCHAR(255) NOT NULL,
+    full_address VARCHAR(500) NOT NULL,
+    lng NUMERIC(10,6) NOT NULL,
+    lat NUMERIC(10,6) NOT NULL,
+    is_current BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (elder_id, full_address)
+);
+CREATE UNIQUE INDEX uq_elder_current_address
+    ON elder_addresses(elder_id) WHERE is_current = TRUE;
+
+CREATE TABLE volunteer_skill_tags (
+    volunteer_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    skill_tag VARCHAR(64) NOT NULL,
+    verified BOOLEAN NOT NULL DEFAULT TRUE,
+    PRIMARY KEY (volunteer_id, skill_tag)
+);
+
+CREATE TABLE emergency_incidents (
+    incident_id SERIAL PRIMARY KEY,
+    elder_id INT NOT NULL REFERENCES elders(elder_id) ON DELETE CASCADE,
+    region_adcode VARCHAR(12) NOT NULL,
+    incident_type VARCHAR(40) NOT NULL DEFAULT 'general_help',
+    description TEXT NOT NULL DEFAULT '',
+    status VARCHAR(24) NOT NULL DEFAULT 'reported',
+    created_by INT NULL REFERENCES users(user_id) ON DELETE SET NULL,
+    linked_order_id INT NULL REFERENCES orders(order_id) ON DELETE SET NULL,
+    assigned_admin_id INT NULL REFERENCES users(user_id) ON DELETE SET NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    acknowledged_at TIMESTAMP NULL,
+    acknowledged_by INT NULL REFERENCES users(user_id) ON DELETE SET NULL,
+    resolved_at TIMESTAMP NULL,
+    resolved_by INT NULL REFERENCES users(user_id) ON DELETE SET NULL,
+    resolution_summary TEXT NULL
+);
+CREATE INDEX idx_alerts_emergency_incident ON alerts(emergency_incident_id);
+
+-- 必须在任何回填、查询或清理 SQL 之前创建以下三张表。
+CREATE TABLE emergency_notifications (
+    notification_id SERIAL PRIMARY KEY,
+    incident_id INT NOT NULL REFERENCES emergency_incidents(incident_id) ON DELETE CASCADE,
+    recipient_user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    recipient_role VARCHAR(20) NOT NULL,
+    notification_type VARCHAR(24) NOT NULL DEFAULT 'in_app',
+    read_at TIMESTAMP NULL,
+    acknowledged_at TIMESTAMP NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (incident_id, recipient_user_id, notification_type)
+);
+
+CREATE TABLE conversations (
+    conversation_id SERIAL PRIMARY KEY,
+    conversation_type VARCHAR(24) NOT NULL,
+    elder_id INT NULL REFERENCES elders(elder_id) ON DELETE CASCADE,
+    order_id INT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
+    incident_id INT NULL REFERENCES emergency_incidents(incident_id) ON DELETE CASCADE,
+    status VARCHAR(20) NOT NULL DEFAULT 'active',
+    upgraded_to_sos BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    archived_at TIMESTAMP NULL
+);
+
+CREATE TABLE conversation_members (
+    conversation_id INT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+    user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    role_in_conversation VARCHAR(24) NOT NULL,
+    last_read_at TIMESTAMP NULL,
+    can_speak BOOLEAN NOT NULL DEFAULT TRUE,
+    hidden_at TIMESTAMP NULL,
+    PRIMARY KEY (conversation_id, user_id)
+);
+
+CREATE TABLE conversation_messages (
+    message_id SERIAL PRIMARY KEY,
+    conversation_id INT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+    sender_user_id INT NULL REFERENCES users(user_id) ON DELETE SET NULL,
+    message_type VARCHAR(24) NOT NULL DEFAULT 'text',
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE dispatch_orders (
+    order_id INT PRIMARY KEY REFERENCES orders(order_id) ON DELETE CASCADE,
+    urgency VARCHAR(16) NOT NULL DEFAULT 'normal',
+    required_skills TEXT NOT NULL,
+    dispatch_state VARCHAR(24) NOT NULL DEFAULT 'matching',
+    search_stage INT NOT NULL DEFAULT 1,
+    dispatch_phase VARCHAR(24) NOT NULL DEFAULT 'top1',
+    phase_started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    phase_expires_at TIMESTAMP NULL,
+    dispatch_version INT NOT NULL DEFAULT 1,
+    priority_tier INT NOT NULL DEFAULT 2,
+    region_adcode VARCHAR(12) NOT NULL DEFAULT '310113',
+    forced_assignment BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_expanded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE dispatch_candidates (
+    candidate_id SERIAL PRIMARY KEY,
+    order_id INT NOT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
+    volunteer_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    eligible BOOLEAN NOT NULL,
+    skill_match TEXT NOT NULL,
+    distance_km NUMERIC(8,2),
+    eta_minutes INT,
+    distance_score NUMERIC(8,2),
+    traffic_score NUMERIC(8,2),
+    fatigue_score NUMERIC(8,2),
+    rating_score NUMERIC(8,2),
+    total_score NUMERIC(8,2),
+    candidate_rank INT,
+    response_status VARCHAR(20) NOT NULL DEFAULT 'waiting',
+    invited_at TIMESTAMP NULL,
+    responded_at TIMESTAMP NULL,
+    UNIQUE (order_id, volunteer_id)
+);
+
+CREATE TABLE dispatch_routes (
+    order_id INT PRIMARY KEY REFERENCES orders(order_id) ON DELETE CASCADE,
+    volunteer_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    route_json TEXT NOT NULL,
+    eta_minutes INT NOT NULL,
+    traffic_version INT NOT NULL,
+    replanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE dispatch_events (
+    event_id SERIAL PRIMARY KEY,
+    order_id INT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
+    event_type VARCHAR(40) NOT NULL,
+    message VARCHAR(500) NOT NULL,
+    details TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE volunteer_return_routes (
+    volunteer_id INT PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+    route_json TEXT NOT NULL,
+    eta_minutes INT NOT NULL,
+    traffic_version INT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 
 -- ============================================================
 -- 第二部分：演示数据
 -- ============================================================
 
--- ====== 管理员 (user_id=1) ======
+-- 演示账号统一说明（仅用于本地演示，正式环境必须更换密码）：
+--   总管理员：admin / admin123
+--   下列家属、老人、志愿者账号：对应 username / pass123
+--   后端按区域补充的区域管理员：region_admin_<区县adcode> / Admin@2026
+--   后端按区域补充的演示家属、老人、志愿者：对应 username / pass123
+-- 密码字段目前沿用项目现有的明文演示机制，生产部署前应改为安全哈希。
+
+-- ====== 总管理员 (user_id=1；登录账号 admin / admin123) ======
 INSERT INTO users (username, password_hash, role, real_name, phone, email) VALUES
 ('admin', 'admin123', 'admin', '系统管理员', '13000000001', 'admin@eldercare.com');
 
@@ -202,11 +454,11 @@ INSERT INTO users (username, password_hash, role, real_name, phone, email) VALUE
 
 -- ====== 老人档案 (elder_id=1~5) ======
 INSERT INTO elders (user_id, name, age, gender, address, medical_history, alert_sys_threshold) VALUES
-(6,  '张大爷', 78, '男', '幸福小区1栋301室',  '高血压病史10年，长期服用降压药', 140),
-(7,  '李奶奶', 82, '女', '阳光花园3栋502室',  '糖尿病II型，骨质疏松，需定期复查血糖', 135),
-(8,  '王伯伯', 75, '男', '和平路18号院2单元', '冠心病，安装过心脏支架，需避免剧烈运动', 130),
-(9,  '陈阿姨', 70, '女', '翠苑小区5栋101室',  '轻度认知障碍，偶有健忘，身体状况总体良好', 140),
-(10, '刘爷爷', 85, '男', '银杏苑7栋203室',    '帕金森病早期，行动不便需要助行器，听力下降', 140);
+(6,  '张大爷', 78, '男', '上海市宝山区锦秋路699弄112号1号楼101室', '高血压病史10年，长期服用降压药', 140),
+(7,  '李奶奶', 82, '女', '上海市宝山区殷高路21弄5号1号楼102室', '糖尿病II型，骨质疏松，需定期复查血糖', 135),
+(8,  '王伯伯', 75, '男', '上海市宝山区新二路183弄57号1号楼103室', '冠心病，安装过心脏支架，需避免剧烈运动', 130),
+(9,  '陈阿姨', 70, '女', '上海市宝山区国权北路828弄139号1号楼104室', '轻度认知障碍，偶有健忘，身体状况总体良好', 140),
+(10, '刘爷爷', 85, '男', '上海市宝山区盘古路528号1号楼201室', '帕金森病早期，行动不便需要助行器，听力下降', 140);
 
 -- ====== 志愿者档案 ======
 INSERT INTO volunteers_profile (user_id, id_card, skills, total_hours, weekly_hours, likes_count, awards, audit_status) VALUES
@@ -225,6 +477,74 @@ INSERT INTO user_elder_relation (family_user_id, elder_id, relation_type) VALUES
 (3, 3, '儿媳'),
 (4, 4, '女儿'),
 (5, 5, '孙子');
+
+-- ====== 核心运行时状态（保证只执行 init SQL 也能直接使用） ======
+INSERT INTO dispatch_system_state (state_key, state_value) VALUES
+('traffic_version', '1');
+
+INSERT INTO administrative_regions
+    (adcode, name, city_name, province_name, region_level, bounds_json, polygon_json, center_lng, center_lat)
+VALUES
+('310113', '宝山区', '上海市', '上海市', 'district',
+ '{"west":121.405,"east":121.535,"south":31.325,"north":31.455}', NULL, 121.458000, 31.382000),
+('310115', '浦东新区', '上海市', '上海市', 'district',
+ '{"west":121.500,"east":121.700,"south":31.120,"north":31.320}', NULL, 121.572000, 31.218000),
+('110105', '朝阳区', '北京市', '北京市', 'district',
+ '{"west":116.370,"east":116.560,"south":39.820,"north":40.060}', NULL, 116.472000, 39.943000);
+
+INSERT INTO admin_region_scope (admin_user_id, region_adcode, permission) VALUES
+(1, '*', 'manage');
+
+INSERT INTO elder_location_state
+    (elder_id, lng, lat, location_source, is_home_fixed)
+VALUES
+(1, 121.438901, 31.380680, 'simulated', TRUE),
+(2, 121.489700, 31.322900, 'simulated', TRUE),
+(3, 121.486300, 31.353800, 'simulated', TRUE),
+(4, 121.494600, 31.329900, 'simulated', TRUE),
+(5, 121.482600, 31.407100, 'simulated', TRUE);
+
+INSERT INTO elder_addresses
+    (elder_id, label, province_name, city_name, district_name, region_adcode,
+     detail_address, full_address, lng, lat, is_current)
+VALUES
+(1, '家', '上海市', '上海市', '宝山区', '310113',
+ '锦秋路699弄112号1号楼101室', '上海市宝山区锦秋路699弄112号1号楼101室',
+ 121.438901, 31.380680, TRUE),
+(2, '家', '上海市', '上海市', '宝山区', '310113',
+ '殷高路21弄5号1号楼102室', '上海市宝山区殷高路21弄5号1号楼102室',
+ 121.489700, 31.322900, TRUE),
+(3, '家', '上海市', '上海市', '宝山区', '310113',
+ '新二路183弄57号1号楼103室', '上海市宝山区新二路183弄57号1号楼103室',
+ 121.486300, 31.353800, TRUE),
+(4, '家', '上海市', '上海市', '宝山区', '310113',
+ '国权北路828弄139号1号楼104室', '上海市宝山区国权北路828弄139号1号楼104室',
+ 121.494600, 31.329900, TRUE),
+(5, '家', '上海市', '上海市', '宝山区', '310113',
+ '盘古路528号1号楼201室', '上海市宝山区盘古路528号1号楼201室',
+ 121.482600, 31.407100, TRUE);
+
+INSERT INTO volunteer_location_state
+    (volunteer_id, lng, lat, availability, fatigue_score, service_rating,
+     assigned_today, location_source, home_lng, home_lat, auto_accept_enabled,
+     service_region_adcode)
+VALUES
+(11, 121.461200, 31.383600, 'idle', 12, 4.90, 0, 'simulated', 121.461200, 31.383600, FALSE, '310113'),
+(12, 121.452800, 31.376200, 'idle', 18, 4.80, 0, 'simulated', 121.452800, 31.376200, FALSE, '310113'),
+(13, 121.474500, 31.390400, 'idle', 10, 4.70, 0, 'simulated', 121.474500, 31.390400, FALSE, '310113'),
+(14, 121.441500, 31.365800, 'idle', 15, 4.75, 0, 'simulated', 121.441500, 31.365800, FALSE, '310113'),
+(15, 121.486000, 31.401500, 'idle', 8, 4.65, 0, 'simulated', 121.486000, 31.401500, FALSE, '310113'),
+(16, 121.468000, 31.372500, 'idle', 0, 4.50, 0, 'simulated', 121.468000, 31.372500, FALSE, '310113');
+
+INSERT INTO volunteer_skill_tags (volunteer_id, skill_tag, verified) VALUES
+(11, '陪诊', TRUE),
+(11, '急救', TRUE),
+(11, '陪伴', TRUE),
+(12, '健康指导', TRUE),
+(12, '康复训练', TRUE),
+(13, '智能设备指导', TRUE),
+(14, '心理陪伴', TRUE),
+(15, '运动康复', TRUE);
 
 -- ====== 张大爷 7天健康打卡数据 ======
 INSERT INTO health_records (elder_id, record_date, blood_pressure_sys, blood_pressure_dia, heart_rate, blood_oxygen, blood_sugar, temperature, weight, notes) VALUES
@@ -278,29 +598,29 @@ INSERT INTO health_records (elder_id, record_date, blood_pressure_sys, blood_pre
 
 -- ====== 已完成的订单 (order_id=1~6) ======
 INSERT INTO orders (elder_id, created_by, volunteer_id, service_type, service_time, service_hours, address, status, notes, created_at) VALUES
-(1, 2, 11, '陪同就医', '2026-04-05 09:00:00', 3, '幸福小区1栋301室', 'completed', '张大爷需要去社区医院复查血压', '2026-04-03 10:00:00'),
-(2, 3, 12, '上门打扫', '2026-04-06 14:00:00', 2, '阳光花园3栋502室', 'completed', '李奶奶家需要打扫卫生', '2026-04-04 09:00:00'),
-(3, 3, 11, '代买代办', '2026-04-07 10:00:00', 1, '和平路18号院2单元', 'completed', '帮王伯伯去药店买降压药', '2026-04-05 15:00:00'),
-(4, 4, 13, '陪聊散步', '2026-04-08 16:00:00', 2, '翠苑小区5栋101室', 'completed', '陈阿姨想去公园散步', '2026-04-06 11:00:00'),
-(1, 2, 14, '健康指导', '2026-04-09 10:00:00', 1.5, '幸福小区1栋301室', 'completed', '教张大爷使用血压计自测', '2026-04-07 08:00:00'),
-(5, 5, 12, '陪同就医', '2026-04-10 08:30:00', 4, '银杏苑7栋203室', 'completed', '刘爷爷需要去三甲医院做帕金森复查', '2026-04-08 14:00:00');
+(1, 2, 11, '陪同就医', '2026-04-05 09:00:00', 3, '上海市宝山区锦秋路699弄112号1号楼101室', 'completed', '张大爷需要去社区医院复查血压', '2026-04-03 10:00:00'),
+(2, 3, 12, '上门打扫', '2026-04-06 14:00:00', 2, '上海市宝山区殷高路21弄5号1号楼102室', 'completed', '李奶奶家需要打扫卫生', '2026-04-04 09:00:00'),
+(3, 3, 11, '代买代办', '2026-04-07 10:00:00', 1, '上海市宝山区新二路183弄57号1号楼103室', 'completed', '帮王伯伯去药店买降压药', '2026-04-05 15:00:00'),
+(4, 4, 13, '陪聊散步', '2026-04-08 16:00:00', 2, '上海市宝山区国权北路828弄139号1号楼104室', 'completed', '陈阿姨想去公园散步', '2026-04-06 11:00:00'),
+(1, 2, 14, '健康指导', '2026-04-09 10:00:00', 1.5, '上海市宝山区锦秋路699弄112号1号楼101室', 'completed', '教张大爷使用血压计自测', '2026-04-07 08:00:00'),
+(5, 5, 12, '陪同就医', '2026-04-10 08:30:00', 4, '上海市宝山区盘古路528号1号楼201室', 'completed', '刘爷爷需要去三甲医院做帕金森复查', '2026-04-08 14:00:00');
 
 -- ====== 进行中的订单 (order_id=7~8) ======
 INSERT INTO orders (elder_id, created_by, volunteer_id, service_type, service_time, service_hours, address, status, notes, created_at) VALUES
-(2, 2, 11, '康复训练', '2026-04-15 09:00:00', 2, '阳光花园3栋502室', 'in_progress', '李奶奶需要做腿部康复训练', '2026-04-13 10:00:00'),
-(5, 5, 15, '陪聊散步', '2026-04-15 15:00:00', 1.5, '银杏苑7栋203室', 'accepted', '刘爷爷想在小区花园散步', '2026-04-13 16:00:00');
+(2, 2, 11, '康复训练', '2026-04-15 09:00:00', 2, '上海市宝山区殷高路21弄5号1号楼102室', 'in_progress', '李奶奶需要做腿部康复训练', '2026-04-13 10:00:00'),
+(5, 5, 15, '陪聊散步', '2026-04-15 15:00:00', 1.5, '上海市宝山区盘古路528号1号楼201室', 'accepted', '刘爷爷想在小区花园散步', '2026-04-13 16:00:00');
 
 -- ====== 待接单的订单 (order_id=9~13) ======
 INSERT INTO orders (elder_id, created_by, service_type, service_time, service_hours, address, status, notes, created_at) VALUES
-(1, 2, '代买代办', '2026-04-16 10:00:00', 1, '幸福小区1栋301室', 'pending', '帮张大爷去超市买米面油和日用品', '2026-04-14 09:00:00'),
-(3, 3, '上门打扫', '2026-04-17 14:00:00', 3, '和平路18号院2单元', 'pending', '王伯伯家大扫除', '2026-04-14 11:00:00'),
-(4, 4, '健康指导', '2026-04-18 09:00:00', 1, '翠苑小区5栋101室', 'pending', '教陈阿姨做记忆力训练游戏', '2026-04-14 14:00:00'),
-(2, 3, '陪同就医', '2026-04-19 08:00:00', 3, '阳光花园3栋502室', 'pending', '李奶奶需要去医院做血糖复查', '2026-04-14 16:00:00'),
-(5, 5, '代买代办', '2026-04-20 11:00:00', 1.5, '银杏苑7栋203室', 'pending', '帮刘爷爷去药店买帕金森用药', '2026-04-15 08:00:00');
+(1, 2, '代买代办', '2026-04-16 10:00:00', 1, '上海市宝山区锦秋路699弄112号1号楼101室', 'pending', '帮张大爷去超市买米面油和日用品', '2026-04-14 09:00:00'),
+(3, 3, '上门打扫', '2026-04-17 14:00:00', 3, '上海市宝山区新二路183弄57号1号楼103室', 'pending', '王伯伯家大扫除', '2026-04-14 11:00:00'),
+(4, 4, '健康指导', '2026-04-18 09:00:00', 1, '上海市宝山区国权北路828弄139号1号楼104室', 'pending', '教陈阿姨做记忆力训练游戏', '2026-04-14 14:00:00'),
+(2, 3, '陪同就医', '2026-04-19 08:00:00', 3, '上海市宝山区殷高路21弄5号1号楼102室', 'pending', '李奶奶需要去医院做血糖复查', '2026-04-14 16:00:00'),
+(5, 5, '代买代办', '2026-04-20 11:00:00', 1.5, '上海市宝山区盘古路528号1号楼201室', 'pending', '帮刘爷爷去药店买帕金森用药', '2026-04-15 08:00:00');
 
 -- ====== 已取消的订单 (order_id=14) ======
 INSERT INTO orders (elder_id, created_by, service_type, service_time, service_hours, address, status, notes, created_at) VALUES
-(4, 4, '陪同就医', '2026-04-12 09:00:00', 2, '翠苑小区5栋101室', 'cancelled', '陈阿姨身体好转，取消就医安排', '2026-04-10 10:00:00');
+(4, 4, '陪同就医', '2026-04-12 09:00:00', 2, '上海市宝山区国权北路828弄139号1号楼104室', 'cancelled', '陈阿姨身体好转，取消就医安排', '2026-04-10 10:00:00');
 
 -- ====== 订单评价 ======
 INSERT INTO reviews (order_id, rating, comment) VALUES

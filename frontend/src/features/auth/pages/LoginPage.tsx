@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Button, Card, Form, Input, Typography, App } from 'antd'
-import { LockOutlined, UserOutlined } from '@ant-design/icons'
+import { HeartFilled, LockOutlined, UserOutlined } from '@ant-design/icons'
 import { Link, useNavigate } from 'react-router-dom'
 
 import { useSession } from '@/features/auth/useSession'
@@ -93,6 +93,12 @@ export default function LoginPage() {
             </Link>
           </div>
         </Card>
+
+        <Link to="/donate" className="mt-5 block">
+          <Button block size="large" className="!h-12 !rounded-2xl !border-rose-200 !bg-white !text-rose-600 shadow-sm">
+            <HeartFilled /> 爱心捐款沙盘
+          </Button>
+        </Link>
 
         <div className="text-center mt-6">
           <Link to="/" className="text-gray-400 text-sm hover:text-gray-600">

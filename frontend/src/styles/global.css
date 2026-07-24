@@ -24,6 +24,25 @@ a {
   text-decoration: none;
 }
 
+.conversation-list-scroll {
+  scrollbar-color: #94a3b8 #f1f5f9;
+  scrollbar-width: auto;
+}
+
+.conversation-list-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.conversation-list-scroll::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+.conversation-list-scroll::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border: 2px solid #f1f5f9;
+  border-radius: 999px;
+}
+
 /* Elder mode: larger text and icons for elderly users */
 .elder-mode {
   font-size: 18px;

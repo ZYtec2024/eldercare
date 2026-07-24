@@ -49,6 +49,15 @@ def format_datetime(value, fmt='%Y-%m-%d %H:%M:%S'):
     return value
 
 
+def format_wall_datetime(value, fmt='%Y-%m-%d %H:%M:%S'):
+    """Format a business wall-clock timestamp without applying UTC offset."""
+    if isinstance(value, datetime.datetime):
+        if value.tzinfo is not None:
+            value = value.astimezone(_SHANGHAI).replace(tzinfo=None)
+        return value.strftime(fmt)
+    return value
+
+
 def format_date(value):
     """格式化日期"""
     if isinstance(value, datetime.datetime):

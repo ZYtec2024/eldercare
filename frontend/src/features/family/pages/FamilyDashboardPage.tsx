@@ -53,13 +53,6 @@ const features = [
     path: '/family/honor-wall',
     color: 'border-amber-200 bg-amber-50/50',
   },
-  {
-    icon: <DashboardOutlined className="text-5xl text-blue-600" />,
-    title: '任务大厅',
-    desc: '查看社区公益服务任务，了解任务内容、服务时间和志愿者接单情况，也可以随时打开查看最新任务动态。',
-    path: '/task-hall',
-    color: 'border-blue-200 bg-blue-50/50',
-  },
 ]
 
 export default function FamilyDashboardPage() {

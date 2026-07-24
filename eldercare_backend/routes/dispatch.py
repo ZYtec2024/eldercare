@@ -21,12 +21,15 @@ from flask import Blueprint, jsonify, request
 from db import get_db_connection
 from region_service import (
     admin_is_root,
+    amap_web_key,
     enrich_missing_polygons,
     ensure_region_columns,
     fetch_district_children,
     fetch_district_detail,
+    geocode_address,
     is_active_region,
     refresh_runtime_catalog,
+    reverse_geocode,
     resolve_region_adcode,
     upsert_region,
 )
@@ -186,7 +189,15 @@ def _point_on_route(path: list[Any], progress: float) -> tuple[float, float]:
             continue
     if len(points) < 2:
         return points[0] if points else (0.0, 0.0)
-    lengths = [_distance_km(a[0], a[1], b[0], b[1]) for a, b in zip(points, points[1:])]
+    # Keep full precision here. `_distance_km` is rounded for UI display, and
+    # rounding every short polyline segment made the simulated vehicle pause
+    # on zero-length segments and then jump across the next non-zero segment.
+    lengths = []
+    for a, b in zip(points, points[1:]):
+        mean_lat = math.radians((a[1] + b[1]) / 2)
+        lat_km = (b[1] - a[1]) * 111.0
+        lng_km = (b[0] - a[0]) * 111.0 * math.cos(mean_lat)
+        lengths.append(math.hypot(lat_km, lng_km))
     total = sum(lengths)
     if total <= 0:
         return points[-1]
@@ -283,6 +294,7 @@ def route_endpoints(start_lng: float, start_lat: float, end_lng: float, end_lat:
         "eta_minutes": eta_minutes, "distance_km": distance, "traffic_version": version,
         "motion_seconds": _demo_motion_seconds(eta_minutes),
         "route_provider": "amap_web_driving",
+        "navigation_mode": "driving",
     }
 
 
@@ -357,6 +369,45 @@ def ensure_dispatch_schema() -> None:
             _add_column_if_missing(cursor, "emergency_incidents", "resolution_summary", "TEXT NULL")
             _add_column_if_missing(cursor, "emergency_incidents", "assigned_admin_id", "INT NULL REFERENCES users(user_id) ON DELETE SET NULL")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_emergency_incident ON alerts(emergency_incident_id)")
+            # These tables are referenced by the legacy-data cleanup below, so
+            # create them first when upgrading an existing pre-dispatch volume.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS emergency_notifications (
+                    notification_id SERIAL PRIMARY KEY,
+                    incident_id INT NOT NULL REFERENCES emergency_incidents(incident_id) ON DELETE CASCADE,
+                    recipient_user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    recipient_role VARCHAR(20) NOT NULL,
+                    notification_type VARCHAR(24) NOT NULL DEFAULT 'in_app',
+                    read_at TIMESTAMP NULL,
+                    acknowledged_at TIMESTAMP NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (incident_id, recipient_user_id, notification_type)
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS conversations (
+                    conversation_id SERIAL PRIMARY KEY,
+                    conversation_type VARCHAR(24) NOT NULL,
+                    elder_id INT NULL REFERENCES elders(elder_id) ON DELETE CASCADE,
+                    order_id INT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
+                    incident_id INT NULL REFERENCES emergency_incidents(incident_id) ON DELETE CASCADE,
+                    status VARCHAR(20) NOT NULL DEFAULT 'active',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    archived_at TIMESTAMP NULL
+                )
+            """)
+            _ensure_column(cursor, "conversations", "upgraded_to_sos", "BOOLEAN NOT NULL DEFAULT FALSE")
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS conversation_members (
+                    conversation_id INT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+                    user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    role_in_conversation VARCHAR(24) NOT NULL,
+                    last_read_at TIMESTAMP NULL,
+                    PRIMARY KEY (conversation_id, user_id)
+                )
+            """)
+            _ensure_column(cursor, "conversation_members", "can_speak", "BOOLEAN NOT NULL DEFAULT TRUE")
+            _ensure_column(cursor, "conversation_members", "hidden_at", "TIMESTAMP NULL")
             # Backfill desk owner for open SOS, then prune extra district admins so
             # load-balancing is exclusive (one district desk owner per incident).
             cursor.execute(
@@ -411,43 +462,6 @@ def ensure_dispatch_schema() -> None:
                 """
             )
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS emergency_notifications (
-                    notification_id SERIAL PRIMARY KEY,
-                    incident_id INT NOT NULL REFERENCES emergency_incidents(incident_id) ON DELETE CASCADE,
-                    recipient_user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-                    recipient_role VARCHAR(20) NOT NULL,
-                    notification_type VARCHAR(24) NOT NULL DEFAULT 'in_app',
-                    read_at TIMESTAMP NULL,
-                    acknowledged_at TIMESTAMP NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE (incident_id, recipient_user_id, notification_type)
-                )
-            """)
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS conversations (
-                    conversation_id SERIAL PRIMARY KEY,
-                    conversation_type VARCHAR(24) NOT NULL,
-                    elder_id INT NULL REFERENCES elders(elder_id) ON DELETE CASCADE,
-                    order_id INT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
-                    incident_id INT NULL REFERENCES emergency_incidents(incident_id) ON DELETE CASCADE,
-                    status VARCHAR(20) NOT NULL DEFAULT 'active',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    archived_at TIMESTAMP NULL
-                )
-            """)
-            _ensure_column(cursor, "conversations", "upgraded_to_sos", "BOOLEAN NOT NULL DEFAULT FALSE")
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS conversation_members (
-                    conversation_id INT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
-                    user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-                    role_in_conversation VARCHAR(24) NOT NULL,
-                    last_read_at TIMESTAMP NULL,
-                    PRIMARY KEY (conversation_id, user_id)
-                )
-            """)
-            _ensure_column(cursor, "conversation_members", "can_speak", "BOOLEAN NOT NULL DEFAULT TRUE")
-            _ensure_column(cursor, "conversation_members", "hidden_at", "TIMESTAMP NULL")
-            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS conversation_messages (
                     message_id SERIAL PRIMARY KEY,
                     conversation_id INT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
@@ -474,6 +488,20 @@ def ensure_dispatch_schema() -> None:
                 )
             """)
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS donation_records (
+                    donation_id SERIAL PRIMARY KEY,
+                    donor_name VARCHAR(80) NOT NULL,
+                    contact VARCHAR(120),
+                    amount NUMERIC(10,2) NOT NULL CHECK (amount > 0),
+                    payment_method VARCHAR(20) NOT NULL
+                        CHECK (payment_method IN ('wechat', 'alipay')),
+                    payment_status VARCHAR(20) NOT NULL DEFAULT 'success',
+                    transaction_no VARCHAR(64) NOT NULL UNIQUE,
+                    message VARCHAR(500),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS elder_location_state (
                     elder_id INT PRIMARY KEY REFERENCES elders(elder_id) ON DELETE CASCADE,
                     lng NUMERIC(10,6) NOT NULL,
@@ -483,6 +511,28 @@ def ensure_dispatch_schema() -> None:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS elder_addresses (
+                    address_id SERIAL PRIMARY KEY,
+                    elder_id INT NOT NULL REFERENCES elders(elder_id) ON DELETE CASCADE,
+                    label VARCHAR(40) NOT NULL DEFAULT '家',
+                    province_name VARCHAR(80) NOT NULL,
+                    city_name VARCHAR(80) NOT NULL,
+                    district_name VARCHAR(80) NOT NULL,
+                    region_adcode VARCHAR(12) NOT NULL,
+                    detail_address VARCHAR(255) NOT NULL,
+                    full_address VARCHAR(500) NOT NULL,
+                    lng NUMERIC(10,6) NOT NULL,
+                    lat NUMERIC(10,6) NOT NULL,
+                    is_current BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (elder_id, full_address)
+                )
+            """)
+            cursor.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_elder_current_address "
+                "ON elder_addresses(elder_id) WHERE is_current = TRUE"
+            )
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS volunteer_skill_tags (
                     volunteer_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
@@ -578,6 +628,124 @@ def ensure_dispatch_schema() -> None:
             _ensure_column(cursor, "dispatch_orders", "dispatch_version", "INT NOT NULL DEFAULT 1")
             _ensure_column(cursor, "dispatch_orders", "priority_tier", f"INT NOT NULL DEFAULT {PRIORITY_NORMAL}")
             _ensure_column(cursor, "dispatch_orders", "last_expanded_at", "TIMESTAMP NULL")
+            # Replace legacy fictional seed labels with public, map-searchable
+            # Baoshan service points without touching user-edited addresses.
+            seed_address_replacements = {
+                "幸福小区1栋301室": "上海市宝山区锦秋路699弄112号1号楼101室",
+                "阳光花园3栋502室": "上海市宝山区殷高路21弄5号1号楼102室",
+                "和平路18号院2单元": "上海市宝山区新二路183弄57号1号楼103室",
+                "翠苑小区5栋101室": "上海市宝山区国权北路828弄139号1号楼104室",
+                "银杏苑7栋203室": "上海市宝山区盘古路528号1号楼201室",
+            }
+            for old_address, real_address in seed_address_replacements.items():
+                cursor.execute(
+                    "UPDATE elders SET address = %s WHERE address = %s",
+                    (real_address, old_address),
+                )
+                cursor.execute(
+                    "UPDATE orders SET address = %s WHERE address = %s",
+                    (real_address, old_address),
+                )
+            cursor.execute("""
+                INSERT INTO elder_addresses
+                    (elder_id, label, province_name, city_name, district_name,
+                     region_adcode, detail_address, full_address, lng, lat, is_current)
+                SELECT e.elder_id, '家',
+                       COALESCE(ar.province_name, '上海市'),
+                       COALESCE(ar.city_name, '上海市'),
+                       COALESCE(ar.name, '宝山区'),
+                       e.region_adcode, e.address, e.address,
+                       loc.lng, loc.lat, TRUE
+                FROM elders e
+                JOIN elder_location_state loc ON loc.elder_id = e.elder_id
+                LEFT JOIN administrative_regions ar ON ar.adcode = e.region_adcode
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM elder_addresses ea WHERE ea.elder_id = e.elder_id
+                )
+            """)
+            # Older demo records stopped at a community/building address. Give
+            # every elder a deterministic room number so upgraded and fresh
+            # databases show the same complete address throughout the product.
+            cursor.execute("""
+                SELECT elder_id, address
+                FROM elders
+                WHERE address IS NOT NULL AND address <> ''
+                ORDER BY elder_id
+            """)
+            for elder_address_row in cursor.fetchall():
+                elder_id = int(elder_address_row["elder_id"])
+                current_address = str(elder_address_row["address"])
+                if "室" in current_address:
+                    continue
+                building_no = ((elder_id - 1) // 8) % 12 + 1
+                floor_no = ((elder_id - 1) // 4) % 18 + 1
+                door_no = (elder_id - 1) % 4 + 1
+                room_suffix = f"{building_no}号楼{floor_no * 100 + door_no}室"
+                completed_address = f"{current_address}{room_suffix}"
+                cursor.execute(
+                    "UPDATE elders SET address = %s WHERE elder_id = %s",
+                    (completed_address, elder_id),
+                )
+                cursor.execute(
+                    """
+                    UPDATE elder_addresses
+                    SET detail_address = CASE
+                            WHEN detail_address IS NULL OR detail_address = '' THEN %s
+                            WHEN POSITION('室' IN detail_address) = 0
+                                THEN detail_address || %s
+                            ELSE detail_address
+                        END,
+                        full_address = CASE
+                            WHEN POSITION('室' IN full_address) = 0
+                                THEN full_address || %s
+                            ELSE full_address
+                        END
+                    WHERE elder_id = %s AND is_current = TRUE
+                    """,
+                    (completed_address, room_suffix, room_suffix, elder_id),
+                )
+                cursor.execute(
+                    """
+                    UPDATE orders
+                    SET address = address || %s
+                    WHERE elder_id = %s
+                      AND address IS NOT NULL
+                      AND POSITION('室' IN address) = 0
+                    """,
+                    (room_suffix, elder_id),
+                )
+
+            # Complete any saved non-current addresses too. Their coordinates
+            # remain unchanged because apartment numbers do not affect the map
+            # anchor for the building/community.
+            cursor.execute("""
+                SELECT address_id, elder_id, detail_address, full_address
+                FROM elder_addresses
+                ORDER BY address_id
+            """)
+            for saved_address_row in cursor.fetchall():
+                address_id = int(saved_address_row["address_id"])
+                elder_id = int(saved_address_row["elder_id"])
+                detail_address = saved_address_row.get("detail_address")
+                full_address = saved_address_row.get("full_address")
+                if not full_address or "室" in full_address:
+                    continue
+                building_no = ((elder_id - 1) // 8) % 12 + 1
+                floor_no = ((address_id - 1) // 4) % 18 + 1
+                door_no = (address_id - 1) % 4 + 1
+                room_suffix = f"{building_no}号楼{floor_no * 100 + door_no}室"
+                completed_detail = str(detail_address or full_address)
+                if "室" not in completed_detail:
+                    completed_detail = f"{completed_detail}{room_suffix}"
+                cursor.execute(
+                    """
+                    UPDATE elder_addresses
+                    SET detail_address = %s,
+                        full_address = %s
+                    WHERE address_id = %s
+                    """,
+                    (completed_detail, f"{full_address}{room_suffix}", address_id),
+                )
             cursor.execute("""UPDATE dispatch_orders SET dispatch_phase = COALESCE(dispatch_phase, 'top1'),
                               phase_started_at = COALESCE(phase_started_at, created_at, CURRENT_TIMESTAMP),
                               dispatch_version = COALESCE(dispatch_version, 1),
@@ -747,6 +915,30 @@ def seed_dispatch_demo_data(conn: Any) -> None:
         ["digital_assist", "companion"],
         ["rehab", "mobility_assist", "companion"],
     ]
+    # Publicly listed Baoshan communities/buildings. Demo elders reuse real
+    # map-searchable service points instead of invented road names.
+    baoshan_demo_addresses = [
+        "上海市宝山区锦秋路699弄",
+        "上海市宝山区纬地路88弄",
+        "上海市宝山区聚丰园路628弄",
+        "上海市宝山区真金路1039弄",
+        "上海市宝山区华灵路1885弄",
+        "上海市宝山区殷高路21弄",
+        "上海市宝山区高境路477弄",
+        "上海市宝山区新二路999弄",
+        "上海市宝山区逸仙路1321弄",
+        "上海市宝山区三门路489弄",
+        "上海市宝山区国权北路828弄",
+        "上海市宝山区盘古路528号",
+    ]
+
+    def _demo_room_address(base_address: str, serial: int) -> str:
+        if "室" in base_address:
+            return base_address
+        building_no = ((serial - 1) // 8) % 12 + 1
+        floor_no = ((serial - 1) // 4) % 18 + 1
+        door_no = (serial - 1) % 4 + 1
+        return f"{base_address}{building_no}号楼{floor_no * 100 + door_no}室"
     try:
         with conn.cursor() as cursor:
             cursor.execute("SELECT COUNT(*) AS count FROM volunteer_location_state")
@@ -819,18 +1011,106 @@ def seed_dispatch_demo_data(conn: Any) -> None:
                 cursor.execute("""
                     INSERT INTO elders (user_id, name, age, gender, address, medical_history, alert_sys_threshold)
                     VALUES (%s, %s, %s, %s, %s, '智能调度模拟档案', 140) RETURNING elder_id
-                """, (user_id, name, 68 + index % 22, "女" if index % 2 else "男", f"上海市宝山区友邻路{index}号"))
+                """, (
+                    user_id,
+                    name,
+                    68 + index % 22,
+                    "女" if index % 2 else "男",
+                    _demo_room_address(
+                        baoshan_demo_addresses[(index - 1) % len(baoshan_demo_addresses)],
+                        index,
+                    ),
+                ))
                 elder_ids.append(int(cursor.fetchone()["elder_id"]))
             elder_ids = elder_ids[:25]
             for index, elder_id in enumerate(elder_ids):
                 ring = 0 if index < 12 else 1 if index < 20 else 2
                 lng, lat = _demo_point(index + 5, ring)
-                cursor.execute("SELECT elder_id FROM elder_location_state WHERE elder_id = %s", (elder_id,))
-                if not cursor.fetchone():
-                    cursor.execute("INSERT INTO elder_location_state (elder_id, lng, lat) VALUES (%s, %s, %s)", (elder_id, lng, lat))
+                location_source = "simulated"
+                cursor.execute(
+                    "SELECT elder_id, location_source FROM elder_location_state WHERE elder_id = %s",
+                    (elder_id,),
+                )
+                existing_location = cursor.fetchone()
+                # The five named seed elders use their real public address as
+                # the coordinate source. Geocoding is best-effort so a missing
+                # Web Key or temporary AMap outage can never block startup.
+                if (
+                    index < 5
+                    and amap_web_key()
+                    and (
+                        not existing_location
+                        or str(existing_location.get("location_source") or "simulated") in ("simulated", "hidden_demo")
+                    )
+                ):
+                    cursor.execute("SELECT address, region_adcode FROM elders WHERE elder_id = %s", (elder_id,))
+                    named_elder = cursor.fetchone() or {}
+                    try:
+                        resolved = geocode_address(
+                            str(named_elder.get("address") or ""),
+                            str(named_elder.get("region_adcode") or DEFAULT_REGION_ADCODE),
+                        )
+                        if str(resolved.get("adcode") or "") == str(named_elder.get("region_adcode") or DEFAULT_REGION_ADCODE):
+                            lng, lat = float(resolved["lng"]), float(resolved["lat"])
+                            location_source = "amap_geocode"
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"seed elder address geocode skipped for {elder_id}: {exc}")
+                if not existing_location:
+                    cursor.execute(
+                        """INSERT INTO elder_location_state
+                           (elder_id, lng, lat, location_source, is_home_fixed)
+                           VALUES (%s, %s, %s, %s, TRUE)""",
+                        (elder_id, lng, lat, location_source),
+                    )
                 else:
-                    cursor.execute("""UPDATE elder_location_state SET lng = %s, lat = %s
-                                      WHERE elder_id = %s AND location_source = 'simulated'""", (lng, lat, elder_id))
+                    cursor.execute(
+                        """UPDATE elder_location_state
+                           SET lng = %s, lat = %s, location_source = %s,
+                               is_home_fixed = TRUE, updated_at = CURRENT_TIMESTAMP
+                           WHERE elder_id = %s
+                             AND location_source IN ('simulated', 'hidden_demo')""",
+                        (lng, lat, location_source, elder_id),
+                    )
+                cursor.execute("SELECT address, region_adcode FROM elders WHERE elder_id = %s", (elder_id,))
+                elder_row = cursor.fetchone() or {}
+                if "友邻路" in str(elder_row.get("address") or ""):
+                    replacement = _demo_room_address(
+                        baoshan_demo_addresses[index % len(baoshan_demo_addresses)],
+                        index + 1,
+                    )
+                    cursor.execute("UPDATE elders SET address = %s WHERE elder_id = %s", (replacement, elder_id))
+                    cursor.execute(
+                        """UPDATE elder_addresses
+                           SET detail_address = %s, full_address = %s
+                           WHERE elder_id = %s""",
+                        (replacement, replacement, elder_id),
+                    )
+                    elder_row["address"] = replacement
+                if location_source == "amap_geocode":
+                    cursor.execute(
+                        """UPDATE elder_addresses
+                           SET lng = %s, lat = %s
+                           WHERE elder_id = %s AND is_current = TRUE""",
+                        (lng, lat, elder_id),
+                    )
+                cursor.execute("SELECT 1 FROM elder_addresses WHERE elder_id = %s", (elder_id,))
+                if not cursor.fetchone():
+                    address = str(elder_row.get("address") or "上海市宝山区")
+                    cursor.execute(
+                        """INSERT INTO elder_addresses
+                           (elder_id, label, province_name, city_name, district_name,
+                            region_adcode, detail_address, full_address, lng, lat, is_current)
+                           VALUES (%s, '家', '上海市', '上海市', '宝山区',
+                                   %s, %s, %s, %s, %s, TRUE)""",
+                        (
+                            elder_id,
+                            str(elder_row.get("region_adcode") or DEFAULT_REGION_ADCODE),
+                            address,
+                            address,
+                            lng,
+                            lat,
+                        ),
+                    )
             cursor.execute("""UPDATE elder_location_state SET location_source = 'hidden_demo'
                               WHERE elder_id NOT IN %s
                                 AND EXISTS (SELECT 1 FROM elders e WHERE e.elder_id = elder_location_state.elder_id
@@ -867,12 +1147,12 @@ def seed_regional_demo_data(conn: Any) -> None:
                 ("浦东志愿者赵峰", ["medical_support", "emergency_response", "mobility_assist"]),
             ],
             "elders": [
-                ("浦东张阿姨", "上海市浦东新区张江路665号"),
-                ("浦东陈伯伯", "上海市浦东新区祖冲之路2305号"),
-                ("浦东李奶奶", "上海市浦东新区金科路2889号"),
-                ("浦东王大爷", "上海市浦东新区世纪大道100号"),
-                ("浦东周阿姨", "上海市浦东新区杨高南路729号"),
-                ("浦东孙爷爷", "上海市浦东新区浦东南路1111号"),
+                ("浦东张阿姨", "上海市浦东新区张江路665号1号楼101室"),
+                ("浦东陈伯伯", "上海市浦东新区祖冲之路2305号1号楼102室"),
+                ("浦东李奶奶", "上海市浦东新区金科路2889号1号楼103室"),
+                ("浦东王大爷", "上海市浦东新区世纪大道100号1号楼104室"),
+                ("浦东周阿姨", "上海市浦东新区杨高南路729号1号楼201室"),
+                ("浦东孙爷爷", "上海市浦东新区浦东南路1111号1号楼202室"),
             ],
         },
         "110105": {
@@ -885,12 +1165,12 @@ def seed_regional_demo_data(conn: Any) -> None:
                 ("朝阳志愿者何静", ["emergency_response", "companion", "mobility_assist"]),
             ],
             "elders": [
-                ("朝阳赵阿姨", "北京市朝阳区望京街10号"),
-                ("朝阳刘伯伯", "北京市朝阳区阜通东大街6号"),
-                ("朝阳孙奶奶", "北京市朝阳区朝阳北路101号"),
-                ("朝阳吴大爷", "北京市朝阳区建国路93号"),
-                ("朝阳钱阿姨", "北京市朝阳区酒仙桥路10号"),
-                ("朝阳冯爷爷", "北京市朝阳区北苑路170号"),
+                ("朝阳赵阿姨", "北京市朝阳区望京街10号1号楼101室"),
+                ("朝阳刘伯伯", "北京市朝阳区阜通东大街6号1号楼102室"),
+                ("朝阳孙奶奶", "北京市朝阳区朝阳北路101号1号楼103室"),
+                ("朝阳吴大爷", "北京市朝阳区建国路93号1号楼104室"),
+                ("朝阳钱阿姨", "北京市朝阳区酒仙桥路10号1号楼201室"),
+                ("朝阳冯爷爷", "北京市朝阳区北苑路170号1号楼202室"),
             ],
         },
     }
@@ -968,6 +1248,56 @@ def seed_regional_demo_data(conn: Any) -> None:
                         cursor.execute("UPDATE elder_location_state SET lng = %s, lat = %s, location_source = 'simulated' WHERE elder_id = %s", (lng, lat, elder_id))
                     else:
                         cursor.execute("INSERT INTO elder_location_state (elder_id, lng, lat, location_source, is_home_fixed) VALUES (%s, %s, %s, 'simulated', TRUE)", (elder_id, lng, lat))
+                    region_info = REGION_CATALOG.get(region_adcode) or {}
+                    province_name = str(region_info.get("province_name") or ("北京市" if region_adcode.startswith("11") else "上海市"))
+                    city_name = str(region_info.get("city_name") or province_name)
+                    district_name = str(region_info.get("name") or scenario["prefix"])
+                    cursor.execute(
+                        "SELECT address_id FROM elder_addresses WHERE elder_id = %s AND is_current = TRUE",
+                        (elder_id,),
+                    )
+                    current_address = cursor.fetchone()
+                    if current_address:
+                        cursor.execute(
+                            """
+                            UPDATE elder_addresses
+                            SET province_name = %s, city_name = %s, district_name = %s,
+                                region_adcode = %s, detail_address = %s, full_address = %s,
+                                lng = %s, lat = %s
+                            WHERE address_id = %s
+                            """,
+                            (
+                                province_name,
+                                city_name,
+                                district_name,
+                                region_adcode,
+                                address,
+                                address,
+                                lng,
+                                lat,
+                                current_address["address_id"],
+                            ),
+                        )
+                    else:
+                        cursor.execute(
+                            """
+                            INSERT INTO elder_addresses
+                                (elder_id, label, province_name, city_name, district_name,
+                                 region_adcode, detail_address, full_address, lng, lat, is_current)
+                            VALUES (%s, '家', %s, %s, %s, %s, %s, %s, %s, %s, TRUE)
+                            """,
+                            (
+                                elder_id,
+                                province_name,
+                                city_name,
+                                district_name,
+                                region_adcode,
+                                address,
+                                address,
+                                lng,
+                                lat,
+                            ),
+                        )
                     family_id = _user_id(cursor, f"demo_{region_adcode}_family_{index}", "family", f"{name}家属", int(region_adcode[-4:]) + 200 + index)
                     cursor.execute("UPDATE users SET password_hash = 'pass123' WHERE user_id = %s", (family_id,))
                     cursor.execute("SELECT 1 FROM user_elder_relation WHERE family_user_id = %s AND elder_id = %s", (family_id, elder_id))
@@ -1039,7 +1369,7 @@ def _bind_admin_to_region(cursor: Any, admin_user_id: int, region_adcode: str, p
         (admin_user_id, region_adcode),
     )
     if cursor.fetchone():
-        return
+        raise ValueError("该管理员已绑定当前区县，请勿重复绑定")
     cursor.execute(
         "INSERT INTO admin_region_scope (admin_user_id, region_adcode, permission) VALUES (%s, %s, %s)",
         (admin_user_id, region_adcode, permission),
@@ -1073,33 +1403,7 @@ def _create_or_bind_district_admin(
             "created": False,
         }
 
-    profile = district_admin or {}
-    username = str(profile.get("username") or "").strip()
-    password = str(profile.get("password") or "").strip()
-    real_name = str(profile.get("real_name") or "").strip()
-    phone = str(profile.get("phone") or "").strip()
-    email = str(profile.get("email") or "").strip()
-    if not all([username, password, real_name, phone, email]):
-        raise ValueError("开通区县时请指定已有管理员，或完整填写新区管理员账号信息")
-
-    cursor.execute("SELECT user_id FROM users WHERE username = %s", (username,))
-    if cursor.fetchone():
-        raise ValueError(f"用户名 {username} 已被占用")
-
-    cursor.execute(
-        """INSERT INTO users (username, password_hash, role, real_name, phone, email)
-           VALUES (%s, %s, 'admin', %s, %s, %s) RETURNING user_id, username, real_name""",
-        (username, password, real_name, phone, email),
-    )
-    created = cursor.fetchone()
-    new_id = int(created["user_id"])
-    _bind_admin_to_region(cursor, new_id, region_adcode, "manage")
-    return {
-        "user_id": new_id,
-        "username": created["username"],
-        "real_name": created["real_name"],
-        "created": True,
-    }
+    raise ValueError("区域管理不再新建管理员，请先准备已有管理员账号后再绑定")
 
 
 def _valid_baoshan_point(lng: Any, lat: Any) -> tuple[float, float] | None:
@@ -1140,9 +1444,23 @@ def _route_for_order(cursor: Any, order_id: int) -> dict[str, Any] | None:
         route = json.loads(row["route_json"])
     except (TypeError, json.JSONDecodeError):
         route = {"path": []}
+    progress = max(0.0, min(100.0, float(route.get("progress") or 0)))
+    remaining_ratio = (100.0 - progress) / 100.0
+    base_distance = max(0.0, float(route.get("distance_km") or 0))
+    base_eta = max(0, int(route.get("eta_minutes") or row["eta_minutes"] or 0))
+    remaining_distance = round(base_distance * remaining_ratio, 3)
+    remaining_eta = 0 if progress >= 100 else max(1, int(math.ceil(base_eta * remaining_ratio)))
+    # Route JSON contains the original planning ETA. Put live fields after it
+    # so a stale value cannot overwrite what elder/family tracking displays.
     result = {
-        "order_id": order_id, "volunteer_id": int(row["volunteer_id"]), "eta_minutes": int(row["eta_minutes"]),
-        "traffic_version": int(row["traffic_version"]), "replanned_at": _iso(row["replanned_at"]), **route,
+        **route,
+        "order_id": order_id,
+        "volunteer_id": int(row["volunteer_id"]),
+        "eta_minutes": remaining_eta,
+        "remaining_eta_minutes": remaining_eta,
+        "remaining_distance_km": remaining_distance,
+        "traffic_version": int(row["traffic_version"]),
+        "replanned_at": _iso(row["replanned_at"]),
     }
     # The browser interpolates this anchor position on every animation frame;
     # the server only writes a coarser correction point.
@@ -1162,11 +1480,22 @@ def _return_route_for_volunteer(cursor: Any, volunteer_id: int) -> dict[str, Any
         route = json.loads(row["route_json"])
     except (TypeError, json.JSONDecodeError):
         route = {"path": []}
+    progress = max(0.0, min(100.0, float(route.get("progress") or 0)))
+    remaining_ratio = (100.0 - progress) / 100.0
+    base_distance = max(0.0, float(route.get("distance_km") or 0))
+    base_eta = max(0, int(route.get("eta_minutes") or row["eta_minutes"] or 0))
+    remaining_distance = round(base_distance * remaining_ratio, 3)
+    remaining_eta = 0 if progress >= 100 else max(1, int(math.ceil(base_eta * remaining_ratio)))
     return {
-        "order_id": -int(volunteer_id), "volunteer_id": int(volunteer_id),
-        "eta_minutes": int(row["eta_minutes"]), "traffic_version": int(row["traffic_version"]),
+        **route,
+        "order_id": -int(volunteer_id),
+        "volunteer_id": int(volunteer_id),
+        "eta_minutes": remaining_eta,
+        "remaining_eta_minutes": remaining_eta,
+        "remaining_distance_km": remaining_distance,
+        "traffic_version": int(row["traffic_version"]),
         "replanned_at": _iso(row["updated_at"]),
-        "motion_rate": _route_motion_rate(route, RETURN_PROGRESS_PER_SECOND), **route,
+        "motion_rate": _route_motion_rate(route, RETURN_PROGRESS_PER_SECOND),
     }
 
 
@@ -1218,7 +1547,7 @@ def _order_context(cursor: Any, order_id: int) -> dict[str, Any] | None:
     return cursor.fetchone()
 
 
-SCHEDULE_IMMEDIATE_GRACE_SECONDS = 90
+SCHEDULE_IMMEDIATE_GRACE_SECONDS = 0
 
 
 def _as_naive_shanghai(value: Any) -> dt.datetime | None:
@@ -1246,6 +1575,14 @@ def _appointment_is_future(service_time: Any) -> bool:
     return when > cutoff
 
 
+def _service_time_text(service_time: Any) -> str | None:
+    """Format appointment wall-clock without applying a second UTC+8 shift."""
+    when = _as_naive_shanghai(service_time)
+    if when:
+        return when.strftime("%Y-%m-%d %H:%M:%S")
+    return str(service_time) if service_time is not None else None
+
+
 def _park_order_as_scheduled(cursor: Any, order_id: int, service_time: Any) -> None:
     when = _as_naive_shanghai(service_time)
     label = when.strftime("%Y-%m-%d %H:%M") if when else "约定时间"
@@ -1253,10 +1590,17 @@ def _park_order_as_scheduled(cursor: Any, order_id: int, service_time: Any) -> N
         """UPDATE dispatch_orders
               SET dispatch_state = 'scheduled',
                   dispatch_phase = 'scheduled',
+                  search_stage = 1,
                   phase_started_at = NULL,
                   phase_expires_at = NULL,
                   last_expanded_at = CURRENT_TIMESTAMP
             WHERE order_id = %s""",
+        (order_id,),
+    )
+    cursor.execute(
+        """UPDATE dispatch_candidates
+              SET response_status = 'waiting', invited_at = NULL
+            WHERE order_id = %s AND response_status = 'invited'""",
         (order_id,),
     )
     _event(
@@ -1391,7 +1735,10 @@ def _candidate_rows(cursor: Any, order: dict[str, Any]) -> list[dict[str, Any]]:
                COALESCE(string_agg(s.skill_tag, '|'), '') AS skill_tags_text
         FROM volunteer_location_state p
         JOIN users u ON u.user_id = p.volunteer_id
-        LEFT JOIN volunteer_skill_tags s ON s.volunteer_id = p.volunteer_id
+        JOIN volunteers_profile vp
+          ON vp.user_id = p.volunteer_id AND vp.audit_status = 'approved'
+        JOIN volunteer_skill_tags s
+          ON s.volunteer_id = p.volunteer_id AND s.verified = TRUE
         WHERE u.role = 'volunteer' AND p.service_region_adcode = %s
           AND p.availability IN ('idle', 'returning')
           AND p.fatigue_score < 85
@@ -2380,7 +2727,17 @@ def _create_return_route(cursor: Any, volunteer_id: int) -> dict[str, Any] | Non
     if not volunteer or volunteer["home_lng"] is None or volunteer["home_lat"] is None:
         return None
     route = route_endpoints(float(volunteer["lng"]), float(volunteer["lat"]), float(volunteer["home_lng"]), float(volunteer["home_lat"]), _traffic_version(cursor))
-    route.update({"progress": 0, "journey_type": "returning", "motion_seconds": _demo_motion_seconds(route.get("eta_minutes"), returning=True), "home_lng": float(volunteer["home_lng"]), "home_lat": float(volunteer["home_lat"])})
+    route.update({
+        "progress": 0,
+        "journey_type": "returning",
+        # Negative order ids are stable per volunteer.  A distinct journey id
+        # prevents an already-open admin map from mistaking a later return trip
+        # for the old one and reusing its marker/route-publish cache.
+        "journey_id": f"return-{volunteer_id}-{_journey_stamp()}",
+        "motion_seconds": _demo_motion_seconds(route.get("eta_minutes"), returning=True),
+        "home_lng": float(volunteer["home_lng"]),
+        "home_lat": float(volunteer["home_lat"]),
+    })
     cursor.execute("SELECT volunteer_id FROM volunteer_return_routes WHERE volunteer_id = %s", (volunteer_id,))
     if cursor.fetchone():
         cursor.execute("""UPDATE volunteer_return_routes SET route_json = %s, eta_minutes = %s, traffic_version = %s,
@@ -3457,6 +3814,19 @@ def _advance_dispatch_unthrottled(cursor: Any) -> None:
         order = _order_context(cursor, int(row["order_id"]))
         if not order:
             continue
+        if order["urgency"] != "sos" and _appointment_is_future(order.get("service_time")):
+            # Protect both newly created and legacy rows.  Older builds could
+            # already have moved a future appointment into Top1/Top3/Top10;
+            # park it again and revoke those premature invitations.
+            cursor.execute(
+                """UPDATE dispatch_candidates
+                      SET response_status = 'waiting', invited_at = NULL
+                    WHERE order_id = %s AND response_status = 'invited'""",
+                (int(order["order_id"]),),
+            )
+            if str(order.get("dispatch_state") or "") != "scheduled":
+                _park_order_as_scheduled(cursor, int(order["order_id"]), order.get("service_time"))
+            continue
         if str(order.get("dispatch_state") or "") == "scheduled":
             if _appointment_is_future(order.get("service_time")):
                 continue
@@ -3656,7 +4026,8 @@ def admin_regions_managed():
                           center_lng, center_lat,
                           CASE WHEN polygon_json IS NULL OR polygon_json = '' OR polygon_json = '[]'
                                THEN FALSE ELSE TRUE END AS has_polygon
-                   FROM administrative_regions ORDER BY adcode"""
+                   FROM administrative_regions
+                   ORDER BY COALESCE(province_name, ''), COALESCE(city_name, ''), name, adcode"""
             )
             rows = cursor.fetchall()
             cursor.execute(
@@ -3741,11 +4112,10 @@ def admin_regions_create():
     province_name = str(data.get("province_name") or "").strip()
     city_name = str(data.get("city_name") or "").strip()
     manager_user_id = data.get("manager_user_id")
-    district_admin = data.get("district_admin") if isinstance(data.get("district_admin"), dict) else None
     if not admin_user_id or not adcode:
         return jsonify({"code": 400, "message": "请提供 admin_user_id 与区县 adcode"}), 400
-    if not manager_user_id and not district_admin:
-        return jsonify({"code": 400, "message": "开通区县时必须绑定区管理员（已有账号或新建）"}), 400
+    if not manager_user_id:
+        return jsonify({"code": 400, "message": "开通区县时必须选择已有区管理员"}), 400
     conn = get_db_connection()
     if not conn:
         return jsonify({"code": 500, "message": "database unavailable"}), 500
@@ -3753,6 +4123,13 @@ def admin_regions_create():
         with conn.cursor() as cursor:
             if not admin_is_root(cursor, int(admin_user_id)):
                 return jsonify({"code": 403, "message": "仅总管理员可添加区域"}), 403
+            cursor.execute("SELECT name FROM administrative_regions WHERE adcode = %s", (adcode,))
+            existing_region = cursor.fetchone()
+            if existing_region:
+                return jsonify({
+                    "code": 409,
+                    "message": f"{existing_region['name']} 已开通过，请在下方已配置区域中启用、解绑或绑定管理员",
+                }), 409
             detail = fetch_district_detail(adcode)
             level = detail.get("level") or ""
             if level not in ("district", "biz_area"):
@@ -3774,8 +4151,7 @@ def admin_regions_create():
             manager = _create_or_bind_district_admin(
                 cursor,
                 detail["adcode"],
-                manager_user_id=int(manager_user_id) if manager_user_id else None,
-                district_admin=district_admin,
+                manager_user_id=int(manager_user_id),
             )
             conn.commit()
         refresh_runtime_catalog(REGION_CATALOG, conn)
@@ -3809,11 +4185,10 @@ def admin_regions_bind_manager(adcode: str):
     data = request.get_json(silent=True) or {}
     admin_user_id = data.get("admin_user_id")
     manager_user_id = data.get("manager_user_id")
-    district_admin = data.get("district_admin") if isinstance(data.get("district_admin"), dict) else None
     if not admin_user_id:
         return jsonify({"code": 400, "message": "缺少 admin_user_id"}), 400
-    if not manager_user_id and not district_admin:
-        return jsonify({"code": 400, "message": "请指定已有管理员或新建区管理员"}), 400
+    if not manager_user_id:
+        return jsonify({"code": 400, "message": "请选择已有区管理员"}), 400
     conn = get_db_connection()
     if not conn:
         return jsonify({"code": 500, "message": "database unavailable"}), 500
@@ -3830,8 +4205,7 @@ def admin_regions_bind_manager(adcode: str):
             manager = _create_or_bind_district_admin(
                 cursor,
                 adcode,
-                manager_user_id=int(manager_user_id) if manager_user_id else None,
-                district_admin=district_admin,
+                manager_user_id=int(manager_user_id),
             )
             conn.commit()
             return jsonify({
@@ -3986,7 +4360,7 @@ def _overview(cursor: Any, user_id: int | None = None, requested_region: str | N
     cursor.execute("""
         SELECT o.order_id, o.service_type, o.status, o.volunteer_id, o.notes, v.real_name AS volunteer_name, e.name AS elder_name,
                d.urgency, d.dispatch_state, d.search_stage, d.dispatch_phase, d.phase_expires_at,
-               d.dispatch_version, d.forced_assignment, d.created_at,
+               d.dispatch_version, d.forced_assignment, d.created_at, o.service_time,
                l.lng, l.lat
         FROM dispatch_orders d JOIN orders o ON o.order_id = d.order_id
         JOIN elders e ON e.elder_id = o.elder_id JOIN elder_location_state l ON l.elder_id = e.elder_id
@@ -4000,6 +4374,7 @@ def _overview(cursor: Any, user_id: int | None = None, requested_region: str | N
         "urgency": row["urgency"], "dispatch_state": row["dispatch_state"], "search_stage": int(row["search_stage"]),
         "dispatch_phase": row["dispatch_phase"], "phase_expires_at": _iso(row["phase_expires_at"]), "dispatch_version": int(row["dispatch_version"]),
         "forced_assignment": bool(row["forced_assignment"]), "created_at": _iso(row["created_at"]),
+        "service_time": _service_time_text(row.get("service_time")),
         "is_simulated": "沙盘" in str(row.get("notes") or ""),
         "lng": float(row["lng"]), "lat": float(row["lat"]),
     } for row in cursor.fetchall()]
@@ -4017,18 +4392,13 @@ def _overview(cursor: Any, user_id: int | None = None, requested_region: str | N
     # Return journeys are part of the real command map too.  Previously only
     # the volunteer portal received them, which made the commander view look
     # as if a completed volunteer had teleported home.
-    cursor.execute("""SELECT r.volunteer_id, r.route_json, r.eta_minutes, r.traffic_version, r.updated_at
+    cursor.execute("""SELECT r.volunteer_id
                       FROM volunteer_return_routes r JOIN volunteer_location_state p ON p.volunteer_id = r.volunteer_id
                       WHERE p.service_region_adcode = %s ORDER BY r.updated_at DESC LIMIT 20""", (region_adcode,))
     for row in cursor.fetchall():
-        try:
-            route = json.loads(row["route_json"])
-        except (TypeError, json.JSONDecodeError):
-            route = {"path": []}
-        routes.append({"order_id": -int(row["volunteer_id"]), "volunteer_id": int(row["volunteer_id"]),
-                       "eta_minutes": int(row["eta_minutes"]), "traffic_version": int(row["traffic_version"]),
-                       "replanned_at": _iso(row["updated_at"]), "motion_rate": _route_motion_rate(route, RETURN_PROGRESS_PER_SECOND),
-                       **route})
+        route = _return_route_for_volunteer(cursor, int(row["volunteer_id"]))
+        if route:
+            routes.append(route)
     routes_by_order = {int(route["order_id"]): route for route in routes}
     for order in orders:
         order["route"] = routes_by_order.get(int(order["order_id"]))
@@ -4039,7 +4409,9 @@ def _overview(cursor: Any, user_id: int | None = None, requested_region: str | N
         FROM dispatch_candidates c JOIN users u ON u.user_id = c.volunteer_id
         JOIN volunteer_location_state p ON p.volunteer_id = c.volunteer_id
         JOIN orders o ON o.order_id = c.order_id JOIN dispatch_orders d ON d.order_id = o.order_id
-        WHERE o.status = 'pending' AND o.region_adcode = %s AND c.eligible = TRUE AND p.availability IN ('idle', 'returning')
+        WHERE o.status = 'pending' AND o.region_adcode = %s
+          AND d.dispatch_state <> 'scheduled'
+          AND c.eligible = TRUE AND p.availability IN ('idle', 'returning')
           AND NOT EXISTS (SELECT 1 FROM orders active WHERE active.volunteer_id = c.volunteer_id
                           AND active.status IN ('accepted', 'in_progress'))
         ORDER BY c.order_id DESC, c.candidate_rank NULLS LAST LIMIT 80
@@ -4147,7 +4519,7 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
         for row in rows:
             item = {
                 "order_id": int(row["order_id"]), "service_type": row["service_type"], "status": row["status"],
-                "service_time": _iso(row.get("service_time")),
+                "service_time": _service_time_text(row.get("service_time")),
                 "volunteer_id": int(row["volunteer_id"]) if row["volunteer_id"] else None,
                 "volunteer_name": row["volunteer_name"], "urgency": row["urgency"],
                 "volunteer_availability": row["availability"] if row["volunteer_id"] else None,
@@ -4227,15 +4599,10 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
         preview = _next_assignment_preview(cursor, user_id)
         if preview:
             payload["next_assignment_preview"] = preview
-        cursor.execute("SELECT route_json, eta_minutes, traffic_version, updated_at FROM volunteer_return_routes WHERE volunteer_id = %s", (user_id,))
-        returning = cursor.fetchone()
-        if returning:
-            try:
-                return_route = json.loads(returning["route_json"])
-            except (TypeError, json.JSONDecodeError):
-                return_route = {"path": []}
-            payload["return_route"] = {"order_id": -int(user_id), "volunteer_id": int(user_id), "eta_minutes": int(returning["eta_minutes"]), "traffic_version": int(returning["traffic_version"]), "replanned_at": _iso(returning["updated_at"]), "motion_rate": _route_motion_rate(return_route, RETURN_PROGRESS_PER_SECOND), **return_route}
-            payload["routes"].append(payload["return_route"])
+        return_route = _return_route_for_volunteer(cursor, int(user_id))
+        if return_route:
+            payload["return_route"] = return_route
+            payload["routes"].append(return_route)
         cursor.execute("""
             SELECT DISTINCT o.order_id, o.service_type, o.status, o.volunteer_id, o.address AS order_address,
                    e.elder_id, e.name AS elder_name, e.address AS elder_address, l.lng, l.lat,
@@ -4736,7 +5103,18 @@ def update_elder_location():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT elder_id, region_adcode FROM elders WHERE user_id = %s", (user_id,))
+            cursor.execute(
+                """SELECT e.elder_id, e.region_adcode, e.address,
+                          l.lng AS current_lng, l.lat AS current_lat,
+                          ea.full_address AS saved_address,
+                          ea.lng AS saved_lng, ea.lat AS saved_lat
+                   FROM elders e
+                   JOIN elder_location_state l ON l.elder_id = e.elder_id
+                   LEFT JOIN elder_addresses ea
+                     ON ea.elder_id = e.elder_id AND ea.is_current = TRUE
+                   WHERE e.user_id = %s""",
+                (user_id,),
+            )
             elder = cursor.fetchone()
             if not elder:
                 return jsonify({"code": 404, "message": "当前账号没有老人档案"}), 404
@@ -5175,10 +5553,54 @@ def create_dispatch_order():
             skills = _normalize_required_skills(data.get("required_skills"), catalog["skills"], urgent=urgent)
             service_time = data.get("service_time") or _shanghai_now().strftime("%Y-%m-%d %H:%M:%S")
             notes = str(data.get("notes") or data.get("situation") or "").strip()[:500]
+            location_mode = str(data.get("location_mode") or "address").strip().lower()
+            if location_mode == "live":
+                try:
+                    service_location = reverse_geocode(data.get("lng"), data.get("lat"))
+                except Exception as exc:
+                    return jsonify({"code": 400, "message": f"实时位置不可用：{exc}"}), 400
+                if str(service_location.get("adcode") or "") != region_adcode:
+                    return jsonify({
+                        "code": 400,
+                        "message": "实时位置不在老人当前登记区县内，请切换地址或联系管理员调整管辖区",
+                    }), 400
+                service_lng = float(service_location["lng"])
+                service_lat = float(service_location["lat"])
+                service_address = str(service_location.get("formatted_address") or "老人实时位置")
+                cursor.execute(
+                    """UPDATE elder_location_state
+                       SET lng = %s, lat = %s, location_source = 'browser_live',
+                           is_home_fixed = FALSE, updated_at = CURRENT_TIMESTAMP
+                       WHERE elder_id = %s""",
+                    (service_lng, service_lat, elder["elder_id"]),
+                )
+            else:
+                service_lng = float(elder.get("saved_lng") or elder["current_lng"])
+                service_lat = float(elder.get("saved_lat") or elder["current_lat"])
+                service_address = str(elder.get("saved_address") or elder.get("address") or "老人当前地址")
+                cursor.execute(
+                    """UPDATE elder_location_state
+                       SET lng = %s, lat = %s, location_source = 'address_book',
+                           is_home_fixed = TRUE, updated_at = CURRENT_TIMESTAMP
+                       WHERE elder_id = %s""",
+                    (service_lng, service_lat, elder["elder_id"]),
+                )
             cursor.execute("""
-                INSERT INTO orders (elder_id, created_by, service_type, service_time, service_hours, notes, status, region_adcode)
-                VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s) RETURNING order_id
-            """, (elder["elder_id"], user_id, service_type, service_time, data.get("service_hours") or catalog["hours"], notes, region_adcode))
+                INSERT INTO orders
+                    (elder_id, created_by, service_type, service_time, service_hours,
+                     address, notes, status, region_adcode)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', %s)
+                RETURNING order_id
+            """, (
+                elder["elder_id"],
+                user_id,
+                service_type,
+                service_time,
+                data.get("service_hours") or catalog["hours"],
+                service_address,
+                notes,
+                region_adcode,
+            ))
             order_id = int(cursor.fetchone()["order_id"])
             is_scheduled = (not urgent) and _appointment_is_future(service_time)
             cursor.execute("""
@@ -6004,6 +6426,18 @@ def persist_amap_route_geometry(order_id: int):
                     section.append([valid[0], valid[1]])
             if len(section) >= 2:
                 segments.append({"path": section, "status": str(segment.get("status") or "")})
+    navigation_mode = str(data.get("navigation_mode") or "driving").strip().lower()
+    if navigation_mode not in {"driving", "riding", "walking"}:
+        return jsonify({"code": 400, "message": "不支持的导航方式"}), 400
+    restart_from_current = bool(data.get("restart_from_current"))
+    try:
+        eta_minutes = max(1, int(round(float(data.get("eta_minutes") or 1))))
+    except (TypeError, ValueError):
+        eta_minutes = 1
+    try:
+        distance_km = max(0.0, float(data.get("distance_km") or 0))
+    except (TypeError, ValueError):
+        distance_km = 0.0
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
@@ -6014,18 +6448,55 @@ def persist_amap_route_geometry(order_id: int):
                 if not row:
                     return jsonify({"code": 404, "message": "返家路线不存在"}), 404
                 route = json.loads(row["route_json"])
-                route.update({"path": path, "traffic_segments": segments, "geometry_source": "amap"})
-                cursor.execute("UPDATE volunteer_return_routes SET route_json = %s, updated_at = CURRENT_TIMESTAMP WHERE volunteer_id = %s",
-                               (json.dumps(route, ensure_ascii=False), volunteer_id))
+                existing_segments = route.get("traffic_segments") or []
+                # Two map surfaces may resolve the same route concurrently.
+                # A response without TMC data must not erase colours already
+                # published by a complete response. Explicit fresh TMC data is
+                # still accepted so real congestion can genuinely clear.
+                if existing_segments and not segments:
+                    segments = existing_segments
+                # Returning is intentionally always simulated as driving.
+                route.update({
+                    "path": path,
+                    "traffic_segments": segments,
+                    "geometry_source": "amap",
+                    "navigation_mode": "driving",
+                    "eta_minutes": eta_minutes,
+                    "distance_km": distance_km or float(route.get("distance_km") or 0),
+                })
+                if restart_from_current:
+                    route["progress"] = 0
+                    route["motion_seconds"] = _demo_motion_seconds(eta_minutes, returning=True)
+                    route.pop("arrival_pending_since", None)
+                cursor.execute("UPDATE volunteer_return_routes SET route_json = %s, eta_minutes = %s, updated_at = CURRENT_TIMESTAMP WHERE volunteer_id = %s",
+                               (json.dumps(route, ensure_ascii=False), eta_minutes, volunteer_id))
             else:
                 cursor.execute("SELECT route_json FROM dispatch_routes WHERE order_id = %s FOR UPDATE", (order_id,))
                 row = cursor.fetchone()
                 if not row:
                     return jsonify({"code": 404, "message": "服务路线不存在"}), 404
                 route = json.loads(row["route_json"])
-                route.update({"path": path, "traffic_segments": segments, "geometry_source": "amap"})
-                cursor.execute("UPDATE dispatch_routes SET route_json = %s, replanned_at = CURRENT_TIMESTAMP WHERE order_id = %s",
-                               (json.dumps(route, ensure_ascii=False), order_id))
+                existing_segments = route.get("traffic_segments") or []
+                if (
+                    str(route.get("navigation_mode") or "driving") == navigation_mode
+                    and existing_segments
+                    and not segments
+                ):
+                    segments = existing_segments
+                route.update({
+                    "path": path,
+                    "traffic_segments": segments,
+                    "geometry_source": "amap",
+                    "navigation_mode": navigation_mode,
+                    "eta_minutes": eta_minutes,
+                    "distance_km": distance_km or float(route.get("distance_km") or 0),
+                })
+                if restart_from_current:
+                    route["progress"] = 0
+                    route["motion_seconds"] = _demo_motion_seconds(eta_minutes)
+                    route.pop("arrival_pending_since", None)
+                cursor.execute("UPDATE dispatch_routes SET route_json = %s, eta_minutes = %s, replanned_at = CURRENT_TIMESTAMP WHERE order_id = %s",
+                               (json.dumps(route, ensure_ascii=False), eta_minutes, order_id))
             conn.commit()
             return jsonify({"code": 200, "message": "高德道路几何已共享"})
     except Exception as exc:

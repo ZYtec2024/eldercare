@@ -218,6 +218,7 @@ export function DispatchSimulationPanel({ overview }: { overview: DispatchOvervi
     try {
       const refreshSlot = String(Math.floor(Date.now() / 60_000))
       let drivingRoute = await getAmapDrivingRoute(start, end, 'REAL_TRAFFIC', refreshSlot)
+      if (!drivingRoute.geometryResolved) throw new Error('AMap road geometry is not ready')
       let path = drivingRoute.path
       if (runtimeRef.current !== runtime || serial > routeSerialRef.current) return
       let changed = !rerouted || !previous || routeMateriallyChanged(previous.path, previous.progress, path)
@@ -226,7 +227,7 @@ export function DispatchSimulationPanel({ overview }: { overview: DispatchOvervi
       // concluding that there is no usable detour.
       if (rerouted && previous && !changed) {
         const alternative = await getAmapDrivingRoute(start, end, 'LEAST_DISTANCE', refreshSlot)
-        if (routeMateriallyChanged(previous.path, previous.progress, alternative.path)) {
+        if (alternative.geometryResolved && routeMateriallyChanged(previous.path, previous.progress, alternative.path)) {
           drivingRoute = alternative
           path = alternative.path
           changed = true

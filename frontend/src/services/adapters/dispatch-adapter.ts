@@ -1,5 +1,5 @@
 import { http, type ApiEnvelope } from '@/services/http'
-import type { DispatchOrder, DispatchOverview, DispatchTracking, VolunteerDispatchTask } from '@/features/dispatch/dispatch-types'
+import type { DispatchOrder, DispatchOverview, DispatchTracking, NavigationMode, VolunteerDispatchTask } from '@/features/dispatch/dispatch-types'
 
 export async function fetchDispatchOverview(userId?: number, regionAdcode?: string) {
   const response = await http.get<ApiEnvelope<DispatchOverview>>('/dispatch/overview', { params: { user_id: userId, region_adcode: regionAdcode } })
@@ -301,6 +301,27 @@ export async function updateVolunteerDispatchPreferences(payload: { volunteerId:
   return response.data
 }
 
+export async function updateVolunteerNavigationRoute(payload: {
+  orderId: number
+  volunteerId: number
+  path: Array<[number, number]>
+  trafficSegments: Array<{ path: Array<[number, number]>; status: string }>
+  distanceKm: number
+  etaMinutes: number
+  navigationMode: NavigationMode
+}) {
+  const response = await http.post<ApiEnvelope<unknown>>(`/dispatch/routes/${payload.orderId}/geometry`, {
+    volunteer_id: payload.volunteerId,
+    path: payload.path,
+    traffic_segments: payload.trafficSegments,
+    distance_km: payload.distanceKm,
+    eta_minutes: payload.etaMinutes,
+    navigation_mode: payload.navigationMode,
+    restart_from_current: true,
+  })
+  return response.data
+}
+
 export async function createDispatchOrder(payload: {
   userId: number
   serviceType: string
@@ -309,6 +330,9 @@ export async function createDispatchOrder(payload: {
   notes?: string
   urgent?: boolean
   requiredSkills?: string[]
+  locationMode?: 'address' | 'live'
+  lng?: number
+  lat?: number
 }) {
   const response = await http.post<ApiEnvelope<{ order_id: number; scheduled?: boolean }>>('/dispatch/orders', {
     user_id: payload.userId,
@@ -318,6 +342,9 @@ export async function createDispatchOrder(payload: {
     notes: payload.notes,
     urgent: payload.urgent,
     required_skills: payload.requiredSkills,
+    location_mode: payload.locationMode,
+    lng: payload.lng,
+    lat: payload.lat,
   })
   return response.data
 }

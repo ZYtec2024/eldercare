@@ -20,11 +20,19 @@ export function RealDispatchPanel({ overview }: { overview: DispatchOverview | n
 
   const realOrders = (overview?.orders ?? []).filter((order) => !order.is_simulated && !(order as typeof order & { isSimulated?: boolean }).isSimulated)
   const realOrderIds = new Set(realOrders.map((order) => order.order_id))
-  const realOverview = overview ? { ...overview, orders: realOrders, routes: overview.routes.filter((route) => realOrderIds.has(route.order_id)) } : null
+  const realOverview = overview ? {
+    ...overview,
+    orders: realOrders,
+    // Return journeys use a stable negative order id. They are real persisted
+    // routes too and must not be discarded just because there is no active
+    // service order after completion.
+    routes: overview.routes.filter((route) => realOrderIds.has(route.order_id) || route.journey_type === 'returning'),
+  } : null
   const active = realOrders.filter((order) => ['accepted', 'in_progress'].includes(order.status))
   const waiting = realOrders.filter((order) => order.status === 'pending')
   const phaseLabel = (order: (typeof waiting)[number]) => {
     if (order.urgency === 'sos') return 'SOS · P0'
+    if (order.dispatch_state === 'scheduled' || order.dispatch_phase === 'scheduled') return '预约待开始'
     if (order.dispatch_state === 'queued_waiting_capacity' || order.dispatch_phase === 'fallback') return '升级 · P1'
     if (order.dispatch_phase === 'top1') return 'Top1 专属'
     if (order.dispatch_phase === 'top3') return 'Top3 抢单'
@@ -73,13 +81,16 @@ export function RealDispatchPanel({ overview }: { overview: DispatchOverview | n
           {waiting.slice(0, 8).map((order) => (
             <div key={order.order_id} className="rounded-lg bg-amber-50 p-2">
               <b>{order.elder_name}</b> · {order.service_type}
-              <Tag className="ml-2" color={order.urgency === 'sos' ? 'red' : order.dispatch_state === 'queued_waiting_capacity' || order.dispatch_phase === 'fallback' ? 'volcano' : 'orange'}>{phaseLabel(order)}</Tag>
+              <Tag className="ml-2" color={order.urgency === 'sos' ? 'red' : order.dispatch_state === 'scheduled' ? 'blue' : order.dispatch_state === 'queued_waiting_capacity' || order.dispatch_phase === 'fallback' ? 'volcano' : 'orange'}>{phaseLabel(order)}</Tag>
+              {order.service_time ? <div className="mt-1 text-xs font-medium text-slate-700">预约时间：{order.service_time.replace('T', ' ')}</div> : null}
               <div className="mt-1 text-xs text-amber-800">
                 {order.urgency === 'sos'
                   ? (order.dispatch_state === 'queued_waiting_capacity' || order.dispatch_state === 'admin_escalated'
                     ? 'SOS：暂无空闲自动接单人选，系统排队重试中'
                     : 'SOS：系统自动强制派单中')
-                  : (order.dispatch_state === 'queued_waiting_capacity' || order.dispatch_phase === 'fallback'
+                  : order.dispatch_state === 'scheduled'
+                    ? '预约时间未到：暂不计算候选、不向志愿者扩散'
+                    : (order.dispatch_state === 'queued_waiting_capacity' || order.dispatch_phase === 'fallback'
                     ? '普通单：等待技能匹配志愿者空闲/自动兜底'
                     : `普通单：${order.dispatch_phase || `第 ${order.search_stage} 轮`} 自动邀请中`)}
               </div>

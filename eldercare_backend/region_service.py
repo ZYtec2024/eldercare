@@ -16,6 +16,10 @@ from typing import Any
 from db import get_db_connection
 
 AMAP_DISTRICT_URL = "https://restapi.amap.com/v3/config/district"
+AMAP_GEOCODE_URL = "https://restapi.amap.com/v3/geocode/geo"
+AMAP_REGEOCODE_URL = "https://restapi.amap.com/v3/geocode/regeo"
+AMAP_INPUT_TIPS_URL = "https://restapi.amap.com/v3/assistant/inputtips"
+AMAP_POI_TEXT_URL = "https://restapi.amap.com/v3/place/text"
 
 # GB/T 2260 style province prefixes used when AMap omits parent names.
 PROVINCE_BY_PREFIX = {
@@ -126,6 +130,161 @@ def _amap_get(params: dict[str, Any]) -> dict[str, Any]:
     if str(payload.get("status")) != "1":
         raise RuntimeError(payload.get("info") or "高德行政区查询失败")
     return payload
+
+
+def geocode_address(address: str, city: str | None = None) -> dict[str, Any]:
+    """Resolve a real address with AMap and return its district + coordinates."""
+    key = amap_web_key()
+    if not key:
+        raise RuntimeError("未配置高德 Web Key，暂时无法核验真实地址")
+    params: dict[str, Any] = {"key": key, "address": str(address or "").strip()}
+    if city:
+        params["city"] = str(city).strip()
+    query = urllib.parse.urlencode(params)
+    req = urllib.request.Request(f"{AMAP_GEOCODE_URL}?{query}", method="GET")
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    if str(payload.get("status")) != "1":
+        raise RuntimeError(payload.get("info") or "高德地址解析失败")
+    geocodes = payload.get("geocodes") or []
+    if not geocodes:
+        raise RuntimeError("未找到该地址，请填写可在高德地图检索到的小区、道路或建筑物")
+    item = geocodes[0]
+    location = str(item.get("location") or "")
+    if "," not in location:
+        raise RuntimeError("地址缺少可用坐标，请换一个更具体的门牌或建筑物")
+    try:
+        lng, lat = [float(value) for value in location.split(",", 1)]
+    except ValueError as exc:
+        raise RuntimeError("地址坐标格式无效") from exc
+    return {
+        "formatted_address": str(item.get("formatted_address") or address),
+        "province_name": str(item.get("province") or ""),
+        "city_name": str(item.get("city") or ""),
+        "district_name": str(item.get("district") or ""),
+        "adcode": str(item.get("adcode") or ""),
+        "lng": round(lng, 6),
+        "lat": round(lat, 6),
+    }
+
+
+def _amap_service_get(url: str, params: dict[str, Any]) -> dict[str, Any]:
+    key = amap_web_key()
+    if not key:
+        raise RuntimeError("未配置高德 Web Key")
+    query = urllib.parse.urlencode({**params, "key": key})
+    req = urllib.request.Request(f"{url}?{query}", method="GET")
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    if str(payload.get("status")) != "1":
+        raise RuntimeError(payload.get("info") or "高德地图服务调用失败")
+    return payload
+
+
+def _location_pair(raw: Any) -> tuple[float, float] | None:
+    text = str(raw or "")
+    if "," not in text:
+        return None
+    try:
+        lng, lat = [float(value) for value in text.split(",", 1)]
+    except ValueError:
+        return None
+    return round(lng, 6), round(lat, 6)
+
+
+def reverse_geocode(lng: Any, lat: Any) -> dict[str, Any]:
+    """Resolve browser/GPS coordinates into a district-validated address."""
+    try:
+        point_lng, point_lat = float(lng), float(lat)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("实时位置坐标无效") from exc
+    payload = _amap_service_get(AMAP_REGEOCODE_URL, {
+        "location": f"{point_lng:.6f},{point_lat:.6f}",
+        "extensions": "base",
+        "radius": 100,
+    })
+    regeocode = payload.get("regeocode") or {}
+    component = regeocode.get("addressComponent") or {}
+    return {
+        "formatted_address": str(regeocode.get("formatted_address") or "实时位置"),
+        "province_name": str(component.get("province") or ""),
+        "city_name": str(component.get("city") or component.get("province") or ""),
+        "district_name": str(component.get("district") or ""),
+        "adcode": str(component.get("adcode") or ""),
+        "lng": round(point_lng, 6),
+        "lat": round(point_lat, 6),
+    }
+
+
+def search_address_pois(keywords: str, region_adcode: str) -> list[dict[str, Any]]:
+    """Return selectable AMap POIs, including likely gates/buildings."""
+    query = str(keywords or "").strip()
+    adcode = str(region_adcode or "").strip()
+    if len(query) < 2 or not adcode:
+        return []
+
+    raw_items: list[dict[str, Any]] = []
+    tips_payload = _amap_service_get(AMAP_INPUT_TIPS_URL, {
+        "keywords": query,
+        "city": adcode,
+        "citylimit": "true",
+        "datatype": "all",
+    })
+    raw_items.extend(item for item in (tips_payload.get("tips") or []) if isinstance(item, dict))
+
+    # A generic campus/community keyword often returns only the parent POI.
+    # Search likely sub-POIs as well so “上海大学” can offer gates/buildings.
+    expanded_queries = []
+    if not any(token in query for token in ("门", "楼", "栋", "号")):
+        expanded_queries = [f"{query} 门", f"{query} 楼"]
+    for expanded in expanded_queries:
+        payload = _amap_service_get(AMAP_POI_TEXT_URL, {
+            "keywords": expanded,
+            "city": adcode,
+            "citylimit": "true",
+            "children": 1,
+            "offset": 10,
+            "page": 1,
+            "extensions": "base",
+        })
+        raw_items.extend(item for item in (payload.get("pois") or []) if isinstance(item, dict))
+
+    results: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        point = _location_pair(item.get("location"))
+        item_adcode = str(item.get("adcode") or "")
+        name = str(item.get("name") or "").strip()
+        if not point or not name or (item_adcode and item_adcode != adcode):
+            continue
+        address_raw = item.get("address")
+        if isinstance(address_raw, list):
+            address = "".join(str(part) for part in address_raw)
+        else:
+            address = str(address_raw or "").strip()
+        district = str(item.get("district") or item.get("adname") or "").strip()
+        city = str(item.get("city") or item.get("cityname") or "").strip()
+        province = str(item.get("province") or item.get("pname") or "").strip()
+        identity = str(item.get("id") or f"{name}:{point[0]}:{point[1]}")
+        if identity in seen:
+            continue
+        seen.add(identity)
+        locality = "".join(part for part in (province, city, district) if part)
+        full_address = f"{locality}{address}{name}" if address else f"{locality}{name}"
+        results.append({
+            "id": identity,
+            "name": name,
+            "address": address,
+            "district_name": district,
+            "adcode": item_adcode or adcode,
+            "lng": point[0],
+            "lat": point[1],
+            "full_address": full_address,
+            "display_name": f"{name} · {address or district or '地图地点'}",
+        })
+        if len(results) >= 20:
+            break
+    return results
 
 
 def parse_amap_polyline(polyline: str | None) -> list[list[tuple[float, float]]]:

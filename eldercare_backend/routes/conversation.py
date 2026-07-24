@@ -60,10 +60,10 @@ def _build_conversation_title(row: dict[str, Any]) -> str:
 def _member_guide(participants: list[dict[str, Any]], conversation_type: str, upgraded: bool) -> str:
     subtitle = _participant_subtitle(participants, conversation_type)
     if bool(upgraded) and conversation_type != 'sos':
-        return f"本群人物（已升级SOS）：{subtitle}"
+        return f"已升级 SOS · {subtitle}"
     if conversation_type == 'sos':
-        return f"本群人物（SOS）：{subtitle}"
-    return f"本群人物：{subtitle}"
+        return f"SOS 协同 · {subtitle}"
+    return subtitle
 
 
 def _was_upgraded_from_normal(cursor, order_id: Any) -> bool:
@@ -198,6 +198,10 @@ def _participant_roster(cursor, conversation_id: int) -> list[dict[str, Any]]:
     participants: list[dict[str, Any]] = []
     for row in ordered:
         role = str(row.get('role') or 'member')
+        # Replaced volunteers remain in the audit table, but are not current
+        # conversation members and must not inflate the visible member count.
+        if role == 'volunteer' and not bool(row.get('can_speak', True)):
+            continue
         name = str(row.get('real_name') or f'用户{row["user_id"]}')
         if role == 'admin' and row.get('is_root_admin'):
             label = f'总管理{name}'
@@ -209,8 +213,6 @@ def _participant_roster(cursor, conversation_id: int) -> list[dict[str, Any]]:
             role_label = ROLE_LABELS.get(role, role)
             label = f'{role_label}{name}'
         can_speak = bool(row.get('can_speak', True))
-        if role == 'volunteer' and not can_speak:
-            label = f'{label}(已离队)'
         participants.append({
             'user_id': int(row['user_id']),
             'name': name,
@@ -405,6 +407,33 @@ def list_conversations():
                 data.append(item)
             conn.commit()
             return jsonify({'code': 200, 'message': '会话列表已更新', 'data': data})
+    finally:
+        conn.close()
+
+
+@conversation_bp.route('/read-all', methods=['POST'])
+def mark_all_conversations_read():
+    data = request.get_json(silent=True) or {}
+    user_id = data.get('user_id')
+    if not user_id:
+        return jsonify({'code': 400, 'message': '缺少用户编号'}), 400
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute('SELECT 1 FROM users WHERE user_id = %s', (user_id,))
+            if not cursor.fetchone():
+                return jsonify({'code': 404, 'message': '用户不存在'}), 404
+            cursor.execute(
+                'UPDATE conversation_members SET last_read_at = CURRENT_TIMESTAMP WHERE user_id = %s',
+                (int(user_id),),
+            )
+            updated = cursor.rowcount
+            conn.commit()
+            return jsonify({
+                'code': 200,
+                'message': '会话消息已全部标为已读',
+                'data': {'updated': updated},
+            })
     finally:
         conn.close()
 

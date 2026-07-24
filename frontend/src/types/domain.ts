@@ -212,9 +212,12 @@ export interface AdminUserRow {
   regionAdcodes?: string[]
   regionNames?: string[]
   address?: string
+  skillsDescription?: string
+  verifiedSkills?: string[]
   relatedElders?: Array<{
     elderId: number
     name: string
+    address?: string
     regionAdcode?: string
     regionName?: string
   }>
@@ -298,6 +301,11 @@ export interface RegisterPayload {
   age?: number
   gender?: string
   address?: string
+  provinceName?: string
+  cityName?: string
+  districtName?: string
+  regionAdcode?: string
+  detailAddress?: string
   idCard?: string
   skills?: string
   inviteCode?: string

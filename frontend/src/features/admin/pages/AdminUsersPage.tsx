@@ -1,8 +1,21 @@
 import { useEffect, useState } from 'react'
-import { Card, Table, Tag, Typography, Button, Select, App, Space } from 'antd'
-import { CheckOutlined, CloseOutlined } from '@ant-design/icons'
+import {
+  App,
+  Button,
+  Card,
+  Descriptions,
+  Modal,
+  Popconfirm,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Typography,
+} from 'antd'
+import { CheckOutlined, CloseOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
+import { useSearchParams } from 'react-router-dom'
 
-import { fetchAdminUsers, auditVolunteer, deleteAdminUser } from '@/services/adapters/admin-adapter'
+import { auditVolunteer, deleteAdminUser, fetchAdminUsers } from '@/services/adapters/admin-adapter'
 import type { AdminUserRow, Role } from '@/types/domain'
 import { useSession } from '@/features/auth/useSession'
 import { AdminRegionScopeNotice } from '@/features/admin/components/AdminRegionScopeNotice'
@@ -14,34 +27,60 @@ const roleColors: Record<Role, string> = {
   volunteer: 'purple',
   admin: 'red',
 }
+
 const roleLabels: Record<Role, string> = {
   family: '家属',
   elder: '老人',
   volunteer: '志愿者',
   admin: '管理员',
 }
+
 const statusMap: Record<string, { color: string; text: string }> = {
   active: { color: 'green', text: '正常' },
+  approved: { color: 'green', text: '已认证' },
   pending: { color: 'orange', text: '需要审核' },
   pending_review: { color: 'orange', text: '待审核' },
   rejected: { color: 'red', text: '已拒绝' },
   archived: { color: 'default', text: '已归档' },
 }
 
+const skillOptions = [
+  { value: 'medical_support', label: '医疗照护' },
+  { value: 'emergency_response', label: '应急救援' },
+  { value: 'mobility_assist', label: '出行陪护' },
+  { value: 'errand', label: '代办跑腿' },
+  { value: 'companion', label: '陪伴关怀' },
+  { value: 'rehab', label: '康复协助' },
+  { value: 'digital_assist', label: '智能设备协助' },
+  { value: 'grooming', label: '生活护理' },
+]
+
+const skillLabels = Object.fromEntries(skillOptions.map((item) => [item.value, item.label]))
+
 export default function AdminUsersPage() {
+  const [searchParams] = useSearchParams()
   const { message } = App.useApp()
   const { session } = useSession()
   const [users, setUsers] = useState<AdminUserRow[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
-  const [roleFilter, setRoleFilter] = useState<Role | undefined>('elder')
+  const requestedRole = searchParams.get('role')
+  const [roleFilter, setRoleFilter] = useState<Role | undefined>(
+    requestedRole === 'volunteer' || requestedRole === 'family'
+      || requestedRole === 'elder' || requestedRole === 'admin'
+      ? requestedRole
+      : 'elder',
+  )
   const [geoScope, setGeoScope] = useState<AdminGeoScope>({})
   const [page, setPage] = useState(1)
   const [deletingId, setDeletingId] = useState<number | null>(null)
+  const [reviewingUser, setReviewingUser] = useState<AdminUserRow | null>(null)
+  const [reviewingSkills, setReviewingSkills] = useState<string[]>([])
+  const [reviewing, setReviewing] = useState(false)
 
   const load = () => {
-    setLoading(true)
     if (!session) return
+    setLoading(true)
     fetchAdminUsers({
       adminUserId: session.userId,
       role: roleFilter,
@@ -64,22 +103,63 @@ export default function AdminUsersPage() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(load, [session?.userId, roleFilter, geoScope.regionAdcode, geoScope.provinceName, geoScope.cityName, page])
+  useEffect(load, [
+    session?.userId,
+    roleFilter,
+    geoScope.regionAdcode,
+    geoScope.provinceName,
+    geoScope.cityName,
+    page,
+  ])
 
-  const handleAudit = async (userId: number, action: 'approve' | 'reject') => {
+  useEffect(() => {
+    if (requestedRole === 'volunteer' || requestedRole === 'family'
+      || requestedRole === 'elder' || requestedRole === 'admin') {
+      setRoleFilter(requestedRole)
+      setPage(1)
+    }
+  }, [requestedRole])
+
+  const openSkillReview = (user: AdminUserRow) => {
+    setReviewingUser(user)
+    setReviewingSkills(user.verifiedSkills ?? [])
+  }
+
+  const approveVolunteer = async () => {
+    if (!reviewingUser || !session) return
+    if (!reviewingSkills.length) {
+      message.warning('请至少分配一项认证技能')
+      return
+    }
+    setReviewing(true)
     try {
-      const res = await auditVolunteer(userId, action, session!.userId)
+      const res = await auditVolunteer(reviewingUser.userId, 'approve', session.userId, reviewingSkills)
+      message.success(res.message)
+      setReviewingUser(null)
+      load()
+    } catch (err: any) {
+      message.error(err?.message || '技能认证失败')
+    } finally {
+      setReviewing(false)
+    }
+  }
+
+  const rejectVolunteer = async (userId: number) => {
+    if (!session) return
+    try {
+      const res = await auditVolunteer(userId, 'reject', session.userId)
       message.success(res.message)
       load()
     } catch (err: any) {
-      message.error(err?.message || '操作失败')
+      message.error(err?.message || '审核失败')
     }
   }
 
   const handleDelete = async (user: AdminUserRow) => {
+    if (!session) return
     setDeletingId(user.userId)
     try {
-      const res = await deleteAdminUser(user.userId, session!.userId)
+      const res = await deleteAdminUser(user.userId, session.userId)
       message.success(res.message)
       load()
     } catch (err: any) {
@@ -90,22 +170,8 @@ export default function AdminUsersPage() {
   }
 
   const columns = [
-    {
-      title: 'ID',
-      dataIndex: 'userId',
-      key: 'userId',
-      width: 70,
-    },
-    {
-      title: '用户名',
-      dataIndex: 'username',
-      key: 'username',
-    },
-    {
-      title: '姓名',
-      dataIndex: 'name',
-      key: 'name',
-    },
+    { title: '用户名', dataIndex: 'username', key: 'username', width: 150 },
+    { title: '姓名', dataIndex: 'name', key: 'name', width: 150 },
     {
       title: '角色',
       dataIndex: 'role',
@@ -116,93 +182,100 @@ export default function AdminUsersPage() {
     {
       title: '所属区县',
       key: 'regions',
-      render: (_: unknown, record: AdminUserRow) => {
-        if (!record.regionNames?.length) {
-          return <span className="text-gray-400">—</span>
-        }
-        return (
-          <Space size={[4, 4]} wrap>
-            {record.regionNames.map((name, index) => (
-              <Tag key={`${record.userId}-${record.regionAdcodes?.[index] || name}`}>{name}</Tag>
-            ))}
-          </Space>
-        )
-      },
+      render: (_: unknown, record: AdminUserRow) => record.regionNames?.length ? (
+        <Space size={[4, 4]} wrap>
+          {record.regionNames.map((name, index) => (
+            <Tag key={`${record.userId}-${record.regionAdcodes?.[index] || name}`}>{name}</Tag>
+          ))}
+        </Space>
+      ) : <span className="text-gray-400">{record.role === 'admin' ? '尚未指派' : '—'}</span>,
     },
     {
       title: '关联老人 / 地址',
       key: 'related',
       render: (_: unknown, record: AdminUserRow) => {
         if (record.role === 'family') {
-          if (!record.relatedElders?.length) {
-            return <span className="text-gray-400">未绑定老人</span>
-          }
+          if (!record.relatedElders?.length) return <span className="text-gray-400">未绑定老人</span>
           return record.relatedElders.map((elder) => (
             <div key={elder.elderId} className="text-sm">
               {elder.name}
               {elder.regionName ? <span className="text-gray-400"> · {elder.regionName}</span> : null}
+              {elder.address ? <div className="text-xs text-gray-400">{elder.address}</div> : null}
             </div>
           ))
         }
-        if (record.role === 'elder') {
-          return <span className="text-sm text-gray-600">{record.address || '—'}</span>
-        }
+        if (record.role === 'elder') return <span className="text-sm text-gray-600">{record.address || '—'}</span>
         return <span className="text-gray-400">—</span>
       },
     },
     {
-      title: '手机',
-      dataIndex: 'phone',
-      key: 'phone',
-      width: 130,
+      title: '技能说明 / 认证技能',
+      key: 'skills',
+      width: 290,
+      render: (_: unknown, record: AdminUserRow) => (
+        <div className="space-y-2">
+          <div className="text-sm text-slate-600">{record.skillsDescription || '注册时未填写技能说明'}</div>
+          <Space size={[4, 4]} wrap>
+            {record.verifiedSkills?.length
+              ? record.verifiedSkills.map((skill) => (
+                <Tag color="green" key={skill}>{skillLabels[skill] || skill}</Tag>
+              ))
+              : <Tag>尚未认证</Tag>}
+          </Space>
+        </div>
+      ),
     },
+    { title: '手机', dataIndex: 'phone', key: 'phone', width: 130 },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
       width: 100,
       render: (status: string) => {
-        const st = statusMap[status] || { color: 'default', text: status }
-        return <Tag color={st.color}>{st.text}</Tag>
+        const item = statusMap[status] || { color: 'default', text: status }
+        return <Tag color={item.color}>{item.text}</Tag>
       },
     },
     {
       title: '操作',
       key: 'actions',
-      width: 200,
+      width: 220,
       render: (_: unknown, record: AdminUserRow) => {
         if (record.role === 'admin') {
-          return <span className="text-gray-400 text-sm">不可删除</span>
-        }
-
-        return (
-          <Space>
-            {record.role === 'volunteer' && record.status === 'pending_review' && (
-              <>
-                <Button
-                  type="primary"
-                  size="small"
-                  icon={<CheckOutlined />}
-                  onClick={() => handleAudit(record.userId, 'approve')}
-                >
-                  通过
-                </Button>
-                <Button
-                  danger
-                  size="small"
-                  icon={<CloseOutlined />}
-                  onClick={() => handleAudit(record.userId, 'reject')}
-                >
-                  拒绝
-                </Button>
-              </>
-            )}
-            <Button
-              danger
-              size="small"
-              loading={deletingId === record.userId}
-              onClick={() => handleDelete(record)}
+          if (!session?.isRoot) return null
+          if (record.regionAdcodes?.length) return <span className="text-gray-400 text-sm">请先解绑区域</span>
+          if (record.userId === session.userId) return <span className="text-gray-400 text-sm">当前账号</span>
+          return (
+            <Popconfirm
+              title="删除未指派管理员"
+              description={`确认删除 ${record.name || record.username}？此操作不可撤销。`}
+              okText="删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => handleDelete(record)}
             >
+              <Button danger size="small" loading={deletingId === record.userId}>删除</Button>
+            </Popconfirm>
+          )
+        }
+        return (
+          <Space wrap>
+            {record.role === 'volunteer' && (
+              <Button
+                type={record.status === 'pending_review' ? 'primary' : 'default'}
+                size="small"
+                icon={record.status === 'pending_review' ? <CheckOutlined /> : <SafetyCertificateOutlined />}
+                onClick={() => openSkillReview(record)}
+              >
+                {record.status === 'pending_review' ? '审核并分配技能' : '调整认证技能'}
+              </Button>
+            )}
+            {record.role === 'volunteer' && record.status === 'pending_review' && (
+              <Button danger size="small" icon={<CloseOutlined />} onClick={() => rejectVolunteer(record.userId)}>
+                拒绝
+              </Button>
+            )}
+            <Button danger size="small" loading={deletingId === record.userId} onClick={() => handleDelete(record)}>
               删除
             </Button>
           </Space>
@@ -211,16 +284,21 @@ export default function AdminUsersPage() {
     },
   ]
 
+  const visibleColumns = columns.filter((column) => {
+    if (column.key === 'related') return roleFilter === 'elder' || roleFilter === 'family'
+    if (column.key === 'skills') return roleFilter === 'volunteer'
+    return true
+  })
+
   return (
     <div className="space-y-6">
       <AdminRegionScopeNotice />
       <div>
         <Typography.Title level={3} className="!mb-1">用户管理</Typography.Title>
         <Typography.Text className="text-gray-500">
-          总管理员按全国 → 省 → 市 → 区查看；区管理员仅能看到本区数据。
+          总管理员按全国 → 省 → 市 → 区县查看；区域管理员仅能查看本区数据。
         </Typography.Text>
       </div>
-
       <Card className="!rounded-2xl">
         <div className="mb-4 flex flex-wrap gap-3">
           <AdminGeoScopeFilters
@@ -243,24 +321,54 @@ export default function AdminUsersPage() {
               { label: '家属', value: 'family' },
               { label: '老人', value: 'elder' },
               { label: '志愿者', value: 'volunteer' },
-              { label: '管理员', value: 'admin' },
+              ...(session?.isRoot ? [{ label: '管理员', value: 'admin' as Role }] : []),
             ]}
           />
         </div>
         <Table
           dataSource={users}
-          columns={columns}
+          columns={visibleColumns}
           rowKey="userId"
           loading={loading}
-          pagination={{
-            current: page,
-            pageSize: 20,
-            total,
-            onChange: setPage,
-          }}
+          pagination={{ current: page, pageSize: 20, total, onChange: setPage }}
           size="middle"
+          scroll={{ x: 1150 }}
         />
       </Card>
+
+      <Modal
+        title="志愿者技能审核"
+        open={Boolean(reviewingUser)}
+        onCancel={() => setReviewingUser(null)}
+        onOk={approveVolunteer}
+        okText="保存认证并通过审核"
+        cancelText="取消"
+        confirmLoading={reviewing}
+      >
+        <Descriptions size="small" column={1} bordered className="mb-4">
+          <Descriptions.Item label="志愿者">
+            {reviewingUser?.name || reviewingUser?.username}
+          </Descriptions.Item>
+          <Descriptions.Item label="服务区县">
+            {reviewingUser?.regionNames?.join('、') || '未配置'}
+          </Descriptions.Item>
+          <Descriptions.Item label="注册说明">
+            {reviewingUser?.skillsDescription || '未填写'}
+          </Descriptions.Item>
+        </Descriptions>
+        <Typography.Text strong>由管理员核验后分配技能（可多选）</Typography.Text>
+        <Select
+          mode="multiple"
+          className="mt-2 w-full"
+          placeholder="请选择至少一项认证技能"
+          value={reviewingSkills}
+          onChange={setReviewingSkills}
+          options={skillOptions}
+        />
+        <Typography.Paragraph type="secondary" className="!mt-3 !mb-0">
+          只有审核通过且具备订单所需认证技能的志愿者，才会进入智能派单候选。
+        </Typography.Paragraph>
+      </Modal>
     </div>
   )
 }

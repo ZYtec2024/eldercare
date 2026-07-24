@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button, Card, Form, Input, InputNumber, Select, Typography, App } from 'antd'
 import { Link, useNavigate } from 'react-router-dom'
 
-import { registerAccount } from '@/services/adapters/auth-adapter'
+import { fetchPublicRegionChildren, registerAccount, type PublicRegionNode } from '@/services/adapters/auth-adapter'
 import type { Role } from '@/types/domain'
 
 function ElderLogo({ className }: { className?: string }) {
@@ -37,7 +37,39 @@ export default function RegisterPage() {
   const navigate = useNavigate()
   const { message } = App.useApp()
   const [loading, setLoading] = useState(false)
-  const [selectedRole, setSelectedRole] = useState<Role>('family')
+  const [provinces, setProvinces] = useState<PublicRegionNode[]>([])
+  const [cities, setCities] = useState<PublicRegionNode[]>([])
+  const [districts, setDistricts] = useState<PublicRegionNode[]>([])
+  const [form] = Form.useForm()
+  const selectedRole = (Form.useWatch('role', form) as Role | undefined) ?? 'family'
+
+  useEffect(() => {
+    fetchPublicRegionChildren().then(setProvinces).catch(() => setProvinces([]))
+  }, [])
+
+  const chooseProvince = async (adcode: string) => {
+    const province = provinces.find((item) => item.adcode === adcode)
+    form.setFieldsValue({ provinceName: province?.name, cityAdcode: undefined, cityName: undefined, regionAdcode: undefined, districtName: undefined })
+    setCities([])
+    setDistricts([])
+    const children = await fetchPublicRegionChildren(adcode)
+    const directDistricts = children.filter((item) => item.level === 'district' || item.level === 'biz_area')
+    if (directDistricts.length) {
+      const municipality = { adcode, name: '市辖区', level: 'city' }
+      setCities([municipality])
+      setDistricts(directDistricts)
+      form.setFieldsValue({ cityAdcode: adcode, cityName: province?.name })
+    } else {
+      setCities(children)
+    }
+  }
+
+  const chooseCity = async (adcode: string) => {
+    const city = cities.find((item) => item.adcode === adcode)
+    const provinceName = form.getFieldValue('provinceName')
+    form.setFieldsValue({ cityName: city?.name === '市辖区' ? provinceName : city?.name, regionAdcode: undefined, districtName: undefined })
+    setDistricts((await fetchPublicRegionChildren(adcode)).filter((item) => ['district', 'biz_area', 'city'].includes(item.level)))
+  }
 
   const onFinish = async (values: any) => {
     setLoading(true)
@@ -55,6 +87,11 @@ export default function RegisterPage() {
         idCard: values.idCard,
         skills: values.skills,
         inviteCode: values.inviteCode,
+        provinceName: values.provinceName,
+        cityName: values.cityName,
+        districtName: values.districtName,
+        regionAdcode: values.regionAdcode,
+        detailAddress: values.detailAddress,
       })
       message.success('注册成功！请登录')
       navigate('/login')
@@ -81,9 +118,9 @@ export default function RegisterPage() {
         </div>
 
         <Card className="shadow-lg !rounded-2xl border-0">
-          <Form layout="vertical" onFinish={onFinish} size="large" autoComplete="off" initialValues={{ role: 'family' }}>
+          <Form form={form} layout="vertical" onFinish={onFinish} size="large" autoComplete="off" initialValues={{ role: 'family' }}>
             <Form.Item name="role" label="注册角色" rules={[{ required: true }]}>
-              <Select options={roleOptions} onChange={(v) => setSelectedRole(v as Role)} />
+              <Select options={roleOptions} />
             </Form.Item>
 
             <div className="grid grid-cols-2 gap-x-4">
@@ -117,7 +154,7 @@ export default function RegisterPage() {
 
             {selectedRole === 'elder' && (
               <>
-                <div className="grid grid-cols-3 gap-x-4">
+                <div className="grid grid-cols-2 gap-x-4">
                   <Form.Item
                     name="age"
                     label="年龄"
@@ -131,10 +168,42 @@ export default function RegisterPage() {
                   <Form.Item name="gender" label="性别" rules={[{ required: true, message: '请选择性别' }]}>
                     <Select options={[{ value: '男', label: '男' }, { value: '女', label: '女' }]} placeholder="性别" />
                   </Form.Item>
-                  <Form.Item name="address" label="住址" rules={[{ required: true, message: '请输入住址' }]}>
-                    <Input placeholder="住址" />
+                </div>
+                <Typography.Title level={5} className="!mb-3">老人居住地址（按省 / 市 / 区县筛选）</Typography.Title>
+                <div className="grid grid-cols-1 gap-x-3 sm:grid-cols-3">
+                  <Form.Item name="provinceAdcode" label="省 / 直辖市" rules={[{ required: true, message: '请选择省份' }]}>
+                    <Select
+                      showSearch
+                      optionFilterProp="label"
+                      options={provinces.map((item) => ({ value: item.adcode, label: item.name }))}
+                      onChange={(value) => void chooseProvince(value)}
+                    />
+                  </Form.Item>
+                  <Form.Item name="cityAdcode" label="市" rules={[{ required: true, message: '请选择城市' }]}>
+                    <Select
+                      showSearch
+                      optionFilterProp="label"
+                      disabled={!cities.length}
+                      options={cities.map((item) => ({ value: item.adcode, label: item.name }))}
+                      onChange={(value) => void chooseCity(value)}
+                    />
+                  </Form.Item>
+                  <Form.Item name="regionAdcode" label="区 / 县" rules={[{ required: true, message: '请选择区县' }]}>
+                    <Select
+                      showSearch
+                      optionFilterProp="label"
+                      disabled={!districts.length}
+                      options={districts.map((item) => ({ value: item.adcode, label: item.name }))}
+                      onChange={(value) => form.setFieldValue('districtName', districts.find((item) => item.adcode === value)?.name)}
+                    />
                   </Form.Item>
                 </div>
+                <Form.Item name="detailAddress" label="详细地址" rules={[{ required: true, message: '请输入可在高德地图检索的真实地址' }]}>
+                  <Input placeholder="例如：锦秋路699弄锦秋花园1号楼301室" />
+                </Form.Item>
+                <Form.Item name="provinceName" hidden><Input /></Form.Item>
+                <Form.Item name="cityName" hidden><Input /></Form.Item>
+                <Form.Item name="districtName" hidden><Input /></Form.Item>
               </>
             )}
 
@@ -150,9 +219,46 @@ export default function RegisterPage() {
                 >
                   <Input placeholder="请输入身份证号" maxLength={18} />
                 </Form.Item>
-                <Form.Item name="skills" label="技能特长" rules={[{ required: true, message: '请输入技能特长' }]}>
-                  <Input placeholder="如：会理发、懂急救" />
+                <Typography.Title level={5} className="!mb-3">志愿服务区县（注册后仅在本区参与派单）</Typography.Title>
+                <div className="grid grid-cols-1 gap-x-3 sm:grid-cols-3">
+                  <Form.Item name="provinceAdcode" label="省 / 直辖市" rules={[{ required: true, message: '请选择省份' }]}>
+                    <Select
+                      showSearch
+                      optionFilterProp="label"
+                      options={provinces.map((item) => ({ value: item.adcode, label: item.name }))}
+                      onChange={(value) => void chooseProvince(value)}
+                    />
+                  </Form.Item>
+                  <Form.Item name="cityAdcode" label="市" rules={[{ required: true, message: '请选择城市' }]}>
+                    <Select
+                      showSearch
+                      optionFilterProp="label"
+                      disabled={!cities.length}
+                      options={cities.map((item) => ({ value: item.adcode, label: item.name }))}
+                      onChange={(value) => void chooseCity(value)}
+                    />
+                  </Form.Item>
+                  <Form.Item name="regionAdcode" label="服务区 / 县" rules={[{ required: true, message: '请选择服务区县' }]}>
+                    <Select
+                      showSearch
+                      optionFilterProp="label"
+                      disabled={!districts.length}
+                      options={districts.map((item) => ({ value: item.adcode, label: item.name }))}
+                      onChange={(value) => form.setFieldValue('districtName', districts.find((item) => item.adcode === value)?.name)}
+                    />
+                  </Form.Item>
+                </div>
+                <Form.Item
+                  name="skills"
+                  label="技能与经验说明"
+                  extra="请描述会做什么、是否有证书或经验。管理员会根据说明分配并认证可接单技能。"
+                  rules={[{ required: true, message: '请填写技能与经验说明' }]}
+                >
+                  <Input.TextArea rows={4} maxLength={500} showCount placeholder="例如：持有红十字急救证；照护老人3年；可协助轮椅出行和陪同就医。" />
                 </Form.Item>
+                <Form.Item name="provinceName" hidden><Input /></Form.Item>
+                <Form.Item name="cityName" hidden><Input /></Form.Item>
+                <Form.Item name="districtName" hidden><Input /></Form.Item>
               </>
             )}
 

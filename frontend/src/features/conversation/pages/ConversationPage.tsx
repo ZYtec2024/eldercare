@@ -3,6 +3,7 @@ import { App, Button, Empty, Input, Popconfirm } from 'antd'
 import {
   ArrowLeftOutlined,
   DeleteOutlined,
+  CheckCircleOutlined,
   MoreOutlined,
   SendOutlined,
   SyncOutlined,
@@ -15,6 +16,7 @@ import {
   fetchConversations,
   fetchConversationThread,
   hideConversation,
+  markAllConversationsRead,
   sendConversationMessage,
   type ConversationMessage,
   type ConversationSummary,
@@ -57,6 +59,7 @@ export default function ConversationPage() {
   const [draft, setDraft] = useState('')
   const [loading, setLoading] = useState(false)
   const [hiding, setHiding] = useState(false)
+  const [markingAllRead, setMarkingAllRead] = useState(false)
   const [showMembers, setShowMembers] = useState(false)
   const scrollerRef = useRef<HTMLDivElement | null>(null)
 
@@ -161,6 +164,19 @@ export default function ConversationPage() {
     }
   }
 
+  const clearUnread = async () => {
+    if (!session || unreadCount <= 0) return
+    setMarkingAllRead(true)
+    try {
+      message.success((await markAllConversationsRead(session.userId)).message || '已全部标为已读')
+      await loadConversations()
+    } catch (error: any) {
+      message.error(error?.message || '清除未读失败')
+    } finally {
+      setMarkingAllRead(false)
+    }
+  }
+
   const selected = conversations.find((item) => item.conversation_id === selectedId)
   const subtitle = thread?.member_guide || thread?.participant_subtitle || selected?.member_guide || selected?.participant_subtitle || ''
   const threadCode = thread?.thread_code || selected?.thread_code || ''
@@ -243,9 +259,8 @@ export default function ConversationPage() {
 
         {showMembers ? (
           <div className="shrink-0 border-b border-slate-100 bg-slate-50 px-4 py-3">
-            <div className="mb-1 text-xs font-medium text-slate-500">本群人物</div>
-            <p className="text-xs leading-relaxed text-slate-600">{subtitle || '暂无成员说明'}</p>
-            <div className="mt-2 flex flex-wrap gap-1.5">
+            <div className="mb-2 text-xs font-medium text-slate-500">本群人物（{participants.length} 人）</div>
+            <div className="flex flex-wrap gap-1.5">
               {participants.map((person) => (
                 <span
                   key={person.user_id}
@@ -384,9 +399,17 @@ export default function ConversationPage() {
           <p className="text-xs text-slate-400">服务沟通与 SOS 协同，结束后可删除</p>
         </div>
         <div className="flex items-center gap-2">
-          {unreadCount > 0 ? (
-            <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[11px] font-medium text-white">{unreadCount} 未读</span>
-          ) : null}
+          {unreadCount > 0 ? <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[11px] font-medium text-white">{unreadCount} 未读</span> : null}
+          <Button
+            type="text"
+            size="small"
+            icon={<CheckCircleOutlined />}
+            loading={markingAllRead}
+            disabled={unreadCount <= 0}
+            onClick={() => void clearUnread()}
+          >
+            一键已读
+          </Button>
           <button
             type="button"
             className="flex h-8 w-8 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100"
@@ -401,7 +424,10 @@ export default function ConversationPage() {
       {conversations.length === 0 ? (
         <div className="py-20"><Empty description="暂无会话" image={Empty.PRESENTED_IMAGE_SIMPLE} /></div>
       ) : (
-        <div className="divide-y divide-slate-100">
+        <div
+          className="conversation-list-scroll divide-y divide-slate-100 overflow-y-auto"
+          style={{ maxHeight: 'min(70vh, 680px)', scrollbarGutter: 'stable' }}
+        >
           {conversations.map((item) => {
             const unread = Number(item.unread_count || 0)
             const upgraded = Boolean(item.upgraded_to_sos)

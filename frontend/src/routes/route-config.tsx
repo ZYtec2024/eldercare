@@ -22,6 +22,7 @@ import {
   AdminHomePage,
   AdminHourReviewsPage,
   AdminUsersPage,
+  AdminDonationsPage,
   BindElderPage,
   ConversationPage,
   ElderCheckinPage,
@@ -42,6 +43,7 @@ import {
   ProfilePage,
   PublicTaskHallPage,
   RegisterPage,
+  DonationPage,
   VolunteerDashboardPage,
   VolunteerDispatchPage,
   VolunteerLeaderboardPage,
@@ -69,7 +71,7 @@ const iconMap: Record<string, ReactNode> = {
 
 export const allRoles: Role[] = ['family', 'elder', 'volunteer', 'admin']
 
-const taskHallNavigationRoles: Role[] = ['family', 'admin']
+const taskHallNavigationRoles: Role[] = ['admin']
 
 export const appRoutes: AppRouteDefinition[] = [
   {
@@ -101,6 +103,16 @@ export const appRoutes: AppRouteDefinition[] = [
     showInNavigation: false,
     isPublic: true,
     element: RegisterPage,
+  },
+  {
+    key: 'public-donation',
+    path: '/donate',
+    roles: allRoles,
+    title: '爱心捐款沙盘',
+    description: '微信和支付宝演示支付，不发生真实资金交易',
+    showInNavigation: false,
+    isPublic: true,
+    element: DonationPage,
   },
   {
     key: 'auth-forgot-password',
@@ -471,6 +483,17 @@ export const appRoutes: AppRouteDefinition[] = [
     navigation: { label: '告警中心', description: '', iconKey: 'alert' },
     element: AdminAlertsPage,
   },
+  {
+    key: 'admin-donations',
+    path: '/admin/donations',
+    roles: ['admin'],
+    title: '爱心捐赠',
+    description: '查看爱心捐款沙盘生成的演示支付信息',
+    showInNavigation: true,
+    navigationOrder: 31,
+    navigation: { label: '爱心捐赠', description: '', iconKey: 'heart' },
+    element: AdminDonationsPage,
+  },
 ]
 
 export function getNavigationForRole(role: Role, options?: { isRoot?: boolean }) {
@@ -481,6 +504,9 @@ export function getNavigationForRole(role: Role, options?: { isRoot?: boolean })
       }
       // District admins must not manage official region polygons.
       if (route.key === 'admin-regions' && !options?.isRoot) {
+        return false
+      }
+      if (route.key === 'admin-donations' && !options?.isRoot) {
         return false
       }
       // Hour reviews are operational work for district admins; root uses看板抽查.

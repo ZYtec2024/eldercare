@@ -122,3 +122,10 @@ export async function hideConversation(conversationId: number, userId: number) {
   })
   return response.data
 }
+
+export async function markAllConversationsRead(userId: number) {
+  const response = await http.post<ApiEnvelope<{ updated: number }>>('/conversations/read-all', {
+    user_id: userId,
+  })
+  return response.data
+}

@@ -1,10 +1,15 @@
 # routes/admin.py
 from flask import Blueprint, request, jsonify
 from db import get_db_connection
-from utils import format_datetime, split_awards_text, merge_awards_text, get_pagination_params, shanghai_now
+from utils import format_datetime, format_wall_datetime, split_awards_text, merge_awards_text, get_pagination_params, shanghai_now
 import datetime
 
 admin_bp = Blueprint('admin', __name__)
+
+DISPATCH_SKILL_CODES = {
+    'medical_support', 'emergency_response', 'mobility_assist', 'errand',
+    'companion', 'rehab', 'digital_assist', 'grooming',
+}
 
 
 def _admin_regions(cursor, raw_admin_user_id):
@@ -72,8 +77,12 @@ def _user_regions(cursor, user_id):
         FROM user_elder_relation rel
         JOIN elders e ON e.elder_id = rel.elder_id
         WHERE rel.family_user_id = %s
+        UNION
+        SELECT region_adcode
+        FROM admin_region_scope
+        WHERE admin_user_id = %s AND region_adcode <> '*'
         """,
-        (user_id, user_id, user_id),
+        (user_id, user_id, user_id, user_id),
     )
     return {str(row['region_adcode']) for row in cursor.fetchall() if row.get('region_adcode')}
 
@@ -83,12 +92,14 @@ def _scope_allows_user(cursor, user_id, is_global, regions):
 
 
 def _region_user_filter_sql():
-    """SQL fragment: users who operate in the given region tuple (%s x3)."""
+    """SQL fragment: users who operate in the given region tuple (%s x4)."""
     return """u.user_id IN (
         SELECT user_id FROM elders WHERE region_adcode IN %s
         UNION SELECT volunteer_id FROM volunteer_location_state WHERE service_region_adcode IN %s
         UNION SELECT rel.family_user_id FROM user_elder_relation rel
               JOIN elders e ON e.elder_id = rel.elder_id WHERE e.region_adcode IN %s
+        UNION SELECT admin_user_id FROM admin_region_scope
+              WHERE region_adcode IN %s
     )"""
 
 
@@ -119,7 +130,7 @@ def _enrich_admin_users(cursor, users):
 
     family_elders: dict[int, list[dict]] = {}
     cursor.execute(
-        f"""SELECT rel.family_user_id, e.elder_id, e.name, e.region_adcode,
+        f"""SELECT rel.family_user_id, e.elder_id, e.name, e.address, e.region_adcode,
                    COALESCE(ar.name, e.region_adcode) AS region_name
             FROM user_elder_relation rel
             JOIN elders e ON e.elder_id = rel.elder_id
@@ -132,6 +143,7 @@ def _enrich_admin_users(cursor, users):
         family_elders.setdefault(int(row['family_user_id']), []).append({
             'elder_id': int(row['elder_id']),
             'name': row['name'],
+            'address': row.get('address') or '',
             'region_adcode': row.get('region_adcode'),
             'region_name': row.get('region_name') or row.get('region_adcode') or '',
         })
@@ -139,17 +151,40 @@ def _enrich_admin_users(cursor, users):
     volunteer_region: dict[int, dict] = {}
     cursor.execute(
         f"""SELECT v.volunteer_id, v.service_region_adcode AS region_adcode,
-                   COALESCE(ar.name, v.service_region_adcode) AS region_name
+                   COALESCE(ar.name, v.service_region_adcode) AS region_name,
+                   COALESCE(string_agg(tags.skill_tag, '|'), '') AS verified_skills_text
             FROM volunteer_location_state v
             LEFT JOIN administrative_regions ar ON ar.adcode = v.service_region_adcode
-            WHERE v.volunteer_id IN ({placeholders})""",
+            LEFT JOIN volunteer_skill_tags tags ON tags.volunteer_id = v.volunteer_id
+            WHERE v.volunteer_id IN ({placeholders})
+            GROUP BY v.volunteer_id, v.service_region_adcode, ar.name""",
         user_ids,
     )
     for row in cursor.fetchall():
         volunteer_region[int(row['volunteer_id'])] = {
             'region_adcode': row.get('region_adcode'),
             'region_name': row.get('region_name') or row.get('region_adcode') or '',
+            'verified_skills': [
+                value for value in str(row.get('verified_skills_text') or '').split('|') if value
+            ],
         }
+
+    admin_regions: dict[int, list[dict]] = {}
+    cursor.execute(
+        f"""SELECT s.admin_user_id, s.region_adcode,
+                   COALESCE(ar.name, s.region_adcode) AS region_name
+            FROM admin_region_scope s
+            LEFT JOIN administrative_regions ar ON ar.adcode = s.region_adcode
+            WHERE s.admin_user_id IN ({placeholders})
+              AND s.region_adcode <> '*'
+            ORDER BY ar.province_name, ar.city_name, ar.name, s.region_adcode""",
+        user_ids,
+    )
+    for row in cursor.fetchall():
+        admin_regions.setdefault(int(row['admin_user_id']), []).append({
+            'region_adcode': str(row['region_adcode']),
+            'region_name': row.get('region_name') or row['region_adcode'],
+        })
 
     enriched = []
     for row in users:
@@ -179,6 +214,11 @@ def _enrich_admin_users(cursor, users):
             if profile.get('region_adcode'):
                 region_adcodes = [str(profile['region_adcode'])]
                 region_names = [profile['region_name']]
+            item['verified_skills'] = profile.get('verified_skills', [])
+        elif role == 'admin':
+            for region in admin_regions.get(uid, []):
+                region_adcodes.append(region['region_adcode'])
+                region_names.append(region['region_name'])
 
         item['region_adcodes'] = region_adcodes
         item['region_names'] = region_names
@@ -206,6 +246,9 @@ def get_user_list():
             _, is_global, regions, error = _admin_regions(cursor, request.args.get('admin_user_id'))
             if error:
                 return error
+            requester_is_root = is_global
+            if role == 'admin' and not requester_is_root:
+                return jsonify({"code": 403, "message": "区域管理员无权查看管理员账号"}), 403
 
             narrowed = _apply_admin_geo_scope(
                 cursor, is_global, regions,
@@ -226,7 +269,7 @@ def get_user_list():
             if filter_regions is not None:
                 scoped = tuple(filter_regions)
                 region_filter = _region_user_filter_sql()
-                scope_params = [scoped, scoped, scoped]
+                scope_params = [scoped, scoped, scoped, scoped]
 
             base_sql = """
                 SELECT
@@ -236,6 +279,7 @@ def get_user_list():
                     u.real_name,
                     u.phone,
                     u.email,
+                    vp.skills AS skills_description,
                     CASE
                         WHEN u.role = 'volunteer' THEN COALESCE(vp.audit_status, 'pending')
                         ELSE 'active'
@@ -260,6 +304,10 @@ def get_user_list():
                 base_sql += " AND " + clause if (region_filter or role) else " WHERE " + clause
                 count_sql += " AND " + clause if (region_filter or role) else " WHERE " + clause
                 params.extend([f"%{keyword}%", f"%{keyword}%", f"%{keyword}%"])
+
+            if not requester_is_root:
+                base_sql += " AND u.role <> 'admin'" if (region_filter or role or keyword) else " WHERE u.role <> 'admin'"
+                count_sql += " AND u.role <> 'admin'" if (region_filter or role or keyword) else " WHERE u.role <> 'admin'"
 
             cursor.execute(count_sql, tuple(scope_params + params))
             total_count = cursor.fetchone()['total']
@@ -289,7 +337,7 @@ def delete_user():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            _, is_global, regions, error = _admin_regions(cursor, data.get('admin_user_id'))
+            requester_id, is_global, regions, error = _admin_regions(cursor, data.get('admin_user_id'))
             if error:
                 return error
             cursor.execute("SELECT user_id, role FROM users WHERE user_id = %s", (user_id,))
@@ -297,11 +345,23 @@ def delete_user():
             if not target:
                 return jsonify({"code": 404, "message": "用户不存在"})
 
-            if not _scope_allows_user(cursor, user_id, is_global, regions):
-                return jsonify({"code": 403, "message": "无权管理其他区县用户"}), 403
-
             if target['role'] == 'admin':
-                return jsonify({"code": 403, "message": "管理员账号不能删除"})
+                if not is_global:
+                    return jsonify({"code": 403, "message": "仅总管理员可删除管理员账号"}), 403
+                if int(user_id) == int(requester_id):
+                    return jsonify({"code": 403, "message": "不能删除当前登录的总管理员账号"}), 403
+                cursor.execute(
+                    "SELECT region_adcode FROM admin_region_scope WHERE admin_user_id = %s",
+                    (user_id,),
+                )
+                assigned = [str(row['region_adcode']) for row in cursor.fetchall()]
+                if assigned:
+                    return jsonify({
+                        "code": 409,
+                        "message": "该管理员仍绑定管理区域，请先在区域管理中解绑后再删除",
+                    }), 409
+            elif not _scope_allows_user(cursor, user_id, is_global, regions):
+                return jsonify({"code": 403, "message": "无权管理其他区县用户"}), 403
 
             if target['role'] == 'elder':
                 cursor.execute("DELETE FROM elders WHERE user_id = %s", (user_id,))
@@ -414,6 +474,25 @@ def get_dashboard_stats():
             _, is_global, regions, error = _admin_regions(cursor, request.args.get('admin_user_id'))
             if error:
                 return error
+            narrowed = _apply_admin_geo_scope(
+                cursor, is_global, regions,
+                region_adcode=request.args.get('region_adcode'),
+                province_name=request.args.get('province_name'),
+                city_name=request.args.get('city_name'),
+            )
+            if narrowed is None:
+                return jsonify({"code": 403, "message": "无权查看该区县总览"}), 403
+            is_global, regions = narrowed
+            if not is_global and not regions:
+                return jsonify({
+                    "code": 200,
+                    "message": "当前区域暂无数据",
+                    "data": {
+                        "total_users_count": 0,
+                        "total_service_hours": 0,
+                        "service_type_distribution": [],
+                    },
+                })
             scoped = tuple(regions)
             # 1. 查总人数
             if is_global:
@@ -461,9 +540,15 @@ def audit_volunteer():
     data = request.get_json()
     user_id = data.get('user_id')
     action = data.get('action') 
+    skill_tags = [
+        str(value).strip() for value in (data.get('skill_tags') or [])
+        if str(value).strip() in DISPATCH_SKILL_CODES
+    ]
 
     if action not in ['approve', 'reject']:
         return jsonify({"code": 400, "message": "审核动作必须为 approve 或 reject"})
+    if action == 'approve' and not skill_tags:
+        return jsonify({"code": 400, "message": "审核通过前请至少分配一项认证技能"}), 400
 
     conn = get_db_connection()
     try:
@@ -474,15 +559,45 @@ def audit_volunteer():
             if not _scope_allows_user(cursor, user_id, is_global, regions):
                 return jsonify({"code": 403, "message": "无权审核其他区县志愿者"}), 403
             status = 'approved' if action == 'approve' else 'rejected'
-            sql = "UPDATE volunteers_profile SET audit_status = %s WHERE user_id = %s AND audit_status IN ('pending', 'pending_review')"
+            sql = "UPDATE volunteers_profile SET audit_status = %s WHERE user_id = %s"
             cursor.execute(sql, (status, user_id))
             
             if cursor.rowcount == 0:
-                return jsonify({"code": 400, "message": "该用户不存在或已审核完毕"})
+                return jsonify({"code": 400, "message": "该志愿者档案不存在"})
+            cursor.execute("DELETE FROM volunteer_skill_tags WHERE volunteer_id = %s", (user_id,))
+            if status == 'approved':
+                for skill_tag in skill_tags:
+                    cursor.execute(
+                        """INSERT INTO volunteer_skill_tags (volunteer_id, skill_tag, verified)
+                           VALUES (%s, %s, TRUE)""",
+                        (user_id, skill_tag),
+                    )
+                cursor.execute(
+                    """UPDATE volunteer_location_state
+                       SET availability = CASE
+                               WHEN availability = 'offline' THEN 'idle'
+                               ELSE availability
+                           END,
+                           updated_at = CURRENT_TIMESTAMP
+                       WHERE volunteer_id = %s""",
+                    (user_id,),
+                )
+            else:
+                cursor.execute(
+                    """UPDATE volunteer_location_state
+                       SET availability = 'offline', auto_accept_enabled = FALSE,
+                           updated_at = CURRENT_TIMESTAMP
+                       WHERE volunteer_id = %s""",
+                    (user_id,),
+                )
             
             conn.commit()
             msg = "审核通过，该志愿者已可接单！" if status == 'approved' else "已驳回该志愿者的申请。"
-            return jsonify({"code": 200, "message": msg})
+            return jsonify({
+                "code": 200,
+                "message": msg,
+                "data": {"review_status": status, "verified_skills": skill_tags},
+            })
     except Exception as e:
         conn.rollback()
         return jsonify({"code": 500, "message": f"操作失败: {str(e)}"})
@@ -499,8 +614,6 @@ def handle_alert():
 
     if action not in ('acknowledge', 'close'):
         return jsonify({"code": 400, "message": "不支持的告警操作"}), 400
-    if action == 'close' and not resolution_summary:
-        return jsonify({"code": 400, "message": "关闭紧急事件前请填写处置结果"}), 400
 
     if alert_id is None:
         return jsonify({"code": 400, "message": "缺少 alert_id"})
@@ -532,6 +645,8 @@ def handle_alert():
             incident_link = cursor.fetchone()
             incident_id = incident_link.get('emergency_incident_id') if incident_link else None
             if incident_id:
+                if action == 'close' and not resolution_summary:
+                    return jsonify({"code": 400, "message": "关闭紧急事件前请填写处置结果"}), 400
                 cursor.execute("""SELECT incident_id, status, linked_order_id, assigned_admin_id
                                   FROM emergency_incidents WHERE incident_id = %s FOR UPDATE""", (incident_id,))
                 incident = cursor.fetchone()
@@ -755,7 +870,7 @@ def list_hour_reviews():
             rows = cursor.fetchall()
 
             for row in rows:
-                row['service_time'] = format_datetime(row.get('service_time'))
+                row['service_time'] = format_wall_datetime(row.get('service_time'))
                 row['created_at'] = format_datetime(row.get('created_at'))
                 row['reviewed_at'] = format_datetime(row.get('reviewed_at'))
 
@@ -904,6 +1019,50 @@ def list_award_requests():
                 row['reviewed_at'] = format_datetime(row.get('reviewed_at'))
 
             return jsonify({"code": 200, "message": "获取荣誉申请成功", "data": rows})
+    finally:
+        conn.close()
+
+
+@admin_bp.route('/donations', methods=['GET'])
+def list_donations():
+    """Root-admin inbox for sandbox donation records."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"code": 500, "message": "数据库连接失败"}), 500
+    try:
+        with conn.cursor() as cursor:
+            _, is_global, _, error = _admin_regions(cursor, request.args.get('admin_user_id'))
+            if error:
+                return error
+            if not is_global:
+                return jsonify({"code": 403, "message": "仅总管理员可以查看爱心捐赠记录"}), 403
+            page, page_size, offset = get_pagination_params(request)
+            cursor.execute(
+                """SELECT COUNT(*) AS total, COALESCE(SUM(amount), 0) AS total_amount
+                   FROM donation_records WHERE payment_status = 'success'"""
+            )
+            summary = cursor.fetchone()
+            cursor.execute(
+                """SELECT donation_id, donor_name, contact, amount, payment_method,
+                          payment_status, transaction_no, message, created_at
+                   FROM donation_records
+                   ORDER BY created_at DESC, donation_id DESC
+                   LIMIT %s OFFSET %s""",
+                (page_size, offset),
+            )
+            return jsonify({
+                "code": 200,
+                "message": "获取爱心捐赠记录成功",
+                "data": {
+                    "items": cursor.fetchall(),
+                    "total": int(summary.get('total') or 0),
+                    "total_amount": float(summary.get('total_amount') or 0),
+                    "page": page,
+                    "page_size": page_size,
+                },
+            })
+    except Exception as exc:
+        return jsonify({"code": 500, "message": f"获取爱心捐赠记录失败: {exc}"}), 500
     finally:
         conn.close()
 

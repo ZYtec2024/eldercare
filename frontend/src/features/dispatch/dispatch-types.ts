@@ -1,3 +1,5 @@
+export type NavigationMode = 'driving' | 'riding' | 'walking'
+
 export interface DispatchRoute {
   order_id: number
   volunteer_id: number
@@ -6,11 +8,16 @@ export interface DispatchRoute {
   replanned_at?: string
   path: Array<[number, number]>
   distance_km?: number
+  remaining_distance_km?: number
+  remaining_eta_minutes?: number
   progress?: number
   journey_type?: 'returning' | string
+  journey_id?: string
   congested?: boolean
   traffic_segments?: Array<{ path: Array<[number, number]>; status: string }>
   motion_rate?: number
+  navigation_mode?: NavigationMode
+  geometry_source?: 'amap' | string
 }
 
 export interface DispatchOrder {
@@ -126,6 +133,7 @@ export interface VolunteerDispatchTask extends DispatchCandidate {
   lat?: number
   address?: string
   amap_marker_url?: string
+  amap_navigation_url?: string
   /** Exact elder pin is only present after accept. */
   location_unlocked?: boolean
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Button, Card, Empty, Form, Input, InputNumber, Select, DatePicker, Typography, App, List, Tag, Popconfirm, Modal, Rate, Alert } from 'antd'
-import { LikeOutlined, LikeFilled } from '@ant-design/icons'
+import { LikeOutlined, LikeFilled, ClockCircleOutlined } from '@ant-design/icons'
 import { PlusOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 
@@ -78,6 +78,7 @@ export default function FamilyOrdersPage() {
       })
       message.success('服务需求已发布！')
       form.resetFields()
+      form.setFieldsValue({ serviceHours: 1, serviceTime: dayjs() })
       setShowForm(false)
       load()
     } catch (err: any) {
@@ -198,13 +199,13 @@ export default function FamilyOrdersPage() {
               ]} />
             </Form.Item>
             <div className="grid grid-cols-2 gap-x-4">
-              <Form.Item
-                name="serviceTime"
-                label="服务时间"
-                rules={[{ required: true, message: '请选择时间' }]}
-                extra="选现在（或约1分钟内）：立刻找人。选任意更晚时间：到点才开始找人。"
-              >
-                <DatePicker showTime className="!w-full" placeholder="选择日期时间" format="YYYY-MM-DD HH:mm" />
+              <Form.Item label="服务时间" extra="选现在（或约1分钟内）：立刻找人。选任意更晚时间：到点才开始找人。">
+                <div className="flex gap-2">
+                  <Form.Item name="serviceTime" noStyle rules={[{ required: true, message: '请选择时间' }]}>
+                    <DatePicker showTime className="!w-full" placeholder="选择日期时间" format="YYYY-MM-DD HH:mm" />
+                  </Form.Item>
+                  <Button icon={<ClockCircleOutlined />} onClick={() => form.setFieldValue('serviceTime', dayjs())}>现在</Button>
+                </div>
               </Form.Item>
               <Form.Item name="serviceHours" label="预计时长(小时)" rules={[{ required: true, message: '请输入时长' }]}>
                 <InputNumber min={0.5} step={0.5} className="!w-full" placeholder="如 2" />
@@ -228,6 +229,7 @@ export default function FamilyOrdersPage() {
       <Card title="需求列表" className="!rounded-2xl" loading={loading}>
         <List
           dataSource={orders}
+          pagination={{ pageSize: 8, showSizeChanger: false, hideOnSinglePage: true }}
           locale={{ emptyText: <Empty description="暂无服务需求" /> }}
           renderItem={(item) => {
             const st = statusMap[item.status] || { color: 'default', text: item.status }

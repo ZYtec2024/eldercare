@@ -48,6 +48,11 @@ export async function registerAccount(payload: RegisterPayload) {
       age: payload.age,
       gender: payload.gender,
       address: payload.address,
+      province_name: payload.provinceName,
+      city_name: payload.cityName,
+      district_name: payload.districtName,
+      region_adcode: payload.regionAdcode,
+      detail_address: payload.detailAddress,
       id_card: payload.idCard,
       skills: payload.skills,
       invite_code: payload.inviteCode,
@@ -55,6 +60,20 @@ export async function registerAccount(payload: RegisterPayload) {
   )
 
   return response.data
+}
+
+export interface PublicRegionNode {
+  adcode: string
+  name: string
+  level: string
+  center?: string
+}
+
+export async function fetchPublicRegionChildren(keywords = '中华人民共和国') {
+  const response = await http.get<ApiEnvelope<PublicRegionNode[]>>('/auth/regions/children', {
+    params: { keywords },
+  })
+  return Array.isArray(response.data.data) ? response.data.data : []
 }
 
 export async function loginWithCredentials(payload: LoginPayload) {

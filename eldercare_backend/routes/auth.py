@@ -1,9 +1,27 @@
 # routes/auth.py
+import json
+import math
+
 from flask import Blueprint, request, jsonify
 from db import get_db_connection
 from utils import api_response, get_validated_data
+from region_service import fetch_district_children, geocode_address
 
 auth_bp = Blueprint('auth', __name__)
+
+
+@auth_bp.route('/regions/children', methods=['GET'])
+def public_region_children():
+    keywords = (request.args.get('keywords') or '中华人民共和国').strip()
+    try:
+        return jsonify({
+            "code": 200,
+            "message": "ok",
+            "data": fetch_district_children(keywords, 1),
+        })
+    except Exception as exc:
+        return jsonify({"code": 502, "message": str(exc), "data": []}), 502
+
 
 # 1. 🚀 多角色动态注册 (含事务与邮箱写入)
 @auth_bp.route('/register', methods=['POST'])
@@ -22,6 +40,43 @@ def register():
     if role == 'admin':
         if data.get('invite_code') != 'SHU2024ADMIN':
             return api_response({"code": 403, "message": "管理员邀请码错误！"}, 403)
+
+    resolved_address = None
+    volunteer_region_adcode = ''
+    if role == 'elder':
+        province_name = str(data.get('province_name') or '').strip()
+        city_name = str(data.get('city_name') or '').strip()
+        district_name = str(data.get('district_name') or '').strip()
+        region_adcode = str(data.get('region_adcode') or '').strip()
+        detail_address = str(data.get('detail_address') or data.get('address') or '').strip()
+        if not all([province_name, city_name, district_name, region_adcode, detail_address]):
+            return api_response({"code": 400, "message": "请完整选择省、市、区县并填写详细地址"}, 400)
+        try:
+            resolved_address = geocode_address(
+                f"{province_name}{city_name}{district_name}{detail_address}",
+                region_adcode,
+            )
+        except Exception as exc:
+            return api_response({"code": 400, "message": f"地址核验失败：{exc}"}, 400)
+        if str(resolved_address.get('adcode') or '') != region_adcode:
+            actual = resolved_address.get('district_name') or resolved_address.get('adcode') or '其他区县'
+            return api_response({
+                "code": 400,
+                "message": f"该地址定位在「{actual}」，不属于所选「{district_name}」，请重新选择或填写",
+            }, 400)
+        resolved_address.update({
+            'province_name': province_name,
+            'city_name': city_name,
+            'district_name': district_name,
+            'region_adcode': region_adcode,
+            'detail_address': detail_address,
+        })
+    elif role == 'volunteer':
+        volunteer_region_adcode = str(data.get('region_adcode') or '').strip()
+        if not volunteer_region_adcode:
+            return api_response({"code": 400, "message": "志愿者必须选择服务区县"}, 400)
+        if not str(data.get('skills') or '').strip():
+            return api_response({"code": 400, "message": "请填写技能、证书或服务经验说明"}, 400)
 
     conn = get_db_connection()
     if conn is None:
@@ -43,19 +98,47 @@ def register():
             if role == 'elder':
                 age = data.get('age', 60)
                 gender = data.get('gender', '男')
-                address = data.get('address', '未填写')
+                address = resolved_address['formatted_address']
                 # 允许自定义高压报警线，没传默认 140
                 alert_sys = data.get('alert_sys_threshold', 140) 
                 
                 sql_elder = """
-                    INSERT INTO elders (user_id, name, age, gender, address, alert_sys_threshold) 
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    INSERT INTO elders (user_id, name, age, gender, address, alert_sys_threshold, region_adcode)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING elder_id
                 """
-                cursor.execute(sql_elder, (new_user_id, real_name, age, gender, address, alert_sys))
+                cursor.execute(sql_elder, (
+                    new_user_id, real_name, age, gender, address, alert_sys,
+                    resolved_address['region_adcode'],
+                ))
+                elder_id = int(cursor.fetchone()['elder_id'])
+                cursor.execute(
+                    """INSERT INTO elder_location_state
+                       (elder_id, lng, lat, location_source, is_home_fixed)
+                       VALUES (%s, %s, %s, 'amap_geocode', TRUE)""",
+                    (elder_id, resolved_address['lng'], resolved_address['lat']),
+                )
+                cursor.execute(
+                    """INSERT INTO elder_addresses
+                       (elder_id, label, province_name, city_name, district_name,
+                        region_adcode, detail_address, full_address, lng, lat, is_current)
+                       VALUES (%s, '家', %s, %s, %s, %s, %s, %s, %s, %s, TRUE)""",
+                    (
+                        elder_id,
+                        resolved_address['province_name'],
+                        resolved_address['city_name'],
+                        resolved_address['district_name'],
+                        resolved_address['region_adcode'],
+                        resolved_address['detail_address'],
+                        resolved_address['formatted_address'],
+                        resolved_address['lng'],
+                        resolved_address['lat'],
+                    ),
+                )
             
             elif role == 'volunteer':
                 id_card = data.get('id_card')
-                skills = data.get('skills', '热心群众')
+                skills = str(data.get('skills') or '').strip()[:500]
                 if not id_card:
                     conn.rollback()
                     return api_response({"code": 400, "message": "志愿者必须填写身份证号"}, 400)
@@ -65,6 +148,43 @@ def register():
                     VALUES (%s, %s, %s, 'pending')
                 """
                 cursor.execute(sql_vol, (new_user_id, id_card, skills))
+                cursor.execute(
+                    """SELECT adcode, name, center_lng, center_lat, bounds_json
+                       FROM administrative_regions
+                       WHERE adcode = %s AND active = TRUE""",
+                    (volunteer_region_adcode,),
+                )
+                service_region = cursor.fetchone()
+                if not service_region:
+                    conn.rollback()
+                    return api_response({
+                        "code": 400,
+                        "message": "所选区县尚未开通志愿服务，请选择已配置区域或联系总管理员开通",
+                    }, 400)
+                center_lng = service_region.get('center_lng')
+                center_lat = service_region.get('center_lat')
+                if center_lng is None or center_lat is None:
+                    bounds = json.loads(service_region.get('bounds_json') or '{}')
+                    center_lng = (float(bounds['west']) + float(bounds['east'])) / 2
+                    center_lat = (float(bounds['south']) + float(bounds['north'])) / 2
+                angle = math.radians((int(new_user_id) * 47) % 360)
+                initial_lng = round(float(center_lng) + math.cos(angle) * 0.006, 6)
+                initial_lat = round(float(center_lat) + math.sin(angle) * 0.004, 6)
+                cursor.execute(
+                    """INSERT INTO volunteer_location_state
+                       (volunteer_id, lng, lat, availability, location_source,
+                        home_lng, home_lat, auto_accept_enabled, service_region_adcode)
+                       VALUES (%s, %s, %s, 'offline', 'registration_virtual',
+                               %s, %s, FALSE, %s)""",
+                    (
+                        new_user_id,
+                        initial_lng,
+                        initial_lat,
+                        initial_lng,
+                        initial_lat,
+                        volunteer_region_adcode,
+                    ),
+                )
 
             conn.commit()
             # ============ 事务结束 ============

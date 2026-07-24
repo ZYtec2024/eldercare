@@ -3,6 +3,7 @@ from flask import Blueprint, request, jsonify
 from db import get_db_connection
 from utils import format_datetime
 import datetime
+import uuid
 
 public_bp = Blueprint('public', __name__)
 
@@ -224,6 +225,57 @@ def delete_completed_task(order_id):
     except Exception as e:
         conn.rollback()
         return jsonify({"code": 500, "message": f"删除失败: {str(e)}"})
+    finally:
+        conn.close()
+
+
+@public_bp.route('/donations/simulate', methods=['POST'])
+def simulate_donation():
+    """Record a clearly labelled sandbox payment without touching real money."""
+    data = request.get_json(silent=True) or {}
+    donor_name = str(data.get('donor_name') or '').strip()
+    contact = str(data.get('contact') or '').strip()
+    payment_method = str(data.get('payment_method') or '').strip()
+    donor_message = str(data.get('message') or '').strip()
+    try:
+        amount = round(float(data.get('amount')), 2)
+    except (TypeError, ValueError):
+        amount = 0
+
+    if not donor_name:
+        return jsonify({"code": 400, "message": "请填写捐赠人姓名"})
+    if amount < 1 or amount > 99999:
+        return jsonify({"code": 400, "message": "沙盘捐赠金额应在 1 至 99999 元之间"})
+    if payment_method not in {'wechat', 'alipay'}:
+        return jsonify({"code": 400, "message": "请选择微信或支付宝沙盘支付"})
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"code": 500, "message": "数据库连接失败"}), 500
+    transaction_no = f"DEMO-{datetime.datetime.now():%Y%m%d%H%M%S}-{uuid.uuid4().hex[:8].upper()}"
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO donation_records
+                    (donor_name, contact, amount, payment_method, payment_status,
+                     transaction_no, message)
+                VALUES (%s, %s, %s, %s, 'success', %s, %s)
+                RETURNING donation_id, donor_name, contact, amount, payment_method,
+                          payment_status, transaction_no, message, created_at
+                """,
+                (donor_name, contact or None, amount, payment_method, transaction_no, donor_message or None),
+            )
+            donation = cursor.fetchone()
+            conn.commit()
+            return jsonify({
+                "code": 200,
+                "message": "沙盘支付成功，感谢您的爱心",
+                "data": donation,
+            })
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"code": 500, "message": f"记录沙盘捐赠失败: {exc}"}), 500
     finally:
         conn.close()
 
