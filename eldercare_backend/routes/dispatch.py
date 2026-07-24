@@ -904,7 +904,11 @@ def _demo_point(index: int, ring: int) -> tuple[float, float]:
 
 
 def seed_dispatch_demo_data(conn: Any) -> None:
-    """Create a compact 8-volunteer / 25-elder Baoshan demo scenario."""
+    """Idempotently backfill the SQL-defined Baoshan demo into legacy volumes.
+
+    Fresh databases receive every account and profile from init_demo_data.sql.
+    This routine remains only so an existing volume can be upgraded safely.
+    """
     skill_sets = [
         ["medical_support", "emergency_response", "mobility_assist", "errand"],
         ["medical_support", "rehab", "mobility_assist"],
@@ -1135,7 +1139,7 @@ def _regional_demo_point(region_adcode: str, index: int) -> tuple[float, float]:
 
 
 def seed_regional_demo_data(conn: Any) -> None:
-    """Seed two isolated district demos without touching existing Baoshan users."""
+    """Idempotently backfill the SQL-defined regional demos into legacy volumes."""
     scenarios = {
         "310115": {
             "admin": ("admin_pudong", "浦东新区管理员"),

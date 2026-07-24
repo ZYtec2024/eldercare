@@ -420,8 +420,9 @@ CREATE TABLE volunteer_return_routes (
 -- 演示账号统一说明（仅用于本地演示，正式环境必须更换密码）：
 --   总管理员：admin / admin123
 --   下列家属、老人、志愿者账号：对应 username / pass123
---   后端按区域补充的区域管理员：region_admin_<区县adcode> / Admin@2026
---   后端按区域补充的演示家属、老人、志愿者：对应 username / pass123
+--   区域管理员：admin_pudong、admin_chaoyang / Admin@2026
+--   其余宝山、浦东、朝阳演示家属、老人、志愿者：对应 username / pass123
+-- 全部 72 个初始账户均在本文件中声明；后端种子函数只为旧数据卷补缺。
 -- 密码字段目前沿用项目现有的明文演示机制，生产部署前应改为安全哈希。
 
 -- ====== 总管理员 (user_id=1；登录账号 admin / admin123) ======
@@ -452,6 +453,71 @@ INSERT INTO users (username, password_hash, role, real_name, phone, email) VALUE
 ('vol_sunhao', 'pass123', 'volunteer', '孙浩', '15000001005', 'sh@volunteer.org'),
 ('vol_huangxin', 'pass123', 'volunteer', '黄鑫', '15000001006', 'hx@volunteer.org');
 
+-- ====== 宝山区调度沙盘补充账户 (user_id=17~38) ======
+INSERT INTO users (username, password_hash, role, real_name, phone, email) VALUES
+('sim_vol_07', 'pass123', 'volunteer', '调度志愿者07', '13990000107', 'sim_vol_07@dispatch.demo'),
+('sim_vol_08', 'pass123', 'volunteer', '调度志愿者08', '13990000108', 'sim_vol_08@dispatch.demo'),
+('sim_elder_06', 'pass123', 'elder', '宝山长者06', '13990000306', 'sim_elder_06@dispatch.demo'),
+('sim_elder_07', 'pass123', 'elder', '宝山长者07', '13990000307', 'sim_elder_07@dispatch.demo'),
+('sim_elder_08', 'pass123', 'elder', '宝山长者08', '13990000308', 'sim_elder_08@dispatch.demo'),
+('sim_elder_09', 'pass123', 'elder', '宝山长者09', '13990000309', 'sim_elder_09@dispatch.demo'),
+('sim_elder_10', 'pass123', 'elder', '宝山长者10', '13990000310', 'sim_elder_10@dispatch.demo'),
+('sim_elder_11', 'pass123', 'elder', '宝山长者11', '13990000311', 'sim_elder_11@dispatch.demo'),
+('sim_elder_12', 'pass123', 'elder', '宝山长者12', '13990000312', 'sim_elder_12@dispatch.demo'),
+('sim_elder_13', 'pass123', 'elder', '宝山长者13', '13990000313', 'sim_elder_13@dispatch.demo'),
+('sim_elder_14', 'pass123', 'elder', '宝山长者14', '13990000314', 'sim_elder_14@dispatch.demo'),
+('sim_elder_15', 'pass123', 'elder', '宝山长者15', '13990000315', 'sim_elder_15@dispatch.demo'),
+('sim_elder_16', 'pass123', 'elder', '宝山长者16', '13990000316', 'sim_elder_16@dispatch.demo'),
+('sim_elder_17', 'pass123', 'elder', '宝山长者17', '13990000317', 'sim_elder_17@dispatch.demo'),
+('sim_elder_18', 'pass123', 'elder', '宝山长者18', '13990000318', 'sim_elder_18@dispatch.demo'),
+('sim_elder_19', 'pass123', 'elder', '宝山长者19', '13990000319', 'sim_elder_19@dispatch.demo'),
+('sim_elder_20', 'pass123', 'elder', '宝山长者20', '13990000320', 'sim_elder_20@dispatch.demo'),
+('sim_elder_21', 'pass123', 'elder', '宝山长者21', '13990000321', 'sim_elder_21@dispatch.demo'),
+('sim_elder_22', 'pass123', 'elder', '宝山长者22', '13990000322', 'sim_elder_22@dispatch.demo'),
+('sim_elder_23', 'pass123', 'elder', '宝山长者23', '13990000323', 'sim_elder_23@dispatch.demo'),
+('sim_elder_24', 'pass123', 'elder', '宝山长者24', '13990000324', 'sim_elder_24@dispatch.demo'),
+('sim_elder_25', 'pass123', 'elder', '宝山长者25', '13990000325', 'sim_elder_25@dispatch.demo');
+
+-- ====== 浦东新区演示账户 (user_id=39~55) ======
+INSERT INTO users (username, password_hash, role, real_name, phone, email) VALUES
+('admin_pudong', 'Admin@2026', 'admin', '浦东新区管理员', '13990000115', 'admin_pudong@dispatch.demo'),
+('demo_310115_vol_1', 'pass123', 'volunteer', '浦东志愿者李晨', '13990000116', 'demo_310115_vol_1@dispatch.demo'),
+('demo_310115_vol_2', 'pass123', 'volunteer', '浦东志愿者王宁', '13990000117', 'demo_310115_vol_2@dispatch.demo'),
+('demo_310115_vol_3', 'pass123', 'volunteer', '浦东志愿者陈悦', '13990000118', 'demo_310115_vol_3@dispatch.demo'),
+('demo_310115_vol_4', 'pass123', 'volunteer', '浦东志愿者赵峰', '13990000119', 'demo_310115_vol_4@dispatch.demo'),
+('demo_310115_elder_1', 'pass123', 'elder', '浦东张阿姨', '13990000216', 'demo_310115_elder_1@dispatch.demo'),
+('demo_310115_family_1', 'pass123', 'family', '浦东张阿姨家属', '13990000316', 'demo_310115_family_1@dispatch.demo'),
+('demo_310115_elder_2', 'pass123', 'elder', '浦东陈伯伯', '13990000217', 'demo_310115_elder_2@dispatch.demo'),
+('demo_310115_family_2', 'pass123', 'family', '浦东陈伯伯家属', '13990000317', 'demo_310115_family_2@dispatch.demo'),
+('demo_310115_elder_3', 'pass123', 'elder', '浦东李奶奶', '13990000218', 'demo_310115_elder_3@dispatch.demo'),
+('demo_310115_family_3', 'pass123', 'family', '浦东李奶奶家属', '13990000318', 'demo_310115_family_3@dispatch.demo'),
+('demo_310115_elder_4', 'pass123', 'elder', '浦东王大爷', '13990000219', 'demo_310115_elder_4@dispatch.demo'),
+('demo_310115_family_4', 'pass123', 'family', '浦东王大爷家属', '13990000319', 'demo_310115_family_4@dispatch.demo'),
+('demo_310115_elder_5', 'pass123', 'elder', '浦东周阿姨', '13990000220', 'demo_310115_elder_5@dispatch.demo'),
+('demo_310115_family_5', 'pass123', 'family', '浦东周阿姨家属', '13990000320', 'demo_310115_family_5@dispatch.demo'),
+('demo_310115_elder_6', 'pass123', 'elder', '浦东孙爷爷', '13990000221', 'demo_310115_elder_6@dispatch.demo'),
+('demo_310115_family_6', 'pass123', 'family', '浦东孙爷爷家属', '13990000321', 'demo_310115_family_6@dispatch.demo');
+
+-- ====== 北京市朝阳区演示账户 (user_id=56~72) ======
+INSERT INTO users (username, password_hash, role, real_name, phone, email) VALUES
+('admin_chaoyang', 'Admin@2026', 'admin', '朝阳区管理员', '13990000105', 'admin_chaoyang@dispatch.demo'),
+('demo_110105_vol_1', 'pass123', 'volunteer', '朝阳志愿者刘洋', '13990000106', 'demo_110105_vol_1@dispatch.demo'),
+('demo_110105_vol_2', 'pass123', 'volunteer', '朝阳志愿者周倩', '13990000107', 'demo_110105_vol_2@dispatch.demo'),
+('demo_110105_vol_3', 'pass123', 'volunteer', '朝阳志愿者马强', '13990000108', 'demo_110105_vol_3@dispatch.demo'),
+('demo_110105_vol_4', 'pass123', 'volunteer', '朝阳志愿者何静', '13990000109', 'demo_110105_vol_4@dispatch.demo'),
+('demo_110105_elder_1', 'pass123', 'elder', '朝阳赵阿姨', '13990000206', 'demo_110105_elder_1@dispatch.demo'),
+('demo_110105_family_1', 'pass123', 'family', '朝阳赵阿姨家属', '13990000306', 'demo_110105_family_1@dispatch.demo'),
+('demo_110105_elder_2', 'pass123', 'elder', '朝阳刘伯伯', '13990000207', 'demo_110105_elder_2@dispatch.demo'),
+('demo_110105_family_2', 'pass123', 'family', '朝阳刘伯伯家属', '13990000307', 'demo_110105_family_2@dispatch.demo'),
+('demo_110105_elder_3', 'pass123', 'elder', '朝阳孙奶奶', '13990000208', 'demo_110105_elder_3@dispatch.demo'),
+('demo_110105_family_3', 'pass123', 'family', '朝阳孙奶奶家属', '13990000308', 'demo_110105_family_3@dispatch.demo'),
+('demo_110105_elder_4', 'pass123', 'elder', '朝阳吴大爷', '13990000209', 'demo_110105_elder_4@dispatch.demo'),
+('demo_110105_family_4', 'pass123', 'family', '朝阳吴大爷家属', '13990000309', 'demo_110105_family_4@dispatch.demo'),
+('demo_110105_elder_5', 'pass123', 'elder', '朝阳钱阿姨', '13990000210', 'demo_110105_elder_5@dispatch.demo'),
+('demo_110105_family_5', 'pass123', 'family', '朝阳钱阿姨家属', '13990000310', 'demo_110105_family_5@dispatch.demo'),
+('demo_110105_elder_6', 'pass123', 'elder', '朝阳冯爷爷', '13990000211', 'demo_110105_elder_6@dispatch.demo'),
+('demo_110105_family_6', 'pass123', 'family', '朝阳冯爷爷家属', '13990000311', 'demo_110105_family_6@dispatch.demo');
+
 -- ====== 老人档案 (elder_id=1~5) ======
 INSERT INTO elders (user_id, name, age, gender, address, medical_history, alert_sys_threshold) VALUES
 (6,  '张大爷', 78, '男', '上海市宝山区锦秋路699弄112号1号楼101室', '高血压病史10年，长期服用降压药', 140),
@@ -459,6 +525,48 @@ INSERT INTO elders (user_id, name, age, gender, address, medical_history, alert_
 (8,  '王伯伯', 75, '男', '上海市宝山区新二路183弄57号1号楼103室', '冠心病，安装过心脏支架，需避免剧烈运动', 130),
 (9,  '陈阿姨', 70, '女', '上海市宝山区国权北路828弄139号1号楼104室', '轻度认知障碍，偶有健忘，身体状况总体良好', 140),
 (10, '刘爷爷', 85, '男', '上海市宝山区盘古路528号1号楼201室', '帕金森病早期，行动不便需要助行器，听力下降', 140);
+
+-- ====== 宝山区调度沙盘老人档案 (elder_id=6~25) ======
+INSERT INTO elders
+    (user_id, name, age, gender, address, medical_history, alert_sys_threshold, region_adcode)
+VALUES
+(19, '宝山长者06', 74, '男', '上海市宝山区殷高路21弄1号楼202室', '智能调度模拟档案', 140, '310113'),
+(20, '宝山长者07', 75, '女', '上海市宝山区高境路477弄1号楼203室', '智能调度模拟档案', 140, '310113'),
+(21, '宝山长者08', 76, '男', '上海市宝山区新二路999弄1号楼204室', '智能调度模拟档案', 140, '310113'),
+(22, '宝山长者09', 77, '女', '上海市宝山区逸仙路1321弄2号楼301室', '智能调度模拟档案', 140, '310113'),
+(23, '宝山长者10', 78, '男', '上海市宝山区三门路489弄2号楼302室', '智能调度模拟档案', 140, '310113'),
+(24, '宝山长者11', 79, '女', '上海市宝山区国权北路828弄2号楼303室', '智能调度模拟档案', 140, '310113'),
+(25, '宝山长者12', 80, '男', '上海市宝山区盘古路528号2号楼304室', '智能调度模拟档案', 140, '310113'),
+(26, '宝山长者13', 81, '女', '上海市宝山区锦秋路699弄2号楼401室', '智能调度模拟档案', 140, '310113'),
+(27, '宝山长者14', 82, '男', '上海市宝山区纬地路88弄2号楼402室', '智能调度模拟档案', 140, '310113'),
+(28, '宝山长者15', 83, '女', '上海市宝山区聚丰园路628弄2号楼403室', '智能调度模拟档案', 140, '310113'),
+(29, '宝山长者16', 84, '男', '上海市宝山区真金路1039弄2号楼404室', '智能调度模拟档案', 140, '310113'),
+(30, '宝山长者17', 85, '女', '上海市宝山区华灵路1885弄3号楼501室', '智能调度模拟档案', 140, '310113'),
+(31, '宝山长者18', 86, '男', '上海市宝山区殷高路21弄3号楼502室', '智能调度模拟档案', 140, '310113'),
+(32, '宝山长者19', 87, '女', '上海市宝山区高境路477弄3号楼503室', '智能调度模拟档案', 140, '310113'),
+(33, '宝山长者20', 88, '男', '上海市宝山区新二路999弄3号楼504室', '智能调度模拟档案', 140, '310113'),
+(34, '宝山长者21', 89, '女', '上海市宝山区逸仙路1321弄3号楼601室', '智能调度模拟档案', 140, '310113'),
+(35, '宝山长者22', 68, '男', '上海市宝山区三门路489弄3号楼602室', '智能调度模拟档案', 140, '310113'),
+(36, '宝山长者23', 69, '女', '上海市宝山区国权北路828弄3号楼603室', '智能调度模拟档案', 140, '310113'),
+(37, '宝山长者24', 70, '男', '上海市宝山区盘古路528号3号楼604室', '智能调度模拟档案', 140, '310113'),
+(38, '宝山长者25', 71, '女', '上海市宝山区锦秋路699弄4号楼701室', '智能调度模拟档案', 140, '310113');
+
+-- ====== 浦东新区与朝阳区老人档案 (elder_id=26~37) ======
+INSERT INTO elders
+    (user_id, name, age, gender, address, medical_history, alert_sys_threshold, region_adcode)
+VALUES
+(44, '浦东张阿姨', 69, '女', '上海市浦东新区张江路665号1号楼101室', '区域调度演示档案', 140, '310115'),
+(46, '浦东陈伯伯', 70, '男', '上海市浦东新区祖冲之路2305号1号楼102室', '区域调度演示档案', 140, '310115'),
+(48, '浦东李奶奶', 71, '女', '上海市浦东新区金科路2889号1号楼103室', '区域调度演示档案', 140, '310115'),
+(50, '浦东王大爷', 72, '男', '上海市浦东新区世纪大道100号1号楼104室', '区域调度演示档案', 140, '310115'),
+(52, '浦东周阿姨', 73, '女', '上海市浦东新区杨高南路729号1号楼201室', '区域调度演示档案', 140, '310115'),
+(54, '浦东孙爷爷', 74, '男', '上海市浦东新区浦东南路1111号1号楼202室', '区域调度演示档案', 140, '310115'),
+(61, '朝阳赵阿姨', 69, '女', '北京市朝阳区望京街10号1号楼101室', '区域调度演示档案', 140, '110105'),
+(63, '朝阳刘伯伯', 70, '男', '北京市朝阳区阜通东大街6号1号楼102室', '区域调度演示档案', 140, '110105'),
+(65, '朝阳孙奶奶', 71, '女', '北京市朝阳区朝阳北路101号1号楼103室', '区域调度演示档案', 140, '110105'),
+(67, '朝阳吴大爷', 72, '男', '北京市朝阳区建国路93号1号楼104室', '区域调度演示档案', 140, '110105'),
+(69, '朝阳钱阿姨', 73, '女', '北京市朝阳区酒仙桥路10号1号楼201室', '区域调度演示档案', 140, '110105'),
+(71, '朝阳冯爷爷', 74, '男', '北京市朝阳区北苑路170号1号楼202室', '区域调度演示档案', 140, '110105');
 
 -- ====== 志愿者档案 ======
 INSERT INTO volunteers_profile (user_id, id_card, skills, total_hours, weekly_hours, likes_count, awards, audit_status) VALUES
@@ -469,6 +577,20 @@ INSERT INTO volunteers_profile (user_id, id_card, skills, total_hours, weekly_ho
 (15, '310101200005055678', '体育专业；擅长带领老人做健身操', 45.0, 3.0, 12, '', 'approved'),
 (16, '310101200106066789', '医学院在读；可提供基础健康咨询', 0.0, 0.0, 0, '', 'pending');
 
+INSERT INTO volunteers_profile
+    (user_id, id_card, skills, total_hours, weekly_hours, likes_count, awards, audit_status)
+VALUES
+(17, '310113199007000017', '智能调度模拟志愿者', 0, 0, 0, '', 'approved'),
+(18, '310113199008000018', '智能调度模拟志愿者', 0, 0, 0, '', 'approved'),
+(40, '310115199201000040', '区域智能调度演示志愿者', 0, 0, 0, '', 'approved'),
+(41, '310115199202000041', '区域智能调度演示志愿者', 0, 0, 0, '', 'approved'),
+(42, '310115199203000042', '区域智能调度演示志愿者', 0, 0, 0, '', 'approved'),
+(43, '310115199204000043', '区域智能调度演示志愿者', 0, 0, 0, '', 'approved'),
+(57, '110105199201000057', '区域智能调度演示志愿者', 0, 0, 0, '', 'approved'),
+(58, '110105199202000058', '区域智能调度演示志愿者', 0, 0, 0, '', 'approved'),
+(59, '110105199203000059', '区域智能调度演示志愿者', 0, 0, 0, '', 'approved'),
+(60, '110105199204000060', '区域智能调度演示志愿者', 0, 0, 0, '', 'approved');
+
 -- ====== 家属-老人绑定关系 ======
 INSERT INTO user_elder_relation (family_user_id, elder_id, relation_type) VALUES
 (2, 1, '父子'),
@@ -477,6 +599,20 @@ INSERT INTO user_elder_relation (family_user_id, elder_id, relation_type) VALUES
 (3, 3, '儿媳'),
 (4, 4, '女儿'),
 (5, 5, '孙子');
+
+INSERT INTO user_elder_relation (family_user_id, elder_id, relation_type) VALUES
+(45, 26, '子女'),
+(47, 27, '子女'),
+(49, 28, '子女'),
+(51, 29, '子女'),
+(53, 30, '子女'),
+(55, 31, '子女'),
+(62, 32, '子女'),
+(64, 33, '子女'),
+(66, 34, '子女'),
+(68, 35, '子女'),
+(70, 36, '子女'),
+(72, 37, '子女');
 
 -- ====== 核心运行时状态（保证只执行 init SQL 也能直接使用） ======
 INSERT INTO dispatch_system_state (state_key, state_value) VALUES
@@ -493,16 +629,50 @@ VALUES
  '{"west":116.370,"east":116.560,"south":39.820,"north":40.060}', NULL, 116.472000, 39.943000);
 
 INSERT INTO admin_region_scope (admin_user_id, region_adcode, permission) VALUES
-(1, '*', 'manage');
+(1, '*', 'manage'),
+(39, '310115', 'manage'),
+(56, '110105', 'manage');
 
 INSERT INTO elder_location_state
     (elder_id, lng, lat, location_source, is_home_fixed)
 VALUES
-(1, 121.438901, 31.380680, 'simulated', TRUE),
-(2, 121.489700, 31.322900, 'simulated', TRUE),
-(3, 121.486300, 31.353800, 'simulated', TRUE),
-(4, 121.494600, 31.329900, 'simulated', TRUE),
-(5, 121.482600, 31.407100, 'simulated', TRUE);
+(1, 121.483901, 31.380686, 'simulated', TRUE),
+(2, 121.468575, 31.395776, 'simulated', TRUE),
+(3, 121.438985, 31.392285, 'simulated', TRUE),
+(4, 121.435043, 31.374920, 'simulated', TRUE),
+(5, 121.462067, 31.367106, 'simulated', TRUE),
+(6, 121.483605, 31.379381, 'simulated', TRUE),
+(7, 121.470605, 31.395189, 'simulated', TRUE),
+(8, 121.440603, 31.393207, 'simulated', TRUE),
+(9, 121.434067, 31.376108, 'simulated', TRUE),
+(10, 121.459814, 31.366957, 'simulated', TRUE),
+(11, 121.483114, 31.378097, 'simulated', TRUE),
+(12, 121.472539, 31.394502, 'simulated', TRUE),
+(13, 121.415977, 31.392852, 'simulated', TRUE),
+(14, 121.426628, 31.362487, 'simulated', TRUE),
+(15, 121.479596, 31.358443, 'simulated', TRUE),
+(16, 121.503434, 31.386174, 'simulated', TRUE),
+(17, 121.465988, 31.408275, 'simulated', TRUE),
+(18, 121.417767, 31.394935, 'simulated', TRUE),
+(19, 121.423815, 31.364148, 'simulated', TRUE),
+(20, 121.475974, 31.357441, 'simulated', TRUE),
+(21, 121.508320, 31.400953, 'simulated', TRUE),
+(22, 121.443485, 31.415766, 'simulated', TRUE),
+(23, 121.402000, 31.385033, 'simulated', TRUE),
+(24, 121.433596, 31.350209, 'simulated', TRUE),
+(25, 121.501881, 31.358266, 'simulated', TRUE),
+(26, 121.562149, 31.227078, 'simulated', TRUE),
+(27, 121.550750, 31.213900, 'simulated', TRUE),
+(28, 121.570608, 31.210870, 'simulated', TRUE),
+(29, 121.585715, 31.212067, 'simulated', TRUE),
+(30, 121.589798, 31.227311, 'simulated', TRUE),
+(31, 121.569750, 31.225015, 'simulated', TRUE),
+(32, 116.462149, 39.952078, 'simulated', TRUE),
+(33, 116.450750, 39.938900, 'simulated', TRUE),
+(34, 116.470608, 39.935870, 'simulated', TRUE),
+(35, 116.485715, 39.937067, 'simulated', TRUE),
+(36, 116.489798, 39.952311, 'simulated', TRUE),
+(37, 116.469750, 39.950015, 'simulated', TRUE);
 
 INSERT INTO elder_addresses
     (elder_id, label, province_name, city_name, district_name, region_adcode,
@@ -510,31 +680,64 @@ INSERT INTO elder_addresses
 VALUES
 (1, '家', '上海市', '上海市', '宝山区', '310113',
  '锦秋路699弄112号1号楼101室', '上海市宝山区锦秋路699弄112号1号楼101室',
- 121.438901, 31.380680, TRUE),
+ 121.483901, 31.380686, TRUE),
 (2, '家', '上海市', '上海市', '宝山区', '310113',
  '殷高路21弄5号1号楼102室', '上海市宝山区殷高路21弄5号1号楼102室',
- 121.489700, 31.322900, TRUE),
+ 121.468575, 31.395776, TRUE),
 (3, '家', '上海市', '上海市', '宝山区', '310113',
  '新二路183弄57号1号楼103室', '上海市宝山区新二路183弄57号1号楼103室',
- 121.486300, 31.353800, TRUE),
+ 121.438985, 31.392285, TRUE),
 (4, '家', '上海市', '上海市', '宝山区', '310113',
  '国权北路828弄139号1号楼104室', '上海市宝山区国权北路828弄139号1号楼104室',
- 121.494600, 31.329900, TRUE),
+ 121.435043, 31.374920, TRUE),
 (5, '家', '上海市', '上海市', '宝山区', '310113',
  '盘古路528号1号楼201室', '上海市宝山区盘古路528号1号楼201室',
- 121.482600, 31.407100, TRUE);
+ 121.462067, 31.367106, TRUE);
+
+INSERT INTO elder_addresses
+    (elder_id, label, province_name, city_name, district_name, region_adcode,
+     detail_address, full_address, lng, lat, is_current)
+SELECT
+    e.elder_id,
+    '家',
+    CASE WHEN e.region_adcode = '110105' THEN '北京市' ELSE '上海市' END,
+    CASE WHEN e.region_adcode = '110105' THEN '北京市' ELSE '上海市' END,
+    CASE
+        WHEN e.region_adcode = '310115' THEN '浦东新区'
+        WHEN e.region_adcode = '110105' THEN '朝阳区'
+        ELSE '宝山区'
+    END,
+    e.region_adcode,
+    e.address,
+    e.address,
+    p.lng,
+    p.lat,
+    TRUE
+FROM elders e
+JOIN elder_location_state p ON p.elder_id = e.elder_id
+WHERE e.elder_id BETWEEN 6 AND 37;
 
 INSERT INTO volunteer_location_state
     (volunteer_id, lng, lat, availability, fatigue_score, service_rating,
      assigned_today, location_source, home_lng, home_lat, auto_accept_enabled,
      service_region_adcode)
 VALUES
-(11, 121.461200, 31.383600, 'idle', 12, 4.90, 0, 'simulated', 121.461200, 31.383600, FALSE, '310113'),
-(12, 121.452800, 31.376200, 'idle', 18, 4.80, 0, 'simulated', 121.452800, 31.376200, FALSE, '310113'),
-(13, 121.474500, 31.390400, 'idle', 10, 4.70, 0, 'simulated', 121.474500, 31.390400, FALSE, '310113'),
-(14, 121.441500, 31.365800, 'idle', 15, 4.75, 0, 'simulated', 121.441500, 31.365800, FALSE, '310113'),
-(15, 121.486000, 31.401500, 'idle', 8, 4.65, 0, 'simulated', 121.486000, 31.401500, FALSE, '310113'),
-(16, 121.468000, 31.372500, 'idle', 0, 4.50, 0, 'simulated', 121.468000, 31.372500, FALSE, '310113');
+(11, 121.484000, 31.382000, 'idle', 12, 4.90, 0, 'simulated', 121.415977, 31.392852, FALSE, '310113'),
+(12, 121.466465, 31.396258, 'idle', 18, 4.80, 0, 'simulated', 121.426628, 31.362487, FALSE, '310113'),
+(13, 121.437512, 31.391284, 'idle', 10, 4.70, 0, 'simulated', 121.479596, 31.358443, FALSE, '310113'),
+(14, 121.436195, 31.373787, 'idle', 15, 4.75, 0, 'simulated', 121.503434, 31.386174, FALSE, '310113'),
+(15, 121.464290, 31.367368, 'idle', 8, 4.65, 0, 'simulated', 121.465988, 31.408275, FALSE, '310113'),
+(16, 121.500023, 31.392852, 'idle', 0, 4.50, 0, 'simulated', 121.402000, 31.382000, FALSE, '310113'),
+(17, 121.453991, 31.408578, 'idle', 10, 4.81, 2, 'simulated', 121.438466, 31.349096, FALSE, '310113'),
+(18, 121.402000, 31.372993, 'idle', 19, 4.15, 3, 'simulated', 121.505281, 31.360575, FALSE, '310113'),
+(40, 121.573116, 31.229492, 'idle', 5, 4.60, 0, 'simulated', 121.577592, 31.212031, TRUE, '310115'),
+(41, 121.552398, 31.225191, 'idle', 10, 4.70, 0, 'simulated', 121.587706, 31.220198, TRUE, '310115'),
+(42, 121.564340, 31.213372, 'idle', 15, 4.50, 0, 'simulated', 121.576574, 31.233494, TRUE, '310115'),
+(43, 121.576678, 31.206983, 'idle', 20, 4.60, 0, 'simulated', 121.563808, 31.222130, TRUE, '310115'),
+(57, 116.473116, 39.954492, 'idle', 5, 4.60, 0, 'simulated', 116.477592, 39.937031, TRUE, '110105'),
+(58, 116.452398, 39.950191, 'idle', 10, 4.70, 0, 'simulated', 116.487706, 39.945198, TRUE, '110105'),
+(59, 116.464340, 39.938372, 'idle', 15, 4.50, 0, 'simulated', 116.476574, 39.958494, TRUE, '110105'),
+(60, 116.476678, 39.931983, 'idle', 20, 4.60, 0, 'simulated', 116.463808, 39.947130, TRUE, '110105');
 
 INSERT INTO volunteer_skill_tags (volunteer_id, skill_tag, verified) VALUES
 (11, '陪诊', TRUE),
@@ -545,6 +748,57 @@ INSERT INTO volunteer_skill_tags (volunteer_id, skill_tag, verified) VALUES
 (13, '智能设备指导', TRUE),
 (14, '心理陪伴', TRUE),
 (15, '运动康复', TRUE);
+
+-- 调度匹配使用的标准技能编码
+INSERT INTO volunteer_skill_tags (volunteer_id, skill_tag, verified) VALUES
+(11, 'medical_support', TRUE),
+(11, 'emergency_response', TRUE),
+(11, 'mobility_assist', TRUE),
+(11, 'errand', TRUE),
+(12, 'medical_support', TRUE),
+(12, 'rehab', TRUE),
+(12, 'mobility_assist', TRUE),
+(13, 'digital_assist', TRUE),
+(13, 'companion', TRUE),
+(13, 'errand', TRUE),
+(14, 'companion', TRUE),
+(14, 'rehab', TRUE),
+(14, 'mobility_assist', TRUE),
+(15, 'grooming', TRUE),
+(15, 'companion', TRUE),
+(15, 'errand', TRUE),
+(16, 'medical_support', TRUE),
+(16, 'emergency_response', TRUE),
+(16, 'errand', TRUE),
+(17, 'digital_assist', TRUE),
+(17, 'companion', TRUE),
+(18, 'rehab', TRUE),
+(18, 'mobility_assist', TRUE),
+(18, 'companion', TRUE),
+(40, 'medical_support', TRUE),
+(40, 'emergency_response', TRUE),
+(40, 'errand', TRUE),
+(41, 'companion', TRUE),
+(41, 'rehab', TRUE),
+(41, 'mobility_assist', TRUE),
+(42, 'digital_assist', TRUE),
+(42, 'errand', TRUE),
+(42, 'companion', TRUE),
+(43, 'medical_support', TRUE),
+(43, 'emergency_response', TRUE),
+(43, 'mobility_assist', TRUE),
+(57, 'medical_support', TRUE),
+(57, 'emergency_response', TRUE),
+(57, 'mobility_assist', TRUE),
+(58, 'companion', TRUE),
+(58, 'errand', TRUE),
+(58, 'digital_assist', TRUE),
+(59, 'medical_support', TRUE),
+(59, 'rehab', TRUE),
+(59, 'errand', TRUE),
+(60, 'emergency_response', TRUE),
+(60, 'companion', TRUE),
+(60, 'mobility_assist', TRUE);
 
 -- ====== 张大爷 7天健康打卡数据 ======
 INSERT INTO health_records (elder_id, record_date, blood_pressure_sys, blood_pressure_dia, heart_rate, blood_oxygen, blood_sugar, temperature, weight, notes) VALUES
