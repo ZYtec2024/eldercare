@@ -384,6 +384,10 @@ def ensure_dispatch_schema() -> None:
             _add_column_if_missing(cursor, "emergency_incidents", "resolved_by", "INT NULL REFERENCES users(user_id) ON DELETE SET NULL")
             _add_column_if_missing(cursor, "emergency_incidents", "resolution_summary", "TEXT NULL")
             _add_column_if_missing(cursor, "emergency_incidents", "assigned_admin_id", "INT NULL REFERENCES users(user_id) ON DELETE SET NULL")
+            _add_column_if_missing(cursor, "emergency_incidents", "service_address", "TEXT NULL")
+            _add_column_if_missing(cursor, "emergency_incidents", "service_lng", "NUMERIC(10,6)")
+            _add_column_if_missing(cursor, "emergency_incidents", "service_lat", "NUMERIC(10,6)")
+            _add_column_if_missing(cursor, "emergency_incidents", "location_mode", "VARCHAR(16)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_emergency_incident ON alerts(emergency_incident_id)")
             # These tables are referenced by the legacy-data cleanup below, so
             # create them first when upgrading an existing pre-dispatch volume.
@@ -1573,6 +1577,7 @@ def _repair_active_dispatch_routes(conn: Any) -> None:
 def _order_context(cursor: Any, order_id: int) -> dict[str, Any] | None:
     cursor.execute("""
         SELECT o.order_id, o.elder_id, o.service_type, o.service_hours, o.service_time, o.status, o.volunteer_id,
+               o.address, o.service_lng, o.service_lat,
                COALESCE(o.region_adcode, e.region_adcode, '310113') AS region_adcode,
                d.urgency, d.required_skills, d.dispatch_state, d.search_stage, d.dispatch_phase,
                d.phase_started_at, d.phase_expires_at, d.dispatch_version, d.last_expanded_at,
@@ -3053,14 +3058,21 @@ def _district_admin_owns_sos(cursor: Any, admin_user_id: int, incident_id: int |
     return bool(cursor.fetchone())
 
 
-def _assign_sos_desk_members(cursor: Any, elder: dict[str, Any], reporter_user_id: int) -> tuple[set[int], int | None]:
-    """Notify root + one least-loaded district admin for the elder's region."""
+def _assign_sos_desk_members(
+    cursor: Any,
+    elder: dict[str, Any],
+    reporter_user_id: int,
+    *,
+    region_adcode: str | None = None,
+) -> tuple[set[int], int | None]:
+    """Notify root + one least-loaded district admin for the service region."""
     recipient_ids: set[int] = set()
     cursor.execute("SELECT family_user_id FROM user_elder_relation WHERE elder_id = %s", (elder["elder_id"],))
     recipient_ids.update(int(row["family_user_id"]) for row in cursor.fetchall())
     cursor.execute("SELECT admin_user_id FROM admin_region_scope WHERE region_adcode = '*'")
     recipient_ids.update(int(row["admin_user_id"]) for row in cursor.fetchall())
-    assigned_admin_id = _pick_least_loaded_district_admin(cursor, str(elder["region_adcode"]))
+    service_region = str(region_adcode or elder.get("region_adcode") or DEFAULT_REGION_ADCODE)
+    assigned_admin_id = _pick_least_loaded_district_admin(cursor, service_region)
     if assigned_admin_id:
         recipient_ids.add(assigned_admin_id)
     recipient_ids.add(int(elder["user_id"]))
@@ -3212,11 +3224,27 @@ def _ensure_sos_intervention_for_order(
         }
 
     description = f"服务中异常求助（订单#{order_id}）：{reason}"[:500]
+    service_region = str(order.get("region_adcode") or elder.get("region_adcode") or DEFAULT_REGION_ADCODE)
+    order_address = str(order.get("address") or elder.get("address") or "").strip() or None
+    order_lng = order.get("service_lng") if order.get("service_lng") is not None else order.get("elder_lng")
+    order_lat = order.get("service_lat") if order.get("service_lat") is not None else order.get("elder_lat")
     cursor.execute(
         """INSERT INTO emergency_incidents
-           (elder_id, region_adcode, incident_type, description, status, created_by, linked_order_id)
-           VALUES (%s, %s, 'service_issue', %s, 'dispatching', %s, %s) RETURNING incident_id""",
-        (elder["elder_id"], elder["region_adcode"], description, requester_user_id, order_id),
+           (elder_id, region_adcode, incident_type, description, status, created_by, linked_order_id,
+            service_address, service_lng, service_lat, location_mode)
+           VALUES (%s, %s, 'service_issue', %s, 'dispatching', %s, %s, %s, %s, %s, %s)
+           RETURNING incident_id""",
+        (
+            elder["elder_id"],
+            service_region,
+            description,
+            requester_user_id,
+            order_id,
+            order_address,
+            float(order_lng) if order_lng is not None else None,
+            float(order_lat) if order_lat is not None else None,
+            "address",
+        ),
     )
     incident_id = int(cursor.fetchone()["incident_id"])
     cursor.execute(
@@ -3232,7 +3260,9 @@ def _ensure_sos_intervention_for_order(
         created = False
     else:
         # No prior service chat (e.g. pending before accept): open one SOS thread only.
-        recipient_ids, assigned_admin_id = _assign_sos_desk_members(cursor, elder, requester_user_id)
+        recipient_ids, assigned_admin_id = _assign_sos_desk_members(
+            cursor, elder, requester_user_id, region_adcode=service_region,
+        )
         _persist_sos_assigned_admin(cursor, incident_id, assigned_admin_id)
         for recipient_id in recipient_ids:
             cursor.execute(
@@ -4563,14 +4593,32 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
         standing_region = _region_for_point(elder.get("lng"), elder.get("lat"))
         _set_tracking_region(payload, standing_region or elder.get("region_adcode"))
         default_address = elder.get("default_address") or elder.get("address")
+        map_lng = float(elder["lng"])
+        map_lat = float(elder["lat"])
+        map_address = default_address
+        # While an order is open, pin the elder on the confirmed service point
+        # (same place they ordered), not a later live GPS move.
+        cursor.execute("""
+            SELECT address, service_lng, service_lat
+            FROM orders
+            WHERE elder_id = %s AND status IN ('pending', 'accepted', 'in_progress')
+              AND service_lng IS NOT NULL AND service_lat IS NOT NULL
+            ORDER BY order_id DESC
+            LIMIT 1
+        """, (elder["elder_id"],))
+        active_service = cursor.fetchone()
+        if active_service:
+            map_lng = float(active_service["service_lng"])
+            map_lat = float(active_service["service_lat"])
+            map_address = str(active_service.get("address") or default_address)
         payload["elders"] = [{
             "elder_id": int(elder["elder_id"]), "name": elder["name"],
-            "address": default_address,
+            "address": map_address,
             "default_address": default_address,
             "default_label": elder.get("default_label") or "家",
             "default_lng": float(elder["default_lng"]) if elder.get("default_lng") is not None else None,
             "default_lat": float(elder["default_lat"]) if elder.get("default_lat") is not None else None,
-            "lng": float(elder["lng"]), "lat": float(elder["lat"]),
+            "lng": map_lng, "lat": map_lat,
             "location_source": elder["location_source"],
             "is_home_fixed": bool(elder["is_home_fixed"]),
         }]
@@ -4590,8 +4638,8 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
         """, (elder["elder_id"],))
         rows = cursor.fetchall()
         for row in rows:
-            service_lng = float(row["service_lng"]) if row.get("service_lng") is not None else float(elder["lng"])
-            service_lat = float(row["service_lat"]) if row.get("service_lat") is not None else float(elder["lat"])
+            service_lng = float(row["service_lng"]) if row.get("service_lng") is not None else map_lng
+            service_lat = float(row["service_lat"]) if row.get("service_lat") is not None else map_lat
             item = {
                 "order_id": int(row["order_id"]), "service_type": row["service_type"], "status": row["status"],
                 "service_time": _service_time_text(row.get("service_time")),
@@ -4743,7 +4791,27 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
 
     if role == "family":
         cursor.execute("""
-            SELECT DISTINCT e.elder_id, e.name, e.address, e.region_adcode, l.lng, l.lat, l.location_source, l.is_home_fixed
+            SELECT DISTINCT e.elder_id, e.name, e.address, e.region_adcode, l.lng, l.lat, l.location_source, l.is_home_fixed,
+                   (
+                     SELECT o.service_lng FROM orders o
+                     WHERE o.elder_id = e.elder_id
+                       AND o.status IN ('pending', 'accepted', 'in_progress')
+                       AND o.service_lng IS NOT NULL
+                     ORDER BY o.order_id DESC LIMIT 1
+                   ) AS active_service_lng,
+                   (
+                     SELECT o.service_lat FROM orders o
+                     WHERE o.elder_id = e.elder_id
+                       AND o.status IN ('pending', 'accepted', 'in_progress')
+                       AND o.service_lat IS NOT NULL
+                     ORDER BY o.order_id DESC LIMIT 1
+                   ) AS active_service_lat,
+                   (
+                     SELECT o.address FROM orders o
+                     WHERE o.elder_id = e.elder_id
+                       AND o.status IN ('pending', 'accepted', 'in_progress')
+                     ORDER BY o.order_id DESC LIMIT 1
+                   ) AS active_service_address
             FROM user_elder_relation rel JOIN elders e ON e.elder_id = rel.elder_id
             JOIN elder_location_state l ON l.elder_id = e.elder_id
             WHERE rel.family_user_id = %s
@@ -4752,13 +4820,22 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
         if not elder_rows:
             return None
         _set_tracking_region(payload, elder_rows[0].get("region_adcode"))
-        payload["elders"] = [{
-            "elder_id": int(row["elder_id"]), "name": row["name"], "address": row["address"],
-            "lng": float(row["lng"]), "lat": float(row["lat"]), "location_source": row["location_source"], "is_home_fixed": bool(row["is_home_fixed"]),
-        } for row in elder_rows]
+        payload["elders"] = []
+        for row in elder_rows:
+            has_active = row.get("active_service_lng") is not None and row.get("active_service_lat") is not None
+            payload["elders"].append({
+                "elder_id": int(row["elder_id"]),
+                "name": row["name"],
+                "address": (row.get("active_service_address") or row["address"]) if has_active else row["address"],
+                "lng": float(row["active_service_lng"]) if has_active else float(row["lng"]),
+                "lat": float(row["active_service_lat"]) if has_active else float(row["lat"]),
+                "location_source": row["location_source"],
+                "is_home_fixed": bool(row["is_home_fixed"]),
+            })
         elder_by_id = {int(row["elder_id"]): row for row in elder_rows}
         cursor.execute("""
             SELECT o.order_id, o.elder_id, o.service_type, o.status, o.volunteer_id, o.address AS order_address,
+                   o.service_lng, o.service_lat,
                    d.urgency, d.dispatch_state, d.search_stage, d.forced_assignment,
                    u.real_name AS volunteer_name, p.lng AS volunteer_lng, p.lat AS volunteer_lat, p.availability
             FROM user_elder_relation rel JOIN orders o ON o.elder_id = rel.elder_id
@@ -4769,6 +4846,9 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
         """, (user_id,))
         for row in cursor.fetchall():
             elder = elder_by_id[int(row["elder_id"])]
+            # Navigation target = order snapshot, not the elder's later GPS moves.
+            service_lng = float(row["service_lng"]) if row.get("service_lng") is not None else float(elder["lng"])
+            service_lat = float(row["service_lat"]) if row.get("service_lat") is not None else float(elder["lat"])
             item = {
                 "order_id": int(row["order_id"]), "service_type": row["service_type"], "status": row["status"],
                 "volunteer_id": int(row["volunteer_id"]) if row["volunteer_id"] else None, "volunteer_name": row["volunteer_name"],
@@ -4776,13 +4856,17 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
                 "elder_name": elder["name"], "urgency": row["urgency"], "dispatch_state": row["dispatch_state"],
                 "search_stage": int(row["search_stage"]), "forced_assignment": bool(row["forced_assignment"]),
                 "address": row["order_address"] or elder["address"],
+                "service_lng": service_lng,
+                "service_lat": service_lat,
             }
             if row["status"] in active_statuses and row["volunteer_id"]:
                 volunteer = {"volunteer_id": int(row["volunteer_id"]), "name": row["volunteer_name"], "lng": float(row["volunteer_lng"]), "lat": float(row["volunteer_lat"]), "availability": row["availability"], "fatigue": 0, "rating": 0, "assigned_today": 0, "skills": []}
                 payload["volunteers"].append(volunteer)
                 payload["routes"].extend([route for route in [_route_for_order(cursor, int(row["order_id"]))] if route])
                 item["location_sharing_active"] = True
-                item["amap_navigation_url"] = _amap_navigation_url(volunteer["lng"], volunteer["lat"], float(elder["lng"]), float(elder["lat"]), f"{elder['name']}服务点")
+                item["amap_navigation_url"] = _amap_navigation_url(
+                    volunteer["lng"], volunteer["lat"], service_lng, service_lat, f"{elder['name']}服务点",
+                )
             else:
                 # Same lock as elder portal: after service ends, volunteer pins stop.
                 item["location_sharing_active"] = False
@@ -5809,7 +5893,7 @@ def start_auto_sos_service(incident_id: int):
     try:
         with conn.cursor() as cursor:
             cursor.execute("""SELECT incident_id, elder_id, region_adcode, description, linked_order_id, status,
-                                     assigned_admin_id
+                                     assigned_admin_id, service_address, service_lng, service_lat, location_mode
                               FROM emergency_incidents WHERE incident_id = %s FOR UPDATE""", (incident_id,))
             incident = cursor.fetchone()
             if not incident:
@@ -5843,13 +5927,22 @@ def start_auto_sos_service(incident_id: int):
                     "message": "SOS 服务单已存在，系统按自动派单处理",
                     "data": {"order_id": order_id, "assigned": bool(order and order.get("volunteer_id")), "required_skills": selected_skills},
                 })
-            # Use the elder's confirmed service pin/address (not admin location /
-            # signup district). Pin is synced when the elder opens the SOS.
+            # Prefer immutable SOS snapshot; fall back to current pin only for legacy rows.
+            snap_lng = incident.get("service_lng")
+            snap_lat = incident.get("service_lat")
+            snap_mode = str(incident.get("location_mode") or "").strip().lower()
+            if snap_mode == "live":
+                snap_mode = "current"
+            if snap_mode not in ("address", "current"):
+                snap_mode = "current" if snap_lng is not None and snap_lat is not None else "address"
             order_id, msg = create_smart_order_for_elder(
                 cursor, elder_id=int(incident["elder_id"]), created_by=int(admin_user_id),
                 service_type="SOS紧急救助", notes=str(incident.get("description") or "紧急求助"),
                 urgent=True, proxy_created_by=int(admin_user_id), proxy_reason="管理员接警后启动自动 SOS 志愿服务",
-                location_mode="current",
+                location_mode=snap_mode,
+                address=str(incident.get("service_address") or "").strip() or None,
+                lng=float(snap_lng) if snap_lng is not None else None,
+                lat=float(snap_lat) if snap_lat is not None else None,
                 manual_only=False,
                 incident_id=incident_id,
                 required_skills=selected_skills,

@@ -293,6 +293,11 @@ CREATE TABLE emergency_incidents (
     incident_id SERIAL PRIMARY KEY,
     elder_id INT NOT NULL REFERENCES elders(elder_id) ON DELETE CASCADE,
     region_adcode VARCHAR(12) NOT NULL,
+    -- Snapshot of confirmed SOS service point (immutable after create).
+    service_address TEXT,
+    service_lng NUMERIC(10,6),
+    service_lat NUMERIC(10,6),
+    location_mode VARCHAR(16),
     incident_type VARCHAR(40) NOT NULL DEFAULT 'general_help',
     description TEXT NOT NULL DEFAULT '',
     status VARCHAR(24) NOT NULL DEFAULT 'reported',

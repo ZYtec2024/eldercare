@@ -714,8 +714,6 @@ def confirm_order_hours():
     finally:
         conn.close()
 
-        conn.close()
-
 
 @family_bp.route('/alerts', methods=['GET'])
 def get_family_alerts():
@@ -735,6 +733,7 @@ def get_family_alerts():
                 """
                 SELECT en.notification_id, en.read_at, ei.incident_id, ei.status, ei.description,
                        ei.incident_type, e.name AS elder_name, ei.created_at,
+                       ei.service_address, ei.service_lng, ei.service_lat,
                        c.conversation_id, a.alert_id,
                        COALESCE(a.alert_type, 'sos') AS alert_type
                 FROM emergency_notifications en
@@ -752,13 +751,18 @@ def get_family_alerts():
                 created = item.get('created_at')
                 if isinstance(created, datetime.datetime):
                     created = format_datetime(created)
+                address = str(item.get('service_address') or '').strip()
+                description = str(item.get('description') or '紧急求助')
+                if address and address not in description:
+                    description = f"{description}（位置：{address}）"
                 rows.append({
                     'notification_id': int(item['notification_id']),
                     'alert_id': int(item['alert_id']) if item.get('alert_id') else None,
                     'incident_id': int(item['incident_id']),
                     'category': 'sos' if str(item.get('alert_type') or 'sos') == 'sos' else 'health_warning',
                     'elder_name': item.get('elder_name') or '长辈',
-                    'description': item.get('description') or '紧急求助',
+                    'description': description,
+                    'address': address or None,
                     'status': item.get('status') or 'reported',
                     'created_at': created,
                     'conversation_id': int(item['conversation_id']) if item.get('conversation_id') else None,

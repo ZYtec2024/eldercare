@@ -58,14 +58,29 @@ export default function ElderSosPage() {
     return () => window.clearInterval(timer)
   }, [session?.userId])
 
-  useEffect(() => {
-    if (!session) return
-    fetchDispatchTracking('elder', session.userId)
-      .then((tracking) => {
-        const elder = tracking.elders[0]
-        setDefaultAddress(elder?.default_address || elder?.address || '尚未设置当前地址')
+  const refreshDefaultAddress = async (): Promise<string> => {
+    if (!session) return defaultAddress
+    try {
+      const tracking = await fetchDispatchTracking('elder', session.userId)
+      const elder = tracking.elders[0]
+      const next = elder?.default_address || elder?.address || '尚未设置当前地址'
+      setDefaultAddress((prev) => {
+        if (prev && prev !== next && confirmedMode === 'address') {
+          setConfirmedMode(null)
+        }
+        return next
       })
-      .catch(() => undefined)
+      return next
+    } catch {
+      return defaultAddress
+    }
+  }
+
+  useEffect(() => {
+    void refreshDefaultAddress()
+    const onFocus = () => { void refreshDefaultAddress() }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
   }, [session?.userId])
 
   const switchMode = (value: 'address' | 'live') => {
@@ -96,12 +111,14 @@ export default function ElderSosPage() {
       .finally(() => setLocating(false))
   }
 
-  const confirmLocation = () => {
+  const confirmLocation = async () => {
     if (locationMode === 'address') {
-      if (!defaultAddress || defaultAddress.includes('尚未设置')) {
+      const latest = await refreshDefaultAddress()
+      if (!latest || latest.includes('尚未设置')) {
         message.warning('请先在个人中心设置默认地址')
         return
       }
+      setDefaultAddress(latest)
       setConfirmedMode('address')
       setConfirmedLive(null)
       message.success('已确认使用默认地址')
@@ -362,6 +379,9 @@ export default function ElderSosPage() {
                     <span className="text-gray-500">{incident.createdAt}</span>
                   </Space>
                   <div className="mt-2 text-base text-slate-700">{incident.description}</div>
+                  {incident.address ? (
+                    <div className="mt-1 text-sm text-slate-500">服务位置：{incident.address}</div>
+                  ) : null}
                   {incident.resolutionSummary ? (
                     <div className="mt-1 text-sm text-emerald-700">结果：{incident.resolutionSummary}</div>
                   ) : null}

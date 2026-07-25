@@ -424,11 +424,12 @@ def get_alerts():
                 SELECT a.alert_id, e.name AS elder_name, a.alert_type,
                        a.description, a.is_handled, a.created_at,
                        a.emergency_incident_id,
-                       e.region_adcode,
+                       COALESCE(ei.region_adcode, e.region_adcode) AS region_adcode,
                        ar.name AS region_name, ar.province_name, ar.city_name,
                        ei.status AS incident_status, ei.incident_type,
                        ei.acknowledged_at, ei.resolved_at, ei.resolution_summary,
                        ei.linked_order_id, ei.assigned_admin_id, c.conversation_id,
+                       ei.service_address, ei.service_lng, ei.service_lat,
                        o.status AS linked_order_status, vu.real_name AS linked_volunteer_name,
                        (SELECT content FROM conversation_messages cm
                         WHERE cm.conversation_id = c.conversation_id
@@ -438,8 +439,9 @@ def get_alerts():
                         ORDER BY cm.created_at DESC, cm.message_id DESC LIMIT 1) AS last_message_at
                 FROM alerts a
                 JOIN elders e ON a.elder_id = e.elder_id
-                LEFT JOIN administrative_regions ar ON ar.adcode = e.region_adcode
                 LEFT JOIN emergency_incidents ei ON ei.incident_id = a.emergency_incident_id
+                LEFT JOIN administrative_regions ar
+                       ON ar.adcode = COALESCE(ei.region_adcode, e.region_adcode)
                 LEFT JOIN conversations c ON c.incident_id = ei.incident_id AND c.conversation_type = 'sos'
                 LEFT JOIN orders o ON o.order_id = ei.linked_order_id
                 LEFT JOIN users vu ON vu.user_id = o.volunteer_id
@@ -447,7 +449,7 @@ def get_alerts():
             params = []
             where_parts = []
             if not is_global:
-                where_parts.append("e.region_adcode IN %s")
+                where_parts.append("COALESCE(ei.region_adcode, e.region_adcode) IN %s")
                 params.append(tuple(regions))
                 where_parts.append(
                     """(

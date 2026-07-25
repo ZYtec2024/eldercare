@@ -316,9 +316,21 @@ def create_emergency_incident():
                 if not cursor.fetchone():
                     return jsonify({'code': 403, 'message': '您无权处理该区县紧急事件'}), 403
             cursor.execute('''INSERT INTO emergency_incidents
-                              (elder_id, region_adcode, incident_type, description, status, created_by)
-                              VALUES (%s, %s, %s, %s, 'reported', %s) RETURNING incident_id''',
-                           (elder_id, service_region, incident_type, description, reporter_user_id))
+                              (elder_id, region_adcode, incident_type, description, status, created_by,
+                               service_address, service_lng, service_lat, location_mode)
+                              VALUES (%s, %s, %s, %s, 'reported', %s, %s, %s, %s, %s)
+                              RETURNING incident_id''',
+                           (
+                               elder_id,
+                               service_region,
+                               incident_type,
+                               description,
+                               reporter_user_id,
+                               str(service_point.get('address') or '').strip() or None,
+                               float(service_point['lng']),
+                               float(service_point['lat']),
+                               str(service_point.get('location_mode') or location_mode),
+                           ))
             incident_id = int(cursor.fetchone()['incident_id'])
             cursor.execute("""INSERT INTO alerts (elder_id, alert_type, description, emergency_incident_id)
                               VALUES (%s, 'sos', %s, %s) RETURNING alert_id""",
@@ -447,7 +459,11 @@ def list_emergency_incidents():
             cursor.execute(f"""
                 SELECT ei.incident_id, ei.incident_type, ei.description, ei.status,
                        ei.created_at, ei.acknowledged_at, ei.resolved_at, ei.resolution_summary,
-                       e.name AS elder_name, e.address, o.order_id, o.status AS order_status,
+                       ei.region_adcode AS service_region_adcode,
+                       ei.service_address, ei.service_lng, ei.service_lat, ei.location_mode,
+                       e.name AS elder_name,
+                       COALESCE(ei.service_address, e.address) AS address,
+                       o.order_id, o.status AS order_status,
                        c.conversation_id,
                        (SELECT a.alert_id FROM alerts a
                          WHERE a.emergency_incident_id = ei.incident_id
