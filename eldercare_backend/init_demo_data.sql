@@ -35,6 +35,7 @@ DROP TABLE IF EXISTS user_elder_relation CASCADE;
 DROP TABLE IF EXISTS volunteers_profile CASCADE;
 DROP TABLE IF EXISTS elders CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
+DROP TABLE IF EXISTS ai_service_settings CASCADE;
 
 -- 1. 用户总表
 CREATE TABLE users (
@@ -194,6 +195,12 @@ CREATE TABLE volunteer_award_requests (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     reviewed_at TIMESTAMP NULL,
     FOREIGN KEY (volunteer_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+CREATE TABLE ai_service_settings (
+    config_key VARCHAR(64) PRIMARY KEY,
+    config_value TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 12. 爱心捐赠沙盘记录（仅模拟支付，不接入真实资金渠道）
@@ -634,6 +641,15 @@ INSERT INTO user_elder_relation (family_user_id, elder_id, relation_type) VALUES
 INSERT INTO dispatch_system_state (state_key, state_value) VALUES
 ('traffic_version', '1');
 
+INSERT INTO ai_service_settings (config_key, config_value) VALUES
+('groq_api_key', ''),
+('groq_chat_model', 'llama-3.1-8b-instant'),
+('groq_transcribe_model', 'whisper-large-v3'),
+('tts_voice', 'zh-CN-XiaoxiaoNeural'),
+('tts_rate', '+0%'),
+('tts_volume', '+0%'),
+('companion_system_prompt', '你是智慧伴老平台的智能陪聊助手。请用亲切、耐心、简洁的中文与老人交流。优先关心情绪、健康和安全，不要输出夸张或不现实的承诺。如果涉及紧急医疗风险，请明确提醒老人立即联系家属、志愿者或拨打当地急救电话。');
+
 INSERT INTO administrative_regions
     (adcode, name, city_name, province_name, region_level, bounds_json, polygon_json, center_lng, center_lat)
 VALUES
@@ -994,7 +1010,7 @@ FOR EACH ROW EXECUTE PROCEDURE fn_health_alert();
 
 -- ============================================================
 -- 数据概览：
--- 16个用户 | 5位老人 | 6条绑定关系 | 35条健康记录
+-- 72个用户 | 37位老人 | 18条绑定关系 | 35条健康记录
 -- 14个订单 | 6条评价 | 5条报警 | 12条点赞
 -- 6条时长审核 | 3条荣誉申请
 -- 2个视图 | 1个触发器

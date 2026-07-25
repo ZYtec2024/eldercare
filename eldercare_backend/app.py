@@ -19,6 +19,7 @@ from routes.volunteer import volunteer_bp
 from routes.admin import admin_bp
 from routes.public import public_bp
 from routes.conversation import conversation_bp
+from routes.ai import ai_bp
 from routes.dispatch import dispatch_bp, ensure_dispatch_schema, run_dispatch_clock_tick
 from db import get_db_connection
 
@@ -35,6 +36,7 @@ app.register_blueprint(admin_bp, url_prefix='/api/admin')
 app.register_blueprint(public_bp, url_prefix='/api/public')
 app.register_blueprint(profile_bp, url_prefix='/api/profile')
 app.register_blueprint(conversation_bp, url_prefix='/api/conversations')
+app.register_blueprint(ai_bp, url_prefix='/api')
 app.register_blueprint(dispatch_bp, url_prefix='/api/dispatch')
 
 
@@ -117,6 +119,15 @@ def init_db():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     reviewed_at TIMESTAMP NULL,
                     FOREIGN KEY (volunteer_id) REFERENCES users(user_id) ON DELETE CASCADE
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_service_settings (
+                    config_key VARCHAR(64) PRIMARY KEY,
+                    config_value TEXT NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )

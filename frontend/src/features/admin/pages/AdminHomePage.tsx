@@ -5,6 +5,7 @@ import {
   TeamOutlined,
   AlertOutlined,
   TrophyOutlined,
+  RobotOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 
@@ -43,6 +44,13 @@ const features = [
     desc: '查看志愿者本周排行、荣誉记录，以及待审核的荣誉申请，统一进行评审管理。',
     path: '/admin/honor-wall',
     color: 'border-amber-200 bg-amber-50/50',
+  },
+  {
+    icon: <RobotOutlined className="text-5xl text-sky-600" />,
+    title: '智能陪聊配置',
+    desc: '管理老人端智能陪聊的 Groq 大模型、语音转写 API 和 Edge TTS 朗读参数。',
+    path: '/admin/ai-settings',
+    color: 'border-sky-200 bg-sky-50/50',
   },
   {
     icon: <DashboardOutlined className="text-5xl text-blue-600" />,

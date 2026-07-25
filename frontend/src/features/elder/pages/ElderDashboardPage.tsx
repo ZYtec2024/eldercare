@@ -6,6 +6,7 @@ import {
   MedicineBoxOutlined,
   AlertOutlined,
   MessageOutlined,
+  SoundOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 
@@ -41,6 +42,13 @@ const features = [
     desc: '和家人、社区、志愿者说话，都在这里。',
     path: '/conversations',
     color: 'border-emerald-200 bg-emerald-50/50',
+  },
+  {
+    icon: <SoundOutlined className="text-5xl text-teal-600" />,
+    title: '智能陪聊',
+    desc: '按一下录音键就能和助手聊天，还可以把回复读给您听。',
+    path: '/elder/companion',
+    color: 'border-teal-200 bg-teal-50/50',
   },
 ]
 

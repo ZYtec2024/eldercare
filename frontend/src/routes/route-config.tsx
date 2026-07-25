@@ -8,6 +8,7 @@ import {
   HomeOutlined,
   LinkOutlined,
   MedicineBoxOutlined,
+  MessageOutlined,
   TeamOutlined,
   TrophyOutlined,
   UserOutlined,
@@ -18,6 +19,7 @@ import {
   AdminAlertsPage,
   AdminDispatchBoardPage,
   AdminRegionsPage,
+  AdminAiSettingsPage,
   AdminDashboardPage,
   AdminHomePage,
   AdminHourReviewsPage,
@@ -30,6 +32,7 @@ import {
   ElderDispatchPage,
   ElderDetailPage,
   ElderServicesPage,
+  ElderCompanionPage,
   ElderSosPage,
   FamilyAlertsPage,
   FamilyDashboardPage,
@@ -65,6 +68,7 @@ const iconMap: Record<string, ReactNode> = {
   emergency: <ExclamationCircleOutlined />,
   user: <UserOutlined />,
   connect: <LinkOutlined />,
+  chat: <MessageOutlined />,
   service: <MedicineBoxOutlined />,
   honor: <TrophyOutlined />,
 }
@@ -315,6 +319,17 @@ export const appRoutes: AppRouteDefinition[] = [
     navigation: { label: '请人帮忙', description: '', iconKey: 'service' },
     element: ElderDispatchPage,
   },
+  {
+    key: 'elder-companion',
+    path: '/elder/companion',
+    roles: ['elder'],
+    title: '智能陪聊',
+    description: '智能助手陪您聊天，语音转文字、朗读回复',
+    showInNavigation: true,
+    navigationOrder: 27,
+    navigation: { label: '智能陪聊', description: '', iconKey: 'chat' },
+    element: ElderCompanionPage,
+  },
   // ── Volunteer ──
   {
     key: 'volunteer-home',
@@ -440,6 +455,17 @@ export const appRoutes: AppRouteDefinition[] = [
     element: AdminRegionsPage,
   },
   {
+    key: 'admin-ai-settings',
+    path: '/admin/ai-settings',
+    roles: ['admin'],
+    title: '智能陪聊配置',
+    description: 'Groq 与 Edge TTS 参数配置',
+    showInNavigation: true,
+    navigationOrder: 17,
+    navigation: { label: '智能陪聊配置', description: '', iconKey: 'chat' },
+    element: AdminAiSettingsPage,
+  },
+  {
     key: 'admin-dashboard',
     path: '/admin/dashboard',
     roles: ['admin'],
@@ -504,6 +530,9 @@ export function getNavigationForRole(role: Role, options?: { isRoot?: boolean })
       }
       // District admins must not manage official region polygons.
       if (route.key === 'admin-regions' && !options?.isRoot) {
+        return false
+      }
+      if (route.key === 'admin-ai-settings' && !options?.isRoot) {
         return false
       }
       if (route.key === 'admin-donations' && !options?.isRoot) {
