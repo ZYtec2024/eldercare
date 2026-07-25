@@ -154,7 +154,7 @@ export default function VolunteerDispatchPage() {
       try {
         const mode: NavigationMode = returningHome ? 'driving' : navigationMode
         const routeKey = returningHome ? 'return' : activeNavTask?.order_id || 'route'
-        const route = await getAmapRoute(start, end, mode, 'LEAST_TIME', `${routeKey}-${activeRoute?.traffic_version || 0}`)
+        const route = await getAmapRoute(start, end, mode, mode === 'driving' ? 'REAL_TRAFFIC' : 'LEAST_TIME', `${routeKey}-${activeRoute?.traffic_version || 0}`)
         if (cancelled) return
         const progress = Math.max(0, Math.min(100, activeRoute?.progress ?? 0))
         const hasPersistedRoadGeometry = (activeRoute?.path?.length ?? 0) > 2
@@ -171,9 +171,11 @@ export default function VolunteerDispatchPage() {
           // different road even with identical endpoints, so use it only for
           // turn instructions and never replace an active journey's path.
           path: hasPersistedRoadGeometry ? activeRoute!.path : route.path,
-          traffic_segments: hasPersistedRoadGeometry
-            ? activeRoute?.traffic_segments ?? []
-            : route.geometryResolved && mode === 'driving' ? route.trafficSegments : [],
+          // Prefer freshly resolved TMC even when the road path is persisted —
+          // empty stored traffic_segments would otherwise hide red/yellow.
+          traffic_segments: mode === 'driving' && route.trafficSegments.length
+            ? route.trafficSegments
+            : (activeRoute?.traffic_segments ?? []),
           distance_km: route.geometryResolved && route.distanceKm > 0 ? route.distanceKm : activeRoute?.distance_km,
           eta_minutes: route.geometryResolved && route.etaMinutes > 0 ? route.etaMinutes : activeRoute?.eta_minutes,
           progress,
@@ -258,7 +260,7 @@ export default function VolunteerDispatchPage() {
     setSwitchingNavigationMode(true)
     try {
       const start: [number, number] = [me.lng, me.lat]
-      const route = await getAmapRoute(start, end, mode, 'LEAST_TIME', `mode-${activeNavTask.order_id}-${Date.now()}`)
+      const route = await getAmapRoute(start, end, mode, mode === 'driving' ? 'REAL_TRAFFIC' : 'LEAST_TIME', `mode-${activeNavTask.order_id}-${Date.now()}`)
       if (!route.geometryResolved) throw new Error('高德道路路线暂未返回，正在自动重试')
       const nextRoute: DispatchRoute = {
         ...activeRoute,
@@ -305,7 +307,7 @@ export default function VolunteerDispatchPage() {
     }
     const end = activeRoute.path[activeRoute.path.length - 1]
     const start: [number, number] = [me.lng, me.lat]
-    void getAmapRoute(start, end, 'driving', 'LEAST_TIME', `auto-return-${me.volunteer_id}-${activeRoute.traffic_version}`)
+    void getAmapRoute(start, end, 'driving', 'REAL_TRAFFIC', `auto-return-${me.volunteer_id}-${activeRoute.traffic_version}`)
       .then(async (route) => {
         if (!route.geometryResolved) throw new Error('AMap road geometry is not ready')
         setNavigationMode('driving')
