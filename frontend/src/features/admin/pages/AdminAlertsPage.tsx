@@ -77,6 +77,7 @@ export default function AdminAlertsPage() {
   const { session } = useSession()
   const [alerts, setAlerts] = useState<AlertItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [scopeTip, setScopeTip] = useState<string | null>(null)
   const [geoScope, setGeoScope] = useState<AdminGeoScope>({})
   const [stage, setStage] = useState<StageFilter>('actionable')
   const [activeAlertId, setActiveAlertId] = useState<number | null>(null)
@@ -98,8 +99,17 @@ export default function AdminAlertsPage() {
         provinceName: !geoScope.regionAdcode ? geoScope.provinceName : undefined,
         cityName: !geoScope.regionAdcode ? geoScope.cityName : undefined,
       }))
-    } catch {
-      message.error('告警中心加载失败')
+      setScopeTip(null)
+    } catch (error: any) {
+      const tip = String(error?.message || '')
+      const unbound = tip.includes('还未绑定区域') || tip.includes('未分配区县') || tip.includes('未绑定区域')
+      setAlerts([])
+      if (unbound) {
+        setScopeTip(tip.includes('还未绑定') ? tip : '还未绑定区域，请联系总管理员在「区域管理」中为您分配区县后再查看')
+      } else {
+        setScopeTip(null)
+        message.error(tip || '告警中心加载失败')
+      }
     } finally {
       setLoading(false)
     }
@@ -474,11 +484,21 @@ export default function AdminAlertsPage() {
           </Typography.Text>
         </div>
         <Space wrap>
-          <AdminGeoScopeFilters value={geoScope} onChange={setGeoScope} />
+          {!scopeTip ? <AdminGeoScopeFilters value={geoScope} onChange={setGeoScope} /> : null}
           <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>
         </Space>
       </div>
 
+      {scopeTip ? (
+        <Alert
+          type="info"
+          showIcon={false}
+          message="还未绑定区域"
+          description={scopeTip}
+        />
+      ) : null}
+
+      {!scopeTip ? (
       <Segmented
         value={stage}
         onChange={(value) => setStage(value as StageFilter)}
@@ -491,8 +511,13 @@ export default function AdminAlertsPage() {
           { label: `全部 (${stageCounts.all})`, value: 'all' },
         ]}
       />
+      ) : null}
       <Card className="!rounded-2xl !overflow-hidden" styles={{ body: { padding: 0 } }}>
-        {filtered.length === 0 ? (
+        {scopeTip ? (
+          <div className="py-16">
+            <Empty description="请先完成区县绑定后再查看告警" />
+          </div>
+        ) : filtered.length === 0 ? (
           <div className="py-16"><Empty description="当前分级下暂无告警" /></div>
         ) : (
           <div className="divide-y divide-slate-100">

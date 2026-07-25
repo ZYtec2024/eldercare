@@ -24,7 +24,26 @@ export const http = axios.create({
 })
 
 http.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const payload = response.data as ApiEnvelope<unknown> | undefined
+    // Backend sometimes returns HTTP 200 with business code != 200.
+    if (
+      payload
+      && typeof payload === 'object'
+      && 'code' in payload
+      && payload.code != null
+      && Number(payload.code) !== 200
+    ) {
+      return Promise.reject(
+        new HttpRequestError(
+          String(payload.message || '请求失败，请稍后重试'),
+          Number(payload.code),
+          payload,
+        ),
+      )
+    }
+    return response
+  },
   (error) => {
     const message =
       error.response?.data?.message ?? error.message ?? '请求失败，请稍后重试'

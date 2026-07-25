@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AutoComplete, Card, Typography, Spin, Form, Input, Button, App, Descriptions, Tag, Divider, Space, Select, Modal } from 'antd'
+import { AutoComplete, Card, Typography, Spin, Form, Input, Button, App, Tag, Divider, Space, Select, Modal } from 'antd'
 import { AimOutlined, UserOutlined, EditOutlined, SaveOutlined, LockOutlined, EnvironmentOutlined, PlusOutlined } from '@ant-design/icons'
 
 import {
@@ -7,6 +7,7 @@ import {
   fetchAddressSuggestions,
   fetchElderAddresses,
   fetchProfileInfo,
+  resolveBrowserLocation,
   selectElderAddress,
   updateElderAddress,
   updateProfileInfo,
@@ -18,11 +19,12 @@ import { useSession } from '@/features/auth/useSession'
 import type { ProfileSnapshot } from '@/types/domain'
 import { roleLabels } from '@/types/domain'
 import { changePassword } from '@/services/adapters/auth-adapter'
-import { fetchDispatchTracking } from '@/services/adapters/dispatch-adapter'
+import { fetchDispatchTracking, updateElderDispatchLocation, updateVolunteerDispatchLocation } from '@/services/adapters/dispatch-adapter'
 import { fetchPublicRegionChildren, type PublicRegionNode } from '@/services/adapters/auth-adapter'
+import { captureBrowserLocation, formatAccuracyHint } from '@/utils/browser-geolocation'
 
 const dispatchSkillLabels: Record<string, string> = {
-  medical_support: '医疗陪护', emergency_response: '紧急响应', mobility_assist: '行动协助',
+  medical_support: '医疗陪护', emergency_response: '急救响应', mobility_assist: '行动辅助',
   errand: '代办采购', companion: '陪伴沟通', rehab: '康复训练',
   digital_assist: '智能设备协助', grooming: '生活照护',
 }
@@ -45,6 +47,7 @@ export default function ProfilePage() {
   const [selectedPoi, setSelectedPoi] = useState<AddressPoiSuggestion | null>(null)
   const [poiSearching, setPoiSearching] = useState(false)
   const [locationSaving, setLocationSaving] = useState(false)
+  const [liveLocationHint, setLiveLocationHint] = useState('')
   const poiTimerRef = useRef<number | null>(null)
   const [provinces, setProvinces] = useState<PublicRegionNode[]>([])
   const [cities, setCities] = useState<PublicRegionNode[]>([])
@@ -72,6 +75,18 @@ export default function ProfilePage() {
     if (session.role === 'elder') {
       fetchElderAddresses(session.userId).then(setAddresses).catch(() => setAddresses([]))
       fetchPublicRegionChildren().then(setProvinces).catch(() => setProvinces([]))
+      fetchDispatchTracking('elder', session.userId)
+        .then((tracking) => {
+          const elder = tracking.elders[0]
+          if (!elder) return
+          const source = elder.location_source || ''
+          if (source === 'browser_gps' || source === 'virtual') {
+            setLiveLocationHint(elder.address ? `当前服务点（实时）：${elder.address}` : '当前服务点为实时定位')
+          } else {
+            setLiveLocationHint(elder.address ? `当前服务点：${elder.address}` : '尚未设置当前服务点')
+          }
+        })
+        .catch(() => setLiveLocationHint(''))
     }
   }, [session])
 
@@ -210,25 +225,79 @@ export default function ProfilePage() {
     }, 350)
   }
 
-  const captureVolunteerLocation = () => {
-    if (!session || !navigator.geolocation) {
-      message.warning('当前浏览器未提供定位能力；按钮和后端接口已保留，正式联网环境可直接使用')
-      return
+  const locateErrorHint = (err: any, fallback: string) => {
+    const text = String(err?.message || '')
+    if (
+      text.includes('安全环境')
+      || text.includes('localhost')
+      || text.includes('HTTPS')
+      || text.includes('授权')
+      || text.includes('拦截定位')
+      || err?.code === 1
+    ) {
+      message.warning(text || fallback)
+    } else if (text.includes('定位') || text.includes('超时') || text.includes('不可用')) {
+      message.warning(text)
+    } else {
+      message.error(text || fallback)
     }
+  }
+
+  const captureVolunteerLocation = () => {
+    if (!session) return
     setLocationSaving(true)
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        updateVolunteerLiveLocation(session.userId, position.coords.longitude, position.coords.latitude)
-          .then((result) => message.success(result.message))
-          .catch((err: any) => message.error(err?.message || '当前位置不在注册服务区县内'))
-          .finally(() => setLocationSaving(false))
-      },
-      () => {
-        message.warning('暂未获得定位授权；正式部署时允许浏览器定位即可使用')
-        setLocationSaving(false)
-      },
-      { enableHighAccuracy: true, timeout: 12_000, maximumAge: 10_000 },
-    )
+    captureBrowserLocation()
+      .then((fix) =>
+        updateVolunteerLiveLocation(session.userId, fix.lng, fix.lat, { fromGps: fix.fromGps }).then(async (result) => {
+          const data = (result as { data?: { lng?: number; lat?: number } })?.data
+          const lng = Number(data?.lng ?? fix.lng)
+          const lat = Number(data?.lat ?? fix.lat)
+          // Keep dispatch tracking / admin overview on the same coords immediately.
+          await updateVolunteerDispatchLocation({
+            volunteerId: session.userId,
+            lng,
+            lat,
+            source: 'browser_gps',
+          }).catch(() => undefined)
+          message.success(`${result.message}（${formatAccuracyHint(fix.accuracyMeters, fix.source)}）`)
+        }),
+      )
+      .catch((err: any) => locateErrorHint(err, '当前环境无法定位，可先恢复默认位置'))
+      .finally(() => setLocationSaving(false))
+  }
+
+  const restoreVolunteerDefaultLocation = () => {
+    if (!session) return
+    setLocationSaving(true)
+    updateVolunteerDispatchLocation({
+      volunteerId: session.userId,
+      useHome: true,
+    })
+      .then((result) => message.success(result.message || '已恢复默认接单位置'))
+      .catch((err: any) => message.error(err?.message || '恢复默认位置失败'))
+      .finally(() => setLocationSaving(false))
+  }
+
+  const captureElderLocation = () => {
+    if (!session) return
+    setLocationSaving(true)
+    captureBrowserLocation()
+      .then((fix) =>
+        resolveBrowserLocation(session.userId, 'elder', fix.lng, fix.lat, { fromGps: fix.fromGps }).then(async (resolved) => {
+          await updateElderDispatchLocation({
+            userId: session.userId,
+            lng: resolved.lng,
+            lat: resolved.lat,
+            address: resolved.formattedAddress,
+            source: 'browser_gps',
+            syncDisplay: true,
+          })
+          setLiveLocationHint(`当前服务点（实时）：${resolved.formattedAddress}`)
+          message.success(`实时位置已更新（${formatAccuracyHint(fix.accuracyMeters, fix.source)}），家属端可见`)
+        }),
+      )
+      .catch((err: any) => locateErrorHint(err, '当前环境无法定位，请检查浏览器位置权限'))
+      .finally(() => setLocationSaving(false))
   }
 
   const handleSave = async () => {
@@ -297,33 +366,82 @@ export default function ProfilePage() {
 
       {!editing ? (
         <Card className="!rounded-2xl">
-          <Descriptions column={{ xs: 1, sm: 2 }} labelStyle={{ fontWeight: 600 }}>
-            <Descriptions.Item label="姓名">{profile.realName}</Descriptions.Item>
-            <Descriptions.Item label="角色">
+          <div className="grid gap-x-10 gap-y-4 sm:grid-cols-2">
+            <div className="flex gap-3 text-sm">
+              <span className="w-24 shrink-0 text-slate-500">姓名</span>
+              <span className="font-medium text-slate-900">{profile.realName}</span>
+            </div>
+            <div className="flex gap-3 text-sm">
+              <span className="w-24 shrink-0 text-slate-500">角色</span>
               <Tag color="blue">{roleLabels[profile.role]}</Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="手机">{profile.phone}</Descriptions.Item>
-            <Descriptions.Item label="邮箱">{profile.email || '-'}</Descriptions.Item>
+            </div>
+            <div className="flex gap-3 text-sm">
+              <span className="w-24 shrink-0 text-slate-500">手机</span>
+              <span className="text-slate-900">{profile.phone}</span>
+            </div>
+            <div className="flex gap-3 text-sm">
+              <span className="w-24 shrink-0 text-slate-500">邮箱</span>
+              <span className="text-slate-900">{profile.email || '-'}</span>
+            </div>
+            {(profile.role === 'elder' || profile.role === 'volunteer') && (
+              <div className="flex gap-3 text-sm sm:col-span-2">
+                <span className="w-24 shrink-0 text-slate-500">注册区县</span>
+                <span className="text-slate-900">{profile.regionName || profile.regionAdcode || '未配置'}</span>
+              </div>
+            )}
             {profile.role === 'elder' && (
-              <Descriptions.Item label="病史">{profile.medicalHistory || '无'}</Descriptions.Item>
+              <>
+                <div className="flex gap-3 text-sm sm:col-span-2">
+                  <span className="w-24 shrink-0 text-slate-500">病史</span>
+                  <span className="text-slate-900">{profile.medicalHistory || '无'}</span>
+                </div>
+                <div className="flex gap-3 text-sm sm:col-span-2">
+                  <span className="w-24 shrink-0 text-slate-500">实时位置</span>
+                  <div className="min-w-0 space-y-2">
+                    <Space wrap>
+                      <Button icon={<AimOutlined />} loading={locationSaving} onClick={captureElderLocation}>获取实时位置</Button>
+                    </Space>
+                    <div className="text-xs leading-5 text-slate-600">{liveLocationHint || '切换后家属端可看到当前服务点变化'}</div>
+                    <div className="text-xs leading-5 text-slate-500">请用 http://localhost:3000 打开并允许位置权限。地址簿不会被覆盖。</div>
+                  </div>
+                </div>
+              </>
             )}
             {profile.role === 'volunteer' && (
               <>
-                <Descriptions.Item label="技能简介">{profile.skills || '-'}</Descriptions.Item>
-                <Descriptions.Item label="调度认证技能" span={2}>
-                  {verifiedSkills.length ? <Space wrap>{verifiedSkills.map((skill) => <Tag color="green" key={skill}>{dispatchSkillLabels[skill] ?? skill}</Tag>)}</Space> : <span className="text-slate-500">暂无认证技能，无法参与智能派单</span>}
-                </Descriptions.Item>
-                <Descriptions.Item label="实时接单位置" span={2}>
-                  <Space wrap>
-                    <Button icon={<AimOutlined />} loading={locationSaving} onClick={captureVolunteerLocation}>获取实时位置</Button>
-                    <Typography.Text type="secondary">当前离线演示可不授权；正式部署后此按钮会把浏览器定位同步到所属服务区县。</Typography.Text>
-                  </Space>
-                </Descriptions.Item>
-                <Descriptions.Item label="总服务时长">{profile.totalHours ?? 0} 小时</Descriptions.Item>
-                <Descriptions.Item label="获赞">{profile.likesCount ?? 0}</Descriptions.Item>
+                <div className="flex gap-3 text-sm sm:col-span-2">
+                  <span className="w-24 shrink-0 text-slate-500">技能简介</span>
+                  <span className="text-slate-900">{profile.skills || '-'}</span>
+                </div>
+                <div className="flex gap-3 text-sm sm:col-span-2">
+                  <span className="w-24 shrink-0 text-slate-500">认证技能</span>
+                  <div>
+                    {verifiedSkills.length
+                      ? <Space size={[6, 6]} wrap>{verifiedSkills.map((skill) => <Tag color="green" key={skill}>{dispatchSkillLabels[skill] ?? skill}</Tag>)}</Space>
+                      : <span className="text-slate-500">暂无认证技能，无法参与智能派单</span>}
+                  </div>
+                </div>
+                <div className="flex gap-3 text-sm sm:col-span-2">
+                  <span className="w-24 shrink-0 text-slate-500">实时位置</span>
+                  <div className="min-w-0 space-y-2">
+                    <Space wrap>
+                      <Button icon={<AimOutlined />} loading={locationSaving} onClick={captureVolunteerLocation}>重新精确定位</Button>
+                      <Button loading={locationSaving} onClick={restoreVolunteerDefaultLocation}>恢复默认位置</Button>
+                    </Space>
+                    <div className="text-xs leading-5 text-slate-500">偏差大可重试或恢复默认位置</div>
+                  </div>
+                </div>
+                <div className="flex gap-3 text-sm">
+                  <span className="w-24 shrink-0 text-slate-500">服务时长</span>
+                  <span className="text-slate-900">{profile.totalHours ?? 0} 小时</span>
+                </div>
+                <div className="flex gap-3 text-sm">
+                  <span className="w-24 shrink-0 text-slate-500">获赞</span>
+                  <span className="text-slate-900">{profile.likesCount ?? 0}</span>
+                </div>
               </>
             )}
-          </Descriptions>
+          </div>
         </Card>
       ) : (
         <Card className="!rounded-2xl">

@@ -248,13 +248,22 @@ export default function RegisterPage() {
                     />
                   </Form.Item>
                 </div>
-                <Form.Item
-                  name="skills"
-                  label="技能与经验说明"
-                  extra="请描述会做什么、是否有证书或经验。管理员会根据说明分配并认证可接单技能。"
-                  rules={[{ required: true, message: '请填写技能与经验说明' }]}
-                >
-                  <Input.TextArea rows={4} maxLength={500} showCount placeholder="例如：持有红十字急救证；照护老人3年；可协助轮椅出行和陪同就医。" />
+                <Form.Item label="技能与经验说明" required>
+                  <Typography.Paragraph type="secondary" className="!mb-2 !text-sm">
+                    请描述会做什么、是否有证书或经验。管理员会根据说明分配并认证可接单技能。
+                  </Typography.Paragraph>
+                  <Form.Item
+                    name="skills"
+                    noStyle
+                    rules={[{ required: true, message: '请填写技能与经验说明' }]}
+                  >
+                    <Input.TextArea
+                      rows={4}
+                      maxLength={500}
+                      showCount
+                      placeholder="例如：持有红十字急救证；照护老人3年；可协助轮椅出行和陪同就医。"
+                    />
+                  </Form.Item>
                 </Form.Item>
                 <Form.Item name="provinceName" hidden><Input /></Form.Item>
                 <Form.Item name="cityName" hidden><Input /></Form.Item>

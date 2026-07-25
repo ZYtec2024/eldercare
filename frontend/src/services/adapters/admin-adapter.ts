@@ -60,12 +60,18 @@ function mapUserRow(row: Record<string, unknown>): AdminUserRow {
       elderId: toNumber(item.elderId ?? item.elder_id),
       name: String(item.name ?? ''),
       address: typeof item.address === 'string' ? item.address : undefined,
+      relationType: item.relation_type == null && item.relationType == null
+        ? undefined
+        : String(item.relationType ?? item.relation_type),
       regionAdcode: item.region_adcode == null && item.regionAdcode == null
         ? undefined
         : String(item.regionAdcode ?? item.region_adcode),
       regionName: item.region_name == null && item.regionName == null
         ? undefined
         : String(item.regionName ?? item.region_name),
+      inAdminScope: item.in_admin_scope == null && item.inAdminScope == null
+        ? undefined
+        : Boolean(item.inAdminScope ?? item.in_admin_scope),
     }))
   const regionAdcodes = Array.isArray(row.region_adcodes)
     ? row.region_adcodes.map(String)

@@ -1,4 +1,5 @@
-import { Button, Card, Typography } from 'antd'
+import { useEffect, useState } from 'react'
+import { Alert, Button, Card, Typography } from 'antd'
 import {
   AimOutlined,
   HeartOutlined,
@@ -9,6 +10,8 @@ import {
 import { useNavigate } from 'react-router-dom'
 
 import { useSession } from '@/features/auth/useSession'
+import { fetchPendingServices } from '@/services/adapters/elder-adapter'
+import type { PendingService } from '@/types/domain'
 
 const features = [
   {
@@ -44,6 +47,21 @@ const features = [
 export default function ElderDashboardPage() {
   const navigate = useNavigate()
   const { session } = useSession()
+  const [proxyOrders, setProxyOrders] = useState<PendingService[]>([])
+
+  useEffect(() => {
+    if (!session) return
+    const load = () => {
+      fetchPendingServices(session.userId)
+        .then((list) => {
+          setProxyOrders(list.filter((item) => item.isFamilyProxy && ['pending', 'accepted', 'in_progress'].includes(item.status)))
+        })
+        .catch(() => {})
+    }
+    load()
+    const timer = window.setInterval(load, 5000)
+    return () => window.clearInterval(timer)
+  }, [session?.userId])
 
   return (
     <div className="space-y-8">
@@ -65,6 +83,26 @@ export default function ElderDashboardPage() {
           我需要紧急帮助
         </Button>
       </div>
+
+      {proxyOrders.length ? (
+        <Alert
+          showIcon
+          type="warning"
+          message="家属已为您代下服务单"
+          description={(
+            <div className="space-y-2">
+              <div>
+                {proxyOrders.slice(0, 3).map((item) => (
+                  `${item.proxyFamilyName || '家属'} · ${item.serviceType}`
+                )).join('；')}
+              </div>
+              <Button size="small" type="link" className="!px-0" onClick={() => navigate('/elder/services')}>
+                去「谁在帮我」查看
+              </Button>
+            </div>
+          )}
+        />
+      ) : null}
 
       <div className="space-y-4">
         {features.map((f) => (

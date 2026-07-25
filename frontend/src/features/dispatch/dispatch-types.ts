@@ -48,6 +48,9 @@ export interface DispatchOrder {
   location_sharing_active?: boolean
   amap_marker_url?: string
   amap_navigation_url?: string
+  proxy_created_by?: number | null
+  proxy_family_name?: string | null
+  proxy_reason?: string | null
 }
 
 export interface DispatchCandidate {
@@ -79,7 +82,19 @@ export interface DispatchMapData {
   traffic_version: number
   traffic_cells: Array<{ x: number; y: number; level: 'green' | 'yellow' | 'red'; weight: number }>
   volunteers: Array<{ volunteer_id: number; name: string; lng: number; lat: number; availability: string; fatigue: number; rating: number; assigned_today: number; skills: string[]; location_source?: string; home_lng?: number | null; home_lat?: number | null; auto_accept_enabled?: boolean }>
-  elders: Array<{ elder_id: number; name: string; lng: number; lat: number; address?: string; location_source?: string; is_home_fixed?: boolean }>
+  elders: Array<{
+    elder_id: number
+    name: string
+    lng: number
+    lat: number
+    address?: string
+    default_address?: string
+    default_label?: string
+    default_lng?: number | null
+    default_lat?: number | null
+    location_source?: string
+    is_home_fixed?: boolean
+  }>
   orders: DispatchOrder[]
   routes: DispatchRoute[]
 }

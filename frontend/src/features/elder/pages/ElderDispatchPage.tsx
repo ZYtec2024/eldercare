@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Alert, App, Button, Card, DatePicker, Form, Input, InputNumber, Segmented, Select, Space, Tag, Typography } from 'antd'
 import { ClockCircleOutlined } from '@ant-design/icons'
 import { AimOutlined, EnvironmentOutlined, ThunderboltOutlined } from '@ant-design/icons'
@@ -11,6 +11,7 @@ import type { DispatchTracking } from '@/features/dispatch/dispatch-types'
 import { useSession } from '@/features/auth/useSession'
 import { cancelElderDispatchOrder, completeElderDispatchOrder, createDispatchOrder, fetchDispatchTracking, redispatchDispatchOrder, requestAdminForDispatchOrder } from '@/services/adapters/dispatch-adapter'
 import { resolveBrowserLocation, type ResolvedLiveLocation } from '@/services/adapters/profile-adapter'
+import { captureBrowserLocation, formatAccuracyHint, type BrowserGeoFix } from '@/utils/browser-geolocation'
 
 const stateLabel: Record<string, string> = {
   matching: '正在找人', waiting_response: '等待志愿者答应', accepted: '志愿者正在赶来', serving: '志愿者正在帮忙',
@@ -20,12 +21,12 @@ const stateLabel: Record<string, string> = {
 const phaseLabel: Record<string, string> = { top1: '正在联系最近的人', top3: '正在扩大寻找', top10: '继续寻找志愿者', fallback: '社区会帮忙安排', scheduled: '等待预约时间' }
 const volunteerStateLabel: Record<string, string> = { idle: '空闲', en_route: '正在前往', serving: '正在服务', returning: '正在返家', offline: '离线' }
 const volunteerStateColor: Record<string, string> = { idle: 'green', en_route: 'blue', serving: 'purple', returning: 'magenta', offline: 'default' }
-const skillLabel: Record<string, string> = { medical_support: '医疗陪护', emergency_response: '应急救援', mobility_assist: '行动协助', errand: '代办采购', rehab: '康复辅助', companion: '陪伴聊天', digital_assist: '智能设备协助', grooming: '生活照料' }
+const skillLabel: Record<string, string> = { medical_support: '医疗陪护', emergency_response: '急救响应', mobility_assist: '行动辅助', errand: '代办采购', rehab: '康复训练', companion: '陪伴沟通', digital_assist: '智能设备协助', grooming: '生活照护' }
 
 export default function ElderDispatchPage() {
   const { session } = useSession()
   const navigate = useNavigate()
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const [form] = Form.useForm()
   const [tracking, setTracking] = useState<DispatchTracking | null>(null)
   const [sending, setSending] = useState(false)
@@ -34,7 +35,11 @@ export default function ElderDispatchPage() {
   const [redispatchingOrder, setRedispatchingOrder] = useState<number | null>(null)
   const [requestingAdminOrder, setRequestingAdminOrder] = useState<number | null>(null)
   const [locationMode, setLocationMode] = useState<'address' | 'live'>('address')
-  const [liveLocation, setLiveLocation] = useState<ResolvedLiveLocation | null>(null)
+  const [draftLive, setDraftLive] = useState<ResolvedLiveLocation | null>(null)
+  const [locationAccuracy, setLocationAccuracy] = useState<number | null>(null)
+  const [locationSource, setLocationSource] = useState<BrowserGeoFix['source'] | null>(null)
+  const [confirmedMode, setConfirmedMode] = useState<'address' | 'live' | null>(null)
+  const [confirmedLive, setConfirmedLive] = useState<ResolvedLiveLocation | null>(null)
   const [locating, setLocating] = useState(false)
 
   const load = async () => {
@@ -44,35 +49,126 @@ export default function ElderDispatchPage() {
   }
   useEffect(() => { load().catch(() => {}); const timer = window.setInterval(() => load().catch(() => {}), 1200); return () => window.clearInterval(timer) }, [session?.userId])
 
+  const elderProfile = tracking?.elders[0]
+  const defaultAddress = elderProfile?.default_address || elderProfile?.address || '尚未设置当前地址'
+  const locationConfirmed = confirmedMode === locationMode
+    && (locationMode === 'address' || (locationMode === 'live' && !!confirmedLive && confirmedLive.lng === draftLive?.lng && confirmedLive.lat === draftLive?.lat))
+
+  const mapOverview = useMemo(() => {
+    if (!tracking) return null
+    if (locationMode === 'live' && draftLive) {
+      const elders = tracking.elders.map((item, index) => (
+        index === 0
+          ? { ...item, lng: draftLive.lng, lat: draftLive.lat, address: draftLive.formattedAddress, location_source: 'browser_gps', is_home_fixed: false }
+          : item
+      ))
+      return { ...tracking, elders }
+    }
+    if (locationMode === 'address' && elderProfile?.default_lng != null && elderProfile?.default_lat != null) {
+      const elders = tracking.elders.map((item, index) => (
+        index === 0
+          ? {
+              ...item,
+              lng: Number(elderProfile.default_lng),
+              lat: Number(elderProfile.default_lat),
+              address: defaultAddress,
+              location_source: 'address_book',
+              is_home_fixed: true,
+            }
+          : item
+      ))
+      return { ...tracking, elders }
+    }
+    return tracking
+  }, [tracking, locationMode, draftLive, elderProfile, defaultAddress])
+
+  const proxyOrders = (tracking?.orders ?? []).filter(
+    (order) => order.proxy_created_by && ['pending', 'accepted', 'in_progress'].includes(order.status),
+  )
+
+  const switchMode = (value: 'address' | 'live') => {
+    setLocationMode(value)
+    if (value === 'live' && confirmedMode === 'live' && confirmedLive) {
+      setDraftLive(confirmedLive)
+    }
+  }
+
   const captureLiveLocation = () => {
-    if (!session || !navigator.geolocation) {
-      message.warning('当前浏览器暂不支持定位；接口已保留，正式联网环境可直接使用')
+    if (!session) return
+    setLocating(true)
+    captureBrowserLocation()
+      .then((fix) =>
+        resolveBrowserLocation(session.userId, 'elder', fix.lng, fix.lat, { fromGps: fix.fromGps }).then((resolved) => {
+          // Preview only — do not persist into default address / elders.address.
+          setDraftLive(resolved)
+          setLocationAccuracy(fix.accuracyMeters)
+          setLocationSource(fix.source)
+          setLocationMode('live')
+          if (confirmedMode === 'live') {
+            setConfirmedMode(null)
+            setConfirmedLive(null)
+          }
+          message.success(`${formatAccuracyHint(fix.accuracyMeters, fix.source)}，请点确认`)
+        }),
+      )
+      .catch((err: any) => {
+        const text = String(err?.message || '')
+        if (
+          text.includes('安全环境')
+          || text.includes('localhost')
+          || text.includes('HTTPS')
+          || text.includes('授权')
+          || text.includes('拦截定位')
+          || err?.code === 1
+        ) {
+          message.warning(text || '当前环境无法定位，请改用默认地址')
+        } else if (text.includes('定位') || text.includes('超时') || text.includes('不可用')) {
+          message.warning(text)
+        } else {
+          message.error(text || '该区域尚未开通服务，无法使用实时位置')
+        }
+      })
+      .finally(() => setLocating(false))
+  }
+
+  const confirmLocation = () => {
+    if (locationMode === 'address') {
+      if (!elderProfile?.default_address && !elderProfile?.address) {
+        message.warning('请先在个人中心设置默认地址')
+        return
+      }
+      setConfirmedMode('address')
+      setConfirmedLive(null)
+      message.success('已确认使用默认地址')
       return
     }
-    setLocating(true)
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        resolveBrowserLocation(session.userId, 'elder', position.coords.longitude, position.coords.latitude)
-          .then((resolved) => {
-            setLiveLocation(resolved)
-            setLocationMode('live')
-            message.success('已获取本次派单实时位置')
-          })
-          .catch((err: any) => message.error(err?.message || '实时位置不在当前登记区县内'))
-          .finally(() => setLocating(false))
-      },
-      () => {
-        message.warning('未获得定位授权；可继续使用默认地址')
-        setLocating(false)
-      },
-      { enableHighAccuracy: true, timeout: 12_000, maximumAge: 10_000 },
-    )
+    if (!draftLive) {
+      message.warning('请先获取实时位置')
+      return
+    }
+    setConfirmedMode('live')
+    setConfirmedLive(draftLive)
+    message.success('已确认实时位置')
+  }
+
+  const remindConfirmLocation = () => {
+    const content = locationMode === 'live'
+      ? (!draftLive
+        ? '请先点击「获取实时位置」，再点「确认本次地址」，然后才能开始找人。'
+        : '请先点击「确认本次地址」，确认后才能开始找人。')
+      : '请先点击「确认本次地址」，确认服务位置后才能开始找人。也可切换实时位置后再确认。'
+    modal.warning({
+      title: '必须确认地址',
+      content,
+      okText: '知道了',
+      centered: true,
+    })
   }
 
   const submit = async (values: { serviceType: string; serviceHours?: number; serviceTime?: dayjs.Dayjs; notes?: string; requiredSkills?: string[] }) => {
     if (!session) return
-    if (locationMode === 'live' && !liveLocation) {
-      message.warning('请先点击“获取实时位置”，或改用默认地址')
+    if (!locationConfirmed || (locationMode === 'live' && !confirmedLive)) {
+      remindConfirmLocation()
       return
     }
     setSending(true)
@@ -90,8 +186,8 @@ export default function ElderDispatchPage() {
         notes: values.notes,
         requiredSkills,
         locationMode,
-        lng: liveLocation?.lng,
-        lat: liveLocation?.lat,
+        lng: confirmedLive?.lng,
+        lat: confirmedLive?.lat,
       })
       message.success(result.message)
       form.resetFields(['notes', 'requiredSkills'])
@@ -149,10 +245,20 @@ export default function ElderDispatchPage() {
     <div className="rounded-3xl bg-gradient-to-r from-indigo-700 via-blue-700 to-cyan-700 p-6 text-white shadow-xl">
       <Typography.Title level={2} className="!mb-2 !text-white">请人帮忙</Typography.Title>
       <Typography.Paragraph className="!text-blue-100 !mb-4 !text-base">
-        先选好家里地址，再说需要什么帮助。着急时请去「紧急求助」。
+        先确认服务地址，再说需要什么帮助。着急时请去「紧急求助」。
       </Typography.Paragraph>
       <Button danger size="large" onClick={() => navigate('/elder/sos')}>我很着急，去紧急求助</Button>
     </div>
+    {proxyOrders.length ? (
+      <Alert
+        showIcon
+        type="warning"
+        message="家属已为您代下服务单"
+        description={proxyOrders.slice(0, 3).map((order) => (
+          `${order.proxy_family_name || '家属'} · ${order.service_type} · ${order.address || '已选地址'}`
+        )).join('；') + '。可在下方查看进度，也可取消。'}
+      />
+    ) : null}
     <Alert showIcon type="info" message="大概会怎样" description="系统会先找附近合适的志愿者。有人答应后，您可以在下面看到谁正在赶来；赶来途中可取消，也可确认完成；开始服务后请确认完成。" />
     <div className="grid gap-6 xl:grid-cols-[380px_1fr]">
       <div className="space-y-6">
@@ -164,23 +270,38 @@ export default function ElderDispatchPage() {
               { label: '使用默认地址', value: 'address' },
               { label: '使用实时位置', value: 'live' },
             ]}
-            onChange={(value) => setLocationMode(value as 'address' | 'live')}
+            onChange={(value) => switchMode(value as 'address' | 'live')}
           />
-          <div className="rounded-xl bg-slate-50 p-4 text-base text-slate-700">
+          <div className="mt-3 rounded-xl bg-slate-50 p-4 text-base text-slate-700">
             {locationMode === 'live'
-              ? (liveLocation?.formattedAddress || '尚未获取实时位置')
-              : (tracking?.elders[0]?.address || '尚未设置当前地址')}
+              ? (draftLive?.formattedAddress || '尚未获取实时位置')
+              : defaultAddress}
+            {locationMode === 'live' && locationAccuracy != null ? (
+              <div className="mt-2 text-sm text-slate-500">{formatAccuracyHint(locationAccuracy, locationSource || undefined)}</div>
+            ) : null}
+            <div className="mt-2 text-sm text-slate-500">
+              {locationConfirmed
+                ? (locationMode === 'live' ? '已确认实时位置' : '已确认默认地址')
+                : (locationMode === 'live' ? '定位后请点确认' : '请确认后开始找人')}
+            </div>
           </div>
           {locationMode === 'live' ? (
-            <Button className="mt-3" block size="large" icon={<AimOutlined />} loading={locating} onClick={captureLiveLocation}>
-              获取实时位置
-            </Button>
-          ) : null}
-          {locationMode === 'address' ? (
+            <Space direction="vertical" className="mt-3 w-full" size="small">
+              <Button block size="large" icon={<AimOutlined />} loading={locating} onClick={captureLiveLocation}>
+                {draftLive ? '重新定位' : '获取实时位置'}
+              </Button>
+              {confirmedMode === 'live' && !locationConfirmed ? (
+                <div className="text-sm text-amber-700">位置已变，请重新点确认</div>
+              ) : null}
+            </Space>
+          ) : (
             <Button className="mt-3" block size="large" onClick={() => navigate('/profile')}>
-              修改、添加或切换地址
+              去个人中心改默认地址
             </Button>
-          ) : null}
+          )}
+          <Button className="mt-3" type="primary" block size="large" onClick={confirmLocation}>
+            确认本次地址
+          </Button>
         </Card>
         <Card className="!rounded-2xl"><Typography.Title level={4}>我要什么帮助</Typography.Title><Form form={form} layout="vertical" onFinish={submit} initialValues={{ serviceHours: 1, serviceTime: dayjs() }}>
           <Form.Item name="serviceType" label="帮助类型" rules={[{ required: true, message: '请选择' }]}><Select size="large" placeholder="请选择" options={tracking?.service_catalog.filter((item) => !item.urgent).map((item) => ({ value: item.code, label: item.label }))} onChange={(code) => {
@@ -211,10 +332,28 @@ export default function ElderDispatchPage() {
           <Form.Item name="notes" label="说明情况" rules={[{ required: true, message: '请简单说一下情况' }]}>
             <Input.TextArea rows={3} maxLength={500} placeholder="例如：腿脚不便需要扶一把；要带医保卡；家里有宠物请注意" className="!text-base" />
           </Form.Item>
-          <Button type="primary" htmlType="submit" block size="large" loading={sending} icon={<ThunderboltOutlined />}>开始找人</Button>
+          <Button
+            type="primary"
+            htmlType="submit"
+            block
+            size="large"
+            loading={sending}
+            icon={<ThunderboltOutlined />}
+            onClick={(event) => {
+              if (!locationConfirmed) {
+                event.preventDefault()
+                remindConfirmLocation()
+              }
+            }}
+          >
+            开始找人
+          </Button>
+          {!locationConfirmed ? (
+            <div className="mt-2 text-center text-sm text-amber-700">开始找人前，请先上方确认服务地址</div>
+          ) : null}
         </Form></Card>
       </div>
-      <div><DispatchMap overview={tracking} /><div className="mt-3 rounded-xl bg-sky-50 p-3 text-sm text-sky-900">{tracking?.privacy_message || '正在载入位置说明…'}<div className="mt-2"><Tag color="green">绿色：路况好</Tag><Tag color="gold">黄色：有点堵</Tag><Tag color="red">红色：很堵</Tag></div></div></div>
+      <div><DispatchMap overview={mapOverview} /><div className="mt-3 rounded-xl bg-sky-50 p-3 text-sm text-sky-900">{tracking?.privacy_message || '正在载入位置说明…'}<div className="mt-2"><Tag color="green">绿色：路况好</Tag><Tag color="gold">黄色：有点堵</Tag><Tag color="red">红色：很堵</Tag></div></div></div>
     </div>
     <div>
       <Typography.Title level={3}>进行中的帮助</Typography.Title>
@@ -223,10 +362,15 @@ export default function ElderDispatchPage() {
           <Card
             key={order.order_id}
             className="!rounded-2xl"
-            title={<Space><Tag color={order.urgency === 'sos' ? 'red' : 'blue'}>{order.urgency === 'sos' ? '紧急' : '普通'}</Tag><span>{order.service_type}</span></Space>}
+            title={<Space><Tag color={order.urgency === 'sos' ? 'red' : 'blue'}>{order.urgency === 'sos' ? '紧急' : '普通'}</Tag>{order.proxy_created_by ? <Tag color="gold">家属代下</Tag> : null}<span>{order.service_type}</span></Space>}
             extra={<Tag color={order.status === 'accepted' || order.status === 'in_progress' ? 'green' : 'orange'}>{stateLabel[order.dispatch_state] || order.dispatch_state}</Tag>}
           >
             <div className="space-y-2 text-base text-slate-600">
+              {order.proxy_created_by ? (
+                <div className="rounded-xl bg-amber-50 p-3 text-amber-900">
+                  {order.proxy_family_name || '家属'}已为您代下此单
+                </div>
+              ) : null}
               <div>地点：{order.address || '家里地址'}</div>
               {order.service_time ? <div>约定时间：{order.service_time}</div> : null}
               <div>进度：{phaseLabel[order.dispatch_phase || ''] || '正在安排'}</div>

@@ -58,7 +58,8 @@ export function buildHealthTrendOptions(snapshot: HealthTrendSnapshot) {
         type: 'line',
         smooth: true,
         data: snapshot.systolicSeries,
-        showSymbol: false,
+        showSymbol: true,
+        symbolSize: 8,
         lineStyle: { width: 3, color: '#ef4444' },
         itemStyle: { color: '#ef4444' },
         areaStyle: {
@@ -87,7 +88,8 @@ export function buildHealthTrendOptions(snapshot: HealthTrendSnapshot) {
         type: 'line',
         smooth: true,
         data: snapshot.diastolicSeries,
-        showSymbol: false,
+        showSymbol: true,
+        symbolSize: 7,
         lineStyle: { width: 2.5, color: '#f59e0b' },
         itemStyle: { color: '#f59e0b' },
         areaStyle: {
@@ -110,7 +112,8 @@ export function buildHealthTrendOptions(snapshot: HealthTrendSnapshot) {
         type: 'line',
         smooth: true,
         data: snapshot.heartRateSeries,
-        showSymbol: false,
+        showSymbol: true,
+        symbolSize: 7,
         lineStyle: { width: 2.5, color: '#059669' },
         itemStyle: { color: '#059669' },
         areaStyle: {

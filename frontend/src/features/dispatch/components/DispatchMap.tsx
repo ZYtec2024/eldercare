@@ -91,6 +91,21 @@ function loadAmap() {
   return amapLoader
 }
 
+function amapLoadHint(reason: string) {
+  const host = typeof window !== 'undefined' ? window.location.hostname : ''
+  if (!host) return reason
+  // Local demo: empty whitelist / “不校验” is safest. Adding only 127.0.0.1 while
+  // opening http://localhost blanks the map (INVALID_USER_DOMAIN).
+  return `${reason}。当前主机「${host}」。本地演示请把 JS Key 白名单清空或选不校验 Referer；不要只加 127.0.0.1（用 localhost 打开会整图空白）。若必须加白名单，请同时加 localhost 与 127.0.0.1`
+}
+
+function coordKey(prefix: string, id: number, lng?: number | null, lat?: number | null) {
+  if (lng == null || lat == null || Number.isNaN(Number(lng)) || Number.isNaN(Number(lat))) {
+    return `${prefix}${id}`
+  }
+  return `${prefix}${id}:${Number(lng).toFixed(5)},${Number(lat).toFixed(5)}`
+}
+
 function markerHtml(color: string, icon: string, text: string) {
   return `<div style="display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 2px 7px rgba(15,23,42,.35);color:#fff;font-size:12px;font-weight:700" title="${text}">${icon}</div>`
 }
@@ -244,6 +259,22 @@ export function DispatchMap({
       // Do not enable AMap.TileLayer.Traffic by default: its blue/green road wash
       // covers the whole map and makes our dispatch polylines hard to read.
       mapRef.current = map
+      // Desktop/mobile layouts often finish sizing after Map() constructs; force a
+      // resize so canvas is not stuck at 0×0 (blank gray box with no tiles).
+      const resize = () => map.resize?.()
+      requestAnimationFrame(resize)
+      window.setTimeout(resize, 120)
+      window.setTimeout(resize, 480)
+      const ro = typeof ResizeObserver !== 'undefined' && containerRef.current
+        ? new ResizeObserver(() => resize())
+        : null
+      ro?.observe(containerRef.current!)
+      map.on?.('error', (event: { message?: string; type?: string }) => {
+        if (!alive) return
+        const detail = String(event?.message || event?.type || '地图鉴权或瓦片加载失败')
+        setError(amapLoadHint(detail))
+        setStatus('error')
+      })
       let previousFrame = performance.now()
       const animateTrips = (now: number) => {
         const elapsed = Math.min(80, now - previousFrame)
@@ -263,7 +294,8 @@ export function DispatchMap({
       }
       animationFrameRef.current = requestAnimationFrame(animateTrips)
       setStatus('ready')
-    }).catch((reason: Error) => { if (alive) { setError(reason.message); setStatus('error') } })
+      ;(map as { __resizeObserver?: ResizeObserver | null }).__resizeObserver = ro
+    }).catch((reason: Error) => { if (alive) { setError(amapLoadHint(reason.message)); setStatus('error') } })
     return () => {
       alive = false
       overlaysRef.current.forEach((overlay) => overlay.setMap?.(null))
@@ -271,6 +303,8 @@ export function DispatchMap({
       if (animationFrameRef.current != null) cancelAnimationFrame(animationFrameRef.current)
       animatedTripsRef.current.forEach((trip) => trip.marker.setMap?.(null))
       animatedTripsRef.current.clear()
+      const map = mapRef.current as { __resizeObserver?: ResizeObserver | null } | null
+      map?.__resizeObserver?.disconnect?.()
       mapRef.current?.destroy?.()
       mapRef.current = null
     }
@@ -381,11 +415,13 @@ export function DispatchMap({
 
     // Fit once per privacy scope change (region + who is visible), so idle
     // elder/volunteer maps center on self instead of the whole district.
+    // Include rounded coordinates so live/default location changes refit the map.
+    map.resize?.()
     const focusKey = [
       overview.region_adcode ?? '',
-      ...overview.elders.map((item) => `e${item.elder_id}`),
-      ...overview.volunteers.map((item) => `v${item.volunteer_id}`),
-      ...overview.orders.filter((item) => item.lng != null).map((item) => `o${item.order_id}`),
+      ...overview.elders.map((item) => coordKey('e', item.elder_id, item.lng, item.lat)),
+      ...overview.volunteers.map((item) => coordKey('v', item.volunteer_id, item.lng, item.lat)),
+      ...overview.orders.map((item) => coordKey('o', item.order_id, item.lng, item.lat)),
       ...overview.routes.map((item) => `r${item.order_id}`),
     ].join('|')
     if (focusedRegionRef.current !== focusKey) {

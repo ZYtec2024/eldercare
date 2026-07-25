@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { App, Button, Card, Modal, Select, Space, Switch, Table, Tag, Typography } from 'antd'
+import { App, Button, Card, Checkbox, Modal, Select, Space, Switch, Table, Tag, Typography } from 'antd'
 import { EnvironmentOutlined, PlusOutlined, ReloadOutlined, UserAddOutlined, UserDeleteOutlined } from '@ant-design/icons'
 import { Navigate } from 'react-router-dom'
 
@@ -33,6 +33,7 @@ export default function AdminRegionsPage() {
   const [saving, setSaving] = useState(false)
   const [unbindTarget, setUnbindTarget] = useState<ManagedDispatchRegion>()
   const [unbindSelectedIds, setUnbindSelectedIds] = useState<number[]>([])
+  const [unbindAlsoDeactivate, setUnbindAlsoDeactivate] = useState(true)
   const [unbinding, setUnbinding] = useState(false)
   const [configuredProvince, setConfiguredProvince] = useState<string>()
   const [configuredCity, setConfiguredCity] = useState<string>()
@@ -174,6 +175,7 @@ export default function AdminRegionsPage() {
     }
     setUnbindTarget(row)
     setUnbindSelectedIds([])
+    setUnbindAlsoDeactivate(true)
   }
 
   const confirmUnbindManagers = async () => {
@@ -185,16 +187,25 @@ export default function AdminRegionsPage() {
     const selectedNames = (unbindTarget.managers || [])
       .filter((item) => unbindSelectedIds.includes(item.user_id))
       .map((item) => `${item.real_name}（${item.username}）`)
+    const remainingManagers = (unbindTarget.managers || []).filter(
+      (item) => !unbindSelectedIds.includes(item.user_id),
+    )
     setUnbinding(true)
     try {
       for (const managerUserId of unbindSelectedIds) {
         await unbindManagedDispatchRegionManager(unbindTarget.adcode, managerUserId, session.userId)
       }
-      message.success(
-        selectedNames.length === 1
-          ? `已解绑「${selectedNames[0]}」`
-          : `已解绑 ${selectedNames.length} 名区管理员`,
-      )
+      let successText = selectedNames.length === 1
+        ? `已解绑「${selectedNames[0]}」`
+        : `已解绑 ${selectedNames.length} 名区管理员`
+      if (unbindAlsoDeactivate && remainingManagers.length === 0 && unbindTarget.active) {
+        await patchManagedDispatchRegion(unbindTarget.adcode, {
+          adminUserId: session.userId,
+          active: false,
+        })
+        successText += '，并已解除开通（停用该区域）'
+      }
+      message.success(successText)
       setUnbindTarget(undefined)
       setUnbindSelectedIds([])
       await loadManaged()
@@ -409,7 +420,7 @@ export default function AdminRegionsPage() {
             },
             {
               title: '操作',
-              width: 240,
+              width: 300,
               render: (_, row) => (
                   <Space wrap>
                     <Button size="small" icon={<UserAddOutlined />} onClick={() => bindManager(row)}>绑定管理员</Button>
@@ -422,6 +433,11 @@ export default function AdminRegionsPage() {
                     >
                       解绑管理员
                     </Button>
+                    {row.active ? (
+                      <Button size="small" danger onClick={() => void toggleActive(row, false)}>解除开通</Button>
+                    ) : (
+                      <Button size="small" type="primary" ghost onClick={() => void toggleActive(row, true)}>重新开通</Button>
+                    )}
                   </Space>
                 ),
             },
@@ -462,6 +478,17 @@ export default function AdminRegionsPage() {
           optionFilterProp="label"
           showSearch
         />
+        <Checkbox
+          className="mt-4"
+          checked={unbindAlsoDeactivate}
+          onChange={(event) => setUnbindAlsoDeactivate(event.target.checked)}
+          disabled={
+            !unbindTarget?.active
+            || ((unbindTarget?.managers || []).filter((item) => !unbindSelectedIds.includes(item.user_id)).length > 0)
+          }
+        >
+          解绑后若该区无剩余管理员，同时解除开通（停用）
+        </Checkbox>
       </Modal>
     </div>
   )

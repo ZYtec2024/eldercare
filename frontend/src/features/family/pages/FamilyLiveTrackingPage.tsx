@@ -27,7 +27,18 @@ export default function FamilyLiveTrackingPage() {
     <Alert showIcon type="info" icon={<LockOutlined />} message={tracking?.privacy_message || '可一直查看绑定老人的固定或授权位置；当前无进行中服务时，地图不显示志愿者。'} />
     <DispatchMap overview={tracking} height={390} />
     <div className="rounded-xl bg-sky-50 p-3 text-sm text-sky-900"><Tag color="green">绿色：畅通</Tag><Tag color="gold">黄色：缓行</Tag><Tag color="red">红色：拥堵</Tag><span className="ml-2">有进行中服务时，路线颜色与志愿者状态与老人端同步。</span></div>
-    <div className="grid gap-4 md:grid-cols-2">{tracking?.elders.map((elder) => <Card key={elder.elder_id} className="!rounded-2xl" title={<Space><EnvironmentOutlined /><span>{elder.name}</span></Space>}><div className="text-sm text-slate-600"><div>固定服务点：{elder.address || '未填写'}</div><Tag className="mt-2" color={elder.is_home_fixed ? 'blue' : 'gold'}>{elder.is_home_fixed ? '固定住址' : '授权位置'}</Tag></div></Card>)}</div>
+    <div className="grid gap-4 md:grid-cols-2">{tracking?.elders.map((elder) => {
+      const source = elder.location_source || ''
+      const live = source === 'browser_gps' || source === 'virtual'
+      return (
+        <Card key={elder.elder_id} className="!rounded-2xl" title={<Space><EnvironmentOutlined /><span>{elder.name}</span></Space>}>
+          <div className="text-sm text-slate-600">
+            <div>当前服务点：{elder.address || '未填写'}</div>
+            <Tag className="mt-2" color={live ? 'gold' : 'blue'}>{live ? '实时位置' : '当前服务点'}</Tag>
+          </div>
+        </Card>
+      )
+    })}</div>
     <div><Typography.Title level={3}>服务订单与志愿者状态</Typography.Title><div className="grid gap-4 md:grid-cols-2">{tracking?.orders.length ? tracking.orders.map((order) => <Card key={order.order_id} className="!rounded-2xl" title={order.service_type} extra={<Tag color={order.location_sharing_active ? 'green' : order.status === 'completed' ? 'default' : 'orange'}>{statusLabel[order.status] || order.status}</Tag>}><div className="space-y-2 text-sm text-slate-600"><div>老人：{order.elder_name}</div><div>服务地址：{order.address || '固定住址'}</div><div>志愿者：{order.volunteer_name || '尚未接单'}</div>{order.volunteer_availability ? <Tag color={volunteerStateColor[order.volunteer_availability] || 'blue'}>当前状态：{volunteerStateLabel[order.volunteer_availability] || order.volunteer_availability}</Tag> : null}{order.location_sharing_active ? <><Tag color="green">志愿者位置与服务路线正在共享</Tag><LiveArrivalEstimate route={tracking.routes.find((route) => route.order_id === order.order_id)} />{order.amap_navigation_url ? <Button size="small" onClick={() => window.open(order.amap_navigation_url, '_blank', 'noopener,noreferrer')}>高德查看当前路线</Button> : null}</> : order.status === 'completed' ? <div><LockOutlined className="mr-1" />服务已结束，志愿者位置已锁定</div> : null}</div></Card>) : <Card className="!rounded-2xl text-slate-500">暂无已绑定长辈的智能调度订单。</Card>}</div></div>
   </div>
 }

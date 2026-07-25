@@ -22,6 +22,7 @@ from db import get_db_connection
 from region_service import (
     admin_is_root,
     amap_web_key,
+    canonicalize_active_adcode,
     enrich_missing_polygons,
     ensure_region_columns,
     fetch_district_children,
@@ -106,6 +107,21 @@ SKILL_LABELS = {
     "digital_assist": "智能设备协助",
     "grooming": "生活照护",
 }
+
+# Family/legacy aliases keep working for create APIs, but must not appear twice in UI lists.
+_SERVICE_CATALOG_UI_SKIP = {"代买物资"}
+
+
+def _public_service_catalog() -> list[dict[str, Any]]:
+    return [
+        {
+            "code": code,
+            **item,
+            "skill_labels": [SKILL_LABELS[tag] for tag in item["skills"]],
+        }
+        for code, item in SERVICE_CATALOG.items()
+        if code not in _SERVICE_CATALOG_UI_SKIP
+    ]
 
 
 def _normalize_required_skills(
@@ -619,6 +635,8 @@ def ensure_dispatch_schema() -> None:
             _ensure_column(cursor, "volunteer_location_state", "service_region_adcode", "VARCHAR(12) NOT NULL DEFAULT '310113'")
             _ensure_column(cursor, "elders", "region_adcode", "VARCHAR(12) NOT NULL DEFAULT '310113'")
             _ensure_column(cursor, "orders", "region_adcode", "VARCHAR(12) NOT NULL DEFAULT '310113'")
+            _ensure_column(cursor, "orders", "service_lng", "NUMERIC(10,6)")
+            _ensure_column(cursor, "orders", "service_lat", "NUMERIC(10,6)")
             _ensure_column(cursor, "orders", "proxy_created_by", "INT NULL")
             _ensure_column(cursor, "orders", "proxy_reason", "TEXT NULL")
             _ensure_column(cursor, "dispatch_orders", "region_adcode", "VARCHAR(12) NOT NULL DEFAULT '310113'")
@@ -1225,7 +1243,7 @@ def seed_regional_demo_data(conn: Any) -> None:
                         cursor.execute("""INSERT INTO volunteer_location_state
                                           (volunteer_id, lng, lat, home_lng, home_lat, service_region_adcode,
                                            availability, fatigue_score, service_rating, assigned_today, auto_accept_enabled)
-                                          VALUES (%s, %s, %s, %s, %s, %s, 'idle', %s, %s, 0, TRUE)""",
+                                          VALUES (%s, %s, %s, %s, %s, %s, 'idle', %s, %s, 0, FALSE)""",
                                        (volunteer_id, lng, lat, home_lng, home_lat, region_adcode, index * 5, 4.5 + (index % 3) / 10))
                     for skill in skills:
                         cursor.execute("SELECT 1 FROM volunteer_skill_tags WHERE volunteer_id = %s AND skill_tag = %s", (volunteer_id, skill))
@@ -1349,6 +1367,11 @@ def _region_for_point(lng: Any, lat: Any) -> str | None:
     return resolve_region_adcode(lng, lat, REGION_CATALOG)
 
 
+def _volunteer_current_region(lng: Any, lat: Any) -> str | None:
+    """District used for grab/match: where the volunteer is standing now."""
+    return _region_for_point(lng, lat)
+
+
 def _valid_region_point(lng: Any, lat: Any, region_adcode: str | None) -> tuple[float, float] | None:
     try:
         value_lng, value_lat = float(lng), float(lat)
@@ -1416,7 +1439,20 @@ def _valid_baoshan_point(lng: Any, lat: Any) -> tuple[float, float] | None:
 
 
 def _location_source(value: Any) -> str:
-    return str(value) if value in ("fixed_home", "browser_gps", "virtual", "simulated") else "virtual"
+    allowed = {
+        "fixed_home",
+        "browser_gps",
+        "browser_live",
+        "virtual",
+        "simulated",
+        "address_book",
+        "amap_geocode",
+        "home_default",
+    }
+    text = str(value or "").strip()
+    if text == "browser_live":
+        return "browser_gps"
+    return text if text in allowed else "virtual"
 
 
 def _amap_marker_url(lng: float, lat: float, name: str) -> str:
@@ -1541,7 +1577,8 @@ def _order_context(cursor: Any, order_id: int) -> dict[str, Any] | None:
                d.urgency, d.required_skills, d.dispatch_state, d.search_stage, d.dispatch_phase,
                d.phase_started_at, d.phase_expires_at, d.dispatch_version, d.last_expanded_at,
                d.priority_tier, d.forced_assignment, d.created_at, e.name AS elder_name,
-               el.lng AS elder_lng, el.lat AS elder_lat
+               COALESCE(o.service_lng, el.lng) AS elder_lng,
+               COALESCE(o.service_lat, el.lat) AS elder_lat
         FROM orders o
         JOIN dispatch_orders d ON d.order_id = o.order_id
         JOIN elders e ON e.elder_id = o.elder_id
@@ -1726,11 +1763,12 @@ def _volunteer_ready_for_new_dispatch(cursor: Any, volunteer_id: int, availabili
 def _candidate_rows(cursor: Any, order: dict[str, Any]) -> list[dict[str, Any]]:
     required = set(json.loads(order["required_skills"]))
     version = _traffic_version(cursor)
-    # Always score from the volunteer's current map point (lng/lat), never the
-    # home_lng/home_lat virtual base.  Returning volunteers are first projected
-    # onto their live return polyline so distance/ETA stay physical.
+    order_region = str(order.get("region_adcode") or "")
+    # Match by where the volunteer is standing now (opened district), not only
+    # the registered service_region_adcode. Returning volunteers are projected
+    # onto their live return polyline first so distance/ETA stay physical.
     cursor.execute("""SELECT volunteer_id FROM volunteer_location_state
-                      WHERE availability = 'returning' AND service_region_adcode = %s""", (order["region_adcode"],))
+                      WHERE availability = 'returning'""")
     for returning in cursor.fetchall():
         _materialize_return_position(cursor, int(returning["volunteer_id"]))
     cursor.execute("""
@@ -1743,7 +1781,7 @@ def _candidate_rows(cursor: Any, order: dict[str, Any]) -> list[dict[str, Any]]:
           ON vp.user_id = p.volunteer_id AND vp.audit_status = 'approved'
         JOIN volunteer_skill_tags s
           ON s.volunteer_id = p.volunteer_id AND s.verified = TRUE
-        WHERE u.role = 'volunteer' AND p.service_region_adcode = %s
+        WHERE u.role = 'volunteer'
           AND p.availability IN ('idle', 'returning')
           AND p.fatigue_score < 85
           AND NOT EXISTS (SELECT 1 FROM orders active WHERE active.volunteer_id = p.volunteer_id
@@ -1751,9 +1789,12 @@ def _candidate_rows(cursor: Any, order: dict[str, Any]) -> list[dict[str, Any]]:
         GROUP BY p.volunteer_id, p.lng, p.lat, p.availability, p.fatigue_score,
                  p.service_rating, p.assigned_today, p.auto_accept_enabled, u.real_name
         ORDER BY p.volunteer_id
-    """, (order["region_adcode"],))
+    """)
     candidates = []
     for volunteer in cursor.fetchall():
+        current_region = _volunteer_current_region(volunteer.get("lng"), volunteer.get("lat"))
+        if not current_region or current_region != order_region:
+            continue
         if not _volunteer_ready_for_new_dispatch(cursor, int(volunteer["volunteer_id"]), volunteer.get("availability")):
             continue
         skills = {tag for tag in str(volunteer.get("skill_tags_text") or "").split("|") if tag}
@@ -1765,9 +1806,6 @@ def _candidate_rows(cursor: Any, order: dict[str, Any]) -> list[dict[str, Any]]:
         rating = float(volunteer["service_rating"])
         distance_score = max(0.0, 100 - distance / FAR_RADIUS_KM * 100)
         traffic_score = max(0.0, 100 - eta / 35 * 100)
-        # Physical fatigue and fairness are related but not counted twice.
-        # Fatigue is accumulated only after a completed service; completed
-        # jobs make a smaller fairness adjustment for the rest of the day.
         fatigue_score = max(0.0, 100 - fatigue * .75 - int(volunteer["assigned_today"]) * 4)
         rating_score = min(100.0, rating / 5 * 100)
         total = round(distance_score * .40 + traffic_score * .25 + fatigue_score * .10 + rating_score * .25, 2)
@@ -1819,18 +1857,21 @@ def _next_assignment_preview(cursor: Any, volunteer_id: int) -> dict[str, Any] |
     skills = {tag for tag in str(volunteer.get("skills_text") or "").split("|") if tag}
     origin_lng = float(volunteer["lng"])
     origin_lat = float(volunteer["lat"])
+    standing_region = _volunteer_current_region(origin_lng, origin_lat)
+    if not standing_region:
+        return None
     cursor.execute("""
         SELECT o.order_id, o.service_type, o.address, d.urgency, d.required_skills,
-               e.name AS elder_name, e.address AS elder_address, el.lng, el.lat
+               e.name AS elder_name, e.address AS elder_address,
+               COALESCE(o.service_lng, el.lng) AS lng,
+               COALESCE(o.service_lat, el.lat) AS lat
         FROM orders o JOIN dispatch_orders d ON d.order_id = o.order_id
         JOIN elders e ON e.elder_id = o.elder_id
         JOIN elder_location_state el ON el.elder_id = o.elder_id
-        WHERE o.status = 'pending' AND o.region_adcode = (
-            SELECT service_region_adcode FROM volunteer_location_state WHERE volunteer_id = %s
-        )
+        WHERE o.status = 'pending' AND o.region_adcode = %s
         ORDER BY (d.urgency = 'sos') DESC, d.created_at ASC
         LIMIT 40
-    """, (volunteer_id,))
+    """, (standing_region,))
     best: dict[str, Any] | None = None
     version = _traffic_version(cursor)
     for row in cursor.fetchall():
@@ -1992,7 +2033,7 @@ def _waiting_sos_capacity_hold(
     """
     cursor.execute(
         """
-        SELECT availability, auto_accept_enabled, service_rating, service_region_adcode
+        SELECT availability, auto_accept_enabled, service_rating, service_region_adcode, lng, lat
         FROM volunteer_location_state
         WHERE volunteer_id = %s
         """,
@@ -2005,7 +2046,7 @@ def _waiting_sos_capacity_hold(
         return None
     if not _volunteer_ready_for_new_dispatch(cursor, volunteer_id, state.get("availability")):
         return None
-    region = str(state.get("service_region_adcode") or "")
+    region = _volunteer_current_region(state.get("lng"), state.get("lat")) or ""
     if not region:
         return None
     cursor.execute(
@@ -4346,26 +4387,37 @@ def _overview(cursor: Any, user_id: int | None = None, requested_region: str | N
                COALESCE(string_agg(s.skill_tag, '|'), '') AS skills_text
         FROM volunteer_location_state p JOIN users u ON u.user_id = p.volunteer_id
         LEFT JOIN volunteer_skill_tags s ON s.volunteer_id = p.volunteer_id
-        WHERE p.availability <> 'offline' AND p.service_region_adcode = %s
+        WHERE p.availability <> 'offline'
         GROUP BY p.volunteer_id, u.real_name, p.lng, p.lat, p.availability, p.fatigue_score, p.service_rating, p.assigned_today, p.auto_accept_enabled
         ORDER BY p.volunteer_id
-    """, (region_adcode,))
-    volunteers = [{
-        "volunteer_id": int(row["volunteer_id"]), "name": row["real_name"], "lng": float(row["lng"]), "lat": float(row["lat"]),
-        "availability": row["availability"], "fatigue": int(row["fatigue_score"]), "rating": float(row["service_rating"]),
-        "assigned_today": int(row["assigned_today"]), "auto_accept_enabled": bool(row["auto_accept_enabled"]), "skills": [tag for tag in str(row.get("skills_text") or "").split("|") if tag],
-    } for row in cursor.fetchall()]
+    """)
+    volunteers = []
+    for row in cursor.fetchall():
+        if _volunteer_current_region(row.get("lng"), row.get("lat")) != region_adcode:
+            continue
+        volunteers.append({
+            "volunteer_id": int(row["volunteer_id"]), "name": row["real_name"], "lng": float(row["lng"]), "lat": float(row["lat"]),
+            "availability": row["availability"], "fatigue": int(row["fatigue_score"]), "rating": float(row["service_rating"]),
+            "assigned_today": int(row["assigned_today"]), "auto_accept_enabled": bool(row["auto_accept_enabled"]), "skills": [tag for tag in str(row.get("skills_text") or "").split("|") if tag],
+        })
     cursor.execute("""
         SELECT e.elder_id, e.name, l.lng, l.lat FROM elder_location_state l
         JOIN elders e ON e.elder_id = l.elder_id
-        WHERE l.location_source <> 'hidden_demo' AND e.region_adcode = %s ORDER BY e.elder_id LIMIT 25
-    """, (region_adcode,))
-    elders = [{"elder_id": int(row["elder_id"]), "name": row["name"], "lng": float(row["lng"]), "lat": float(row["lat"])} for row in cursor.fetchall()]
+        WHERE l.location_source <> 'hidden_demo' ORDER BY e.elder_id LIMIT 80
+    """)
+    elders = []
+    for row in cursor.fetchall():
+        if _region_for_point(row.get("lng"), row.get("lat")) != region_adcode:
+            continue
+        elders.append({"elder_id": int(row["elder_id"]), "name": row["name"], "lng": float(row["lng"]), "lat": float(row["lat"])})
+        if len(elders) >= 25:
+            break
     cursor.execute("""
         SELECT o.order_id, o.service_type, o.status, o.volunteer_id, o.notes, v.real_name AS volunteer_name, e.name AS elder_name,
                d.urgency, d.dispatch_state, d.search_stage, d.dispatch_phase, d.phase_expires_at,
                d.dispatch_version, d.forced_assignment, d.created_at, o.service_time,
-               l.lng, l.lat
+               COALESCE(o.service_lng, l.lng) AS lng,
+               COALESCE(o.service_lat, l.lat) AS lat
         FROM dispatch_orders d JOIN orders o ON o.order_id = d.order_id
         JOIN elders e ON e.elder_id = o.elder_id JOIN elder_location_state l ON l.elder_id = e.elder_id
         LEFT JOIN users v ON v.user_id = o.volunteer_id
@@ -4396,10 +4448,12 @@ def _overview(cursor: Any, user_id: int | None = None, requested_region: str | N
     # Return journeys are part of the real command map too.  Previously only
     # the volunteer portal received them, which made the commander view look
     # as if a completed volunteer had teleported home.
-    cursor.execute("""SELECT r.volunteer_id
+    cursor.execute("""SELECT r.volunteer_id, p.lng, p.lat
                       FROM volunteer_return_routes r JOIN volunteer_location_state p ON p.volunteer_id = r.volunteer_id
-                      WHERE p.service_region_adcode = %s ORDER BY r.updated_at DESC LIMIT 20""", (region_adcode,))
+                      ORDER BY r.updated_at DESC LIMIT 40""")
     for row in cursor.fetchall():
+        if _volunteer_current_region(row.get("lng"), row.get("lat")) != region_adcode:
+            continue
         route = _return_route_for_volunteer(cursor, int(row["volunteer_id"]))
         if route:
             routes.append(route)
@@ -4457,7 +4511,7 @@ def _overview(cursor: Any, user_id: int | None = None, requested_region: str | N
             "region_name": REGION_CATALOG[region_adcode]["name"], "grid_size": 1, "traffic_version": version, "traffic_cells": [],
             "volunteers": volunteers, "elders": elders, "orders": orders, "routes": routes, "candidates": candidates, "events": events,
             "summary": summary,
-            "service_catalog": [{"code": code, **item, "skill_labels": [SKILL_LABELS[tag] for tag in item["skills"]]} for code, item in SERVICE_CATALOG.items()],
+            "service_catalog": _public_service_catalog(),
             "skill_options": [{"code": code, "label": label} for code, label in SKILL_LABELS.items()],
         }
 
@@ -4467,7 +4521,7 @@ def _tracking_shell(cursor: Any) -> dict[str, Any]:
     return {
         "bounds": MAP_BOUNDS, "grid_size": 1, "traffic_version": version,
         "traffic_cells": [], "volunteers": [], "elders": [], "orders": [], "routes": [],
-        "service_catalog": [{"code": code, **item, "skill_labels": [SKILL_LABELS[tag] for tag in item["skills"]]} for code, item in SERVICE_CATALOG.items()],
+        "service_catalog": _public_service_catalog(),
         "skill_options": [{"code": code, "label": label} for code, label in SKILL_LABELS.items()],
     }
 
@@ -4495,32 +4549,49 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
     active_statuses = ("accepted", "in_progress")
     if role == "elder":
         cursor.execute("""
-            SELECT e.elder_id, e.name, e.address, e.region_adcode, l.lng, l.lat, l.location_source, l.is_home_fixed
-            FROM elders e JOIN elder_location_state l ON l.elder_id = e.elder_id
+            SELECT e.elder_id, e.name, e.address, e.region_adcode, l.lng, l.lat, l.location_source, l.is_home_fixed,
+                   ea.full_address AS default_address, ea.lng AS default_lng, ea.lat AS default_lat,
+                   ea.label AS default_label
+            FROM elders e
+            JOIN elder_location_state l ON l.elder_id = e.elder_id
+            LEFT JOIN elder_addresses ea ON ea.elder_id = e.elder_id AND ea.is_current = TRUE
             WHERE e.user_id = %s
         """, (user_id,))
         elder = cursor.fetchone()
         if not elder:
             return None
-        _set_tracking_region(payload, elder.get("region_adcode"))
+        standing_region = _region_for_point(elder.get("lng"), elder.get("lat"))
+        _set_tracking_region(payload, standing_region or elder.get("region_adcode"))
+        default_address = elder.get("default_address") or elder.get("address")
         payload["elders"] = [{
-            "elder_id": int(elder["elder_id"]), "name": elder["name"], "address": elder["address"],
-            "lng": float(elder["lng"]), "lat": float(elder["lat"]), "location_source": elder["location_source"],
+            "elder_id": int(elder["elder_id"]), "name": elder["name"],
+            "address": default_address,
+            "default_address": default_address,
+            "default_label": elder.get("default_label") or "家",
+            "default_lng": float(elder["default_lng"]) if elder.get("default_lng") is not None else None,
+            "default_lat": float(elder["default_lat"]) if elder.get("default_lat") is not None else None,
+            "lng": float(elder["lng"]), "lat": float(elder["lat"]),
+            "location_source": elder["location_source"],
             "is_home_fixed": bool(elder["is_home_fixed"]),
         }]
         cursor.execute("""
             SELECT o.order_id, o.service_type, o.service_time, o.status, o.volunteer_id, o.address AS order_address,
+                   o.service_lng, o.service_lat, o.proxy_created_by, o.proxy_reason,
                    d.urgency, d.dispatch_state, d.search_stage, d.dispatch_phase, d.phase_expires_at, d.forced_assignment,
                    u.real_name AS volunteer_name, p.lng AS volunteer_lng, p.lat AS volunteer_lat, p.availability, p.service_rating,
+                   pu.real_name AS proxy_family_name,
                    COALESCE((SELECT string_agg(s.skill_tag, '|') FROM volunteer_skill_tags s
                              WHERE s.volunteer_id = o.volunteer_id), '') AS volunteer_skills_text
             FROM orders o JOIN dispatch_orders d ON d.order_id = o.order_id
             LEFT JOIN users u ON u.user_id = o.volunteer_id
+            LEFT JOIN users pu ON pu.user_id = o.proxy_created_by
             LEFT JOIN volunteer_location_state p ON p.volunteer_id = o.volunteer_id
             WHERE o.elder_id = %s AND o.status != 'cancelled' ORDER BY d.created_at DESC LIMIT 20
         """, (elder["elder_id"],))
         rows = cursor.fetchall()
         for row in rows:
+            service_lng = float(row["service_lng"]) if row.get("service_lng") is not None else float(elder["lng"])
+            service_lat = float(row["service_lat"]) if row.get("service_lat") is not None else float(elder["lat"])
             item = {
                 "order_id": int(row["order_id"]), "service_type": row["service_type"], "status": row["status"],
                 "service_time": _service_time_text(row.get("service_time")),
@@ -4531,7 +4602,11 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
                 "volunteer_skills": [tag for tag in str(row.get("volunteer_skills_text") or "").split("|") if tag],
                 "dispatch_state": row["dispatch_state"], "search_stage": int(row["search_stage"]),
                 "dispatch_phase": row["dispatch_phase"], "phase_expires_at": _iso(row["phase_expires_at"]),
-                "forced_assignment": bool(row["forced_assignment"]), "address": row["order_address"] or elder["address"],
+                "forced_assignment": bool(row["forced_assignment"]),
+                "address": row["order_address"] or default_address,
+                "proxy_created_by": int(row["proxy_created_by"]) if row.get("proxy_created_by") else None,
+                "proxy_family_name": row.get("proxy_family_name"),
+                "proxy_reason": row.get("proxy_reason"),
             }
             if row["status"] in active_statuses and row["volunteer_id"]:
                 volunteer = {
@@ -4543,7 +4618,9 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
                 payload["volunteers"].append(volunteer)
                 payload["routes"].extend([route for route in [_route_for_order(cursor, int(row["order_id"]))] if route])
                 item["location_sharing_active"] = True
-                item["amap_navigation_url"] = _amap_navigation_url(volunteer["lng"], volunteer["lat"], float(elder["lng"]), float(elder["lat"]), f"{elder['name']}服务点")
+                item["amap_navigation_url"] = _amap_navigation_url(
+                    volunteer["lng"], volunteer["lat"], service_lng, service_lat, f"{elder['name']}服务点",
+                )
             else:
                 # Pending / completed: never expose volunteer return-home state on ended orders.
                 item["location_sharing_active"] = False
@@ -4568,7 +4645,8 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
         volunteer = cursor.fetchone()
         if not volunteer:
             return None
-        _set_tracking_region(payload, volunteer.get("service_region_adcode"))
+        standing_region = _region_for_point(volunteer.get("lng"), volunteer.get("lat"))
+        _set_tracking_region(payload, standing_region or volunteer.get("service_region_adcode"))
         own = {
             "volunteer_id": int(volunteer["volunteer_id"]), "name": volunteer["real_name"], "lng": float(volunteer["lng"]),
             "lat": float(volunteer["lat"]), "availability": volunteer["availability"], "fatigue": int(volunteer["fatigue_score"]),
@@ -4584,7 +4662,9 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
         # the admin log and looked like the return journey simply stopped.
         cursor.execute("""
             SELECT o.order_id, o.service_type, e.name AS elder_name, o.address,
-                   d.urgency, el.lng, el.lat
+                   d.urgency,
+                   COALESCE(o.service_lng, el.lng) AS lng,
+                   COALESCE(o.service_lat, el.lat) AS lat
             FROM orders o JOIN dispatch_orders d ON d.order_id = o.order_id
             JOIN elders e ON e.elder_id = o.elder_id
             JOIN elder_location_state el ON el.elder_id = e.elder_id
@@ -4609,7 +4689,8 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
             payload["routes"].append(return_route)
         cursor.execute("""
             SELECT DISTINCT o.order_id, o.service_type, o.status, o.volunteer_id, o.address AS order_address,
-                   e.elder_id, e.name AS elder_name, e.address AS elder_address, l.lng, l.lat,
+                   e.elder_id, e.name AS elder_name, e.address AS elder_address,
+                   COALESCE(o.service_lng, l.lng) AS lng, COALESCE(o.service_lat, l.lat) AS lat,
                    d.urgency, d.dispatch_state, d.search_stage, d.forced_assignment
             FROM orders o JOIN dispatch_orders d ON d.order_id = o.order_id
             JOIN elders e ON e.elder_id = o.elder_id JOIN elder_location_state l ON l.elder_id = e.elder_id
@@ -4796,6 +4877,29 @@ def _build_live_notices(cursor: Any, user_id: int) -> list[dict[str, Any]]:
                 level="error" if is_sos else "success",
                 action_path=f"/conversations?id={conv}" if conv else "/elder/dispatch",
             )
+        # Yellow health-warning toasts for the elder themselves.
+        cursor.execute(
+            """
+            SELECT a.alert_id, a.description
+            FROM alerts a
+            JOIN elders e ON e.elder_id = a.elder_id
+            WHERE e.user_id = %s
+              AND a.alert_type = 'health_warning'
+              AND COALESCE(a.is_handled, FALSE) = FALSE
+            ORDER BY a.alert_id DESC
+            LIMIT 5
+            """,
+            (user_id,),
+        )
+        for row in cursor.fetchall():
+            # No notification_id: closing toast must not mark the alert handled.
+            _push(
+                notice_key=f"elder-health-{row['alert_id']}",
+                title="健康打卡异常提醒",
+                body=str(row.get("description") or "今日健康指标异常，请留意身体状况"),
+                level="warning",
+                action_path="/elder/checkin",
+            )
 
     elif role == "family":
         cursor.execute(
@@ -4831,6 +4935,29 @@ def _build_live_notices(cursor: Any, user_id: int) -> list[dict[str, Any]]:
                 level="error",
                 action_path=f"/conversations?id={conv}" if conv else "/family/alerts",
                 notification_id=int(row["notification_id"]),
+            )
+        cursor.execute(
+            """
+            SELECT a.alert_id, a.description, e.name AS elder_name
+            FROM alerts a
+            JOIN elders e ON e.elder_id = a.elder_id
+            JOIN user_elder_relation uer ON uer.elder_id = a.elder_id
+            WHERE uer.family_user_id = %s
+              AND a.alert_type = 'health_warning'
+              AND COALESCE(a.is_handled, FALSE) = FALSE
+            ORDER BY a.alert_id DESC
+            LIMIT 8
+            """,
+            (user_id,),
+        )
+        for row in cursor.fetchall():
+            # No notification_id: family must click「确认已知晓」on alerts page.
+            _push(
+                notice_key=f"family-health-{row['alert_id']}",
+                title=f"健康异常 · {row.get('elder_name') or '长辈'}",
+                body=str(row.get("description") or "长辈健康打卡出现异常指标"),
+                level="warning",
+                action_path="/family/alerts",
             )
 
         cursor.execute(
@@ -5058,6 +5185,8 @@ def dismiss_live_notice():
     try:
         with conn.cursor() as cursor:
             if notification_id:
+                # Closing a toast only marks SOS in-app notifications read.
+                # Health warnings stay "待确认" until family clicks 我知道了.
                 cursor.execute(
                     """UPDATE emergency_notifications
                        SET read_at = COALESCE(read_at, CURRENT_TIMESTAMP)
@@ -5124,17 +5253,14 @@ def update_elder_location():
                 return jsonify({"code": 404, "message": "当前账号没有老人档案"}), 404
             resolved_region = _region_for_point(data.get("lng"), data.get("lat"))
             if not resolved_region:
-                return jsonify({"code": 400, "message": "该定位不在已开通的服务区县内，请联系总管理员开通后再使用"}), 400
+                return jsonify({"code": 400, "message": "该区域尚未开通服务，无法更新定位"}), 400
             point = _valid_region_point(data.get("lng"), data.get("lat"), resolved_region)
             if not point:
-                return jsonify({"code": 400, "message": "定位必须位于所属服务区县范围内"}), 400
+                return jsonify({"code": 400, "message": "定位必须位于已开通服务区县范围内"}), 400
             elder_id = int(elder["elder_id"])
             previous_region = str(elder.get("region_adcode") or DEFAULT_REGION_ADCODE)
-            if resolved_region != previous_region:
-                cursor.execute("""SELECT 1 FROM orders WHERE elder_id = %s
-                                  AND status IN ('pending', 'accepted', 'in_progress') LIMIT 1""", (elder_id,))
-                if cursor.fetchone():
-                    return jsonify({"code": 409, "message": "当前有未关闭订单，完成或取消后才能变更所属区县"}), 409
+            # Registered district (elders.region_adcode) is immutable after signup.
+            # Live/default pin updates only move location_state / display address.
             cursor.execute("SELECT elder_id FROM elder_location_state WHERE elder_id = %s", (elder_id,))
             values = (point[0], point[1], source, source == "fixed_home", elder_id)
             if cursor.fetchone():
@@ -5143,13 +5269,25 @@ def update_elder_location():
             else:
                 cursor.execute("""INSERT INTO elder_location_state (elder_id, lng, lat, location_source, is_home_fixed)
                                   VALUES (%s, %s, %s, %s, %s)""", (elder_id, point[0], point[1], source, source == "fixed_home"))
-            if address:
-                cursor.execute("UPDATE elders SET address = %s, region_adcode = %s WHERE elder_id = %s", (address, resolved_region, elder_id))
-            elif resolved_region != previous_region:
-                cursor.execute("UPDATE elders SET region_adcode = %s WHERE elder_id = %s", (resolved_region, elder_id))
+            # Address-book rows stay untouched. Display text updates when the
+            # client asks to sync (profile live locate) so family/admin see it.
+            sync_display = bool(data.get("sync_display")) or source not in {"browser_gps", "virtual"}
+            if address and sync_display:
+                cursor.execute("UPDATE elders SET address = %s WHERE elder_id = %s", (address, elder_id))
             _event(cursor, None, "elder_location_updated", "老人服务位置已更新", {"elder_id": elder_id, "source": source})
             conn.commit()
-            return jsonify({"code": 200, "message": "服务位置已保存，后续派单将使用此位置", "data": {"lng": point[0], "lat": point[1], "source": source}})
+            return jsonify({
+                "code": 200,
+                "message": "当前服务点已更新，家属端可见；注册区县保持不变",
+                "data": {
+                    "lng": point[0],
+                    "lat": point[1],
+                    "source": source,
+                    "address": address or elder.get("address"),
+                    "standing_region_adcode": resolved_region,
+                    "registered_region_adcode": previous_region,
+                },
+            })
     except Exception as exc:
         conn.rollback()
         return jsonify({"code": 500, "message": f"保存老人位置失败: {exc}"}), 500
@@ -5163,24 +5301,45 @@ def update_volunteer_location():
     volunteer_id = data.get("volunteer_id")
     if not volunteer_id:
         return jsonify({"code": 400, "message": "缺少志愿者编号"}), 400
-    source = _location_source(data.get("source"))
+    use_home = bool(data.get("use_home")) or str(data.get("source") or "").strip().lower() in {
+        "home_default", "default", "registered_home",
+    }
+    source = "home_default" if use_home else _location_source(data.get("source"))
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT volunteer_id, service_region_adcode, availability FROM volunteer_location_state WHERE volunteer_id = %s", (volunteer_id,))
+            cursor.execute(
+                """SELECT volunteer_id, service_region_adcode, availability, home_lng, home_lat
+                   FROM volunteer_location_state WHERE volunteer_id = %s""",
+                (volunteer_id,),
+            )
             volunteer = cursor.fetchone()
             if not volunteer:
                 return jsonify({"code": 404, "message": "当前账号没有志愿者定位档案"}), 404
-            point = _valid_region_point(data.get("lng"), data.get("lat"), volunteer.get("service_region_adcode"))
+            if use_home:
+                home_lng = volunteer.get("home_lng")
+                home_lat = volunteer.get("home_lat")
+                if home_lng is None or home_lat is None:
+                    return jsonify({"code": 400, "message": "尚未配置默认接单位置，请先在调度页设置虚拟出发地"}), 400
+                lng, lat = float(home_lng), float(home_lat)
+            else:
+                lng, lat = data.get("lng"), data.get("lat")
+            # Match/grab uses standing district from lng/lat; allow any opened region.
+            resolved_region = _region_for_point(lng, lat)
+            if not resolved_region:
+                return jsonify({"code": 400, "message": "该区域尚未开通服务，无法更新定位"}), 400
+            point = _valid_region_point(lng, lat, resolved_region)
             if not point:
-                if not is_active_region(volunteer.get("service_region_adcode"), REGION_CATALOG):
-                    return jsonify({"code": 400, "message": "您所属服务区县尚未开通或已停用，暂无法更新定位"}), 400
-                return jsonify({"code": 400, "message": "定位必须位于所属服务区县范围内"}), 400
+                return jsonify({"code": 400, "message": "定位必须位于已开通服务区县范围内"}), 400
             cursor.execute("""UPDATE volunteer_location_state SET lng = %s, lat = %s, location_source = %s,
                               updated_at = CURRENT_TIMESTAMP WHERE volunteer_id = %s""", (point[0], point[1], source, volunteer_id))
             _event(cursor, None, "volunteer_location_updated", "志愿者位置已更新", {"volunteer_id": int(volunteer_id), "source": source})
             conn.commit()
-            return jsonify({"code": 200, "message": "当前位置已更新", "data": {"lng": point[0], "lat": point[1], "source": source}})
+            return jsonify({
+                "code": 200,
+                "message": "已恢复默认接单位置" if use_home else "当前位置已更新",
+                "data": {"lng": point[0], "lat": point[1], "source": source, "standing_region_adcode": resolved_region},
+            })
     except Exception as exc:
         conn.rollback()
         return jsonify({"code": 500, "message": f"保存志愿者位置失败: {exc}"}), 500
@@ -5208,18 +5367,13 @@ def update_volunteer_preferences():
                 return jsonify({"code": 400, "message": "目标服务区县尚未开通或已停用"}), 400
             home = _valid_region_point(data.get("home_lng"), data.get("home_lat"), resolved_region) if data.get("home_lng") is not None else None
             if data.get("home_lng") is not None and not home:
-                return jsonify({"code": 400, "message": "家庭虚拟位置必须位于所属服务区县范围内"}), 400
+                return jsonify({"code": 400, "message": "家庭虚拟位置必须位于已开通服务区县范围内"}), 400
             auto_accept = bool(data.get("auto_accept_enabled"))
-            previous_region = str(volunteer.get("service_region_adcode") or DEFAULT_REGION_ADCODE)
-            if resolved_region != previous_region:
-                cursor.execute("""SELECT 1 FROM orders WHERE volunteer_id = %s
-                                  AND status IN ('accepted', 'in_progress') LIMIT 1""", (volunteer_id,))
-                if cursor.fetchone():
-                    return jsonify({"code": 409, "message": "当前有进行中服务，结束后才能变更服务区县"}), 409
+            # service_region_adcode is the signup registration district — never rewrite it here.
             if home:
                 cursor.execute("""UPDATE volunteer_location_state SET home_lng = %s, home_lat = %s,
-                                  service_region_adcode = %s, auto_accept_enabled = %s, updated_at = CURRENT_TIMESTAMP WHERE volunteer_id = %s""",
-                               (home[0], home[1], resolved_region, auto_accept, volunteer_id))
+                                  auto_accept_enabled = %s, updated_at = CURRENT_TIMESTAMP WHERE volunteer_id = %s""",
+                               (home[0], home[1], auto_accept, volunteer_id))
             else:
                 cursor.execute("""UPDATE volunteer_location_state SET auto_accept_enabled = %s,
                                   updated_at = CURRENT_TIMESTAMP WHERE volunteer_id = %s""", (auto_accept, volunteer_id))
@@ -5313,6 +5467,179 @@ def elder_orders():
         conn.close()
 
 
+def _active_adcode_for_point(
+    lng: float,
+    lat: float,
+    *,
+    hint_adcode: str | None = None,
+) -> str | None:
+    """Resolve an opened district for a service point; prefer polygon match."""
+    matched = resolve_region_adcode(lng, lat, REGION_CATALOG)
+    canon = canonicalize_active_adcode(matched, REGION_CATALOG)
+    if canon:
+        return canon
+    canon = canonicalize_active_adcode(hint_adcode, REGION_CATALOG)
+    if canon:
+        return canon
+    try:
+        geo = reverse_geocode(lng, lat, from_gps=False)
+    except Exception:
+        return None
+    return canonicalize_active_adcode(str(geo.get("adcode") or ""), REGION_CATALOG)
+
+
+def resolve_elder_service_point(
+    cursor: Any,
+    *,
+    elder_id: int,
+    location_mode: str = "address",
+    address_id: int | None = None,
+    lng: float | None = None,
+    lat: float | None = None,
+    address: str | None = None,
+    sync_pin: bool = False,
+) -> dict[str, Any]:
+    """Resolve order/SOS service point from confirmed location (not signup district).
+
+    Returns ``region_adcode``, ``lng``, ``lat``, ``address``. Raises ``ValueError``
+    when the point is missing or the district is not opened.
+    """
+    cursor.execute("SELECT elder_id, region_adcode, address FROM elders WHERE elder_id = %s", (elder_id,))
+    elder = cursor.fetchone()
+    if not elder:
+        raise ValueError("elder profile not found")
+    mode = str(location_mode or "address").strip().lower()
+    if mode == "live":
+        mode = "current"
+    if mode not in ("address", "current"):
+        mode = "address"
+    home_region = str(elder.get("region_adcode") or DEFAULT_REGION_ADCODE)
+    service_address = str(address or "").strip() or None
+    service_lng: float | None = None
+    service_lat: float | None = None
+    region_adcode: str | None = None
+    pin_source = "address_book"
+    home_fixed = True
+
+    if mode == "current":
+        point_lng, point_lat = lng, lat
+        if point_lng is None or point_lat is None:
+            cursor.execute(
+                """SELECT lng, lat FROM elder_location_state WHERE elder_id = %s""",
+                (elder_id,),
+            )
+            pin = cursor.fetchone() or {}
+            point_lng, point_lat = pin.get("lng"), pin.get("lat")
+        if point_lng is None or point_lat is None:
+            raise ValueError("请先确认本次服务位置（默认地址或实时定位）")
+        try:
+            service_location = reverse_geocode(point_lng, point_lat, from_gps=False)
+        except Exception as exc:
+            raise ValueError(f"当前服务点不可用：{exc}") from exc
+        service_lng = float(service_location["lng"])
+        service_lat = float(service_location["lat"])
+        region_adcode = _active_adcode_for_point(
+            service_lng,
+            service_lat,
+            hint_adcode=str(service_location.get("adcode") or ""),
+        )
+        service_address = (
+            service_address
+            or str(elder.get("address") or "").strip()
+            or str(service_location.get("formatted_address") or "长辈当前服务点")
+        )
+        pin_source = "browser_gps"
+        home_fixed = False
+    else:
+        chosen = None
+        if address_id is not None:
+            cursor.execute(
+                """SELECT full_address, lng, lat, region_adcode
+                   FROM elder_addresses
+                   WHERE address_id = %s AND elder_id = %s""",
+                (int(address_id), elder_id),
+            )
+            chosen = cursor.fetchone()
+            if not chosen:
+                raise ValueError("所选地址不存在")
+        else:
+            cursor.execute(
+                """SELECT full_address, lng, lat, region_adcode
+                   FROM elder_addresses
+                   WHERE elder_id = %s AND is_current = TRUE""",
+                (elder_id,),
+            )
+            chosen = cursor.fetchone()
+        if chosen and chosen.get("lng") is not None and chosen.get("lat") is not None:
+            service_lng = float(chosen["lng"])
+            service_lat = float(chosen["lat"])
+            service_address = service_address or str(
+                chosen.get("full_address") or elder.get("address") or "老人地址"
+            )
+            region_adcode = _active_adcode_for_point(
+                service_lng,
+                service_lat,
+                hint_adcode=str(chosen.get("region_adcode") or home_region),
+            )
+        else:
+            if lng is not None and lat is not None:
+                service_lng = float(lng)
+                service_lat = float(lat)
+            else:
+                cursor.execute(
+                    """SELECT lng, lat FROM elder_location_state WHERE elder_id = %s""",
+                    (elder_id,),
+                )
+                pin = cursor.fetchone() or {}
+                service_lng = float(pin.get("lng") or 0) or None
+                service_lat = float(pin.get("lat") or 0) or None
+            service_address = service_address or str(elder.get("address") or "老人当前地址")
+            if service_lng is not None and service_lat is not None:
+                region_adcode = _active_adcode_for_point(
+                    service_lng,
+                    service_lat,
+                    hint_adcode=home_region,
+                )
+        if not service_lng or not service_lat:
+            raise ValueError("请先确认本次服务位置（默认地址或实时定位）")
+        pin_source = "address_book"
+        home_fixed = True
+
+    if not region_adcode or not is_active_region(region_adcode, REGION_CATALOG):
+        raise ValueError("该区域尚未开通服务，无法派单")
+
+    if sync_pin and service_lng is not None and service_lat is not None:
+        if service_address:
+            cursor.execute(
+                "UPDATE elders SET address = %s WHERE elder_id = %s",
+                (service_address, elder_id),
+            )
+        cursor.execute("SELECT elder_id FROM elder_location_state WHERE elder_id = %s", (elder_id,))
+        if cursor.fetchone():
+            cursor.execute(
+                """UPDATE elder_location_state
+                   SET lng = %s, lat = %s, location_source = %s,
+                       is_home_fixed = %s, updated_at = CURRENT_TIMESTAMP
+                   WHERE elder_id = %s""",
+                (service_lng, service_lat, pin_source, home_fixed, elder_id),
+            )
+        else:
+            cursor.execute(
+                """INSERT INTO elder_location_state
+                   (elder_id, lng, lat, location_source, is_home_fixed)
+                   VALUES (%s, %s, %s, %s, %s)""",
+                (elder_id, service_lng, service_lat, pin_source, home_fixed),
+            )
+
+    return {
+        "region_adcode": str(region_adcode),
+        "lng": float(service_lng),
+        "lat": float(service_lat),
+        "address": service_address or "服务地址",
+        "location_mode": mode,
+    }
+
+
 def create_smart_order_for_elder(
     cursor: Any,
     *,
@@ -5323,6 +5650,10 @@ def create_smart_order_for_elder(
     service_time: str | None = None,
     notes: str = "",
     address: str | None = None,
+    location_mode: str = "address",
+    address_id: int | None = None,
+    lng: float | None = None,
+    lat: float | None = None,
     urgent: bool = False,
     proxy_created_by: int | None = None,
     proxy_reason: str | None = None,
@@ -5340,10 +5671,14 @@ def create_smart_order_for_elder(
     When ``incident_id`` / ``conversation_id`` are provided (紧急求助已先建群),
     they are bound before SOS force-assign so the volunteer joins that same
     chat instead of spawning a parallel service thread.
+
+    Service point is snapshotted onto the order at create time
+    (``service_lng`` / ``service_lat``). Later elder GPS moves do not replan
+    an in-progress order.
     """
     if service_type not in SERVICE_CATALOG:
         raise ValueError("unsupported service type")
-    cursor.execute("SELECT elder_id, region_adcode FROM elders WHERE elder_id = %s", (elder_id,))
+    cursor.execute("SELECT elder_id, region_adcode, address FROM elders WHERE elder_id = %s", (elder_id,))
     elder = cursor.fetchone()
     if not elder:
         raise ValueError("elder profile not found")
@@ -5358,20 +5693,32 @@ def create_smart_order_for_elder(
                 raise ValueError("家属代下单只能发普通服务，紧急求助请由长辈本人发起")
             urgent = False
     is_sos = bool(urgent) or bool(catalog.get("urgent"))
-    region_adcode = str(elder.get("region_adcode") or DEFAULT_REGION_ADCODE)
-    if not is_active_region(region_adcode, REGION_CATALOG):
-        raise ValueError("老人所属区县尚未开通或已停用，无法下单")
+    point = resolve_elder_service_point(
+        cursor,
+        elder_id=int(elder_id),
+        location_mode=location_mode,
+        address_id=address_id,
+        lng=lng,
+        lat=lat,
+        address=address,
+        sync_pin=True,
+    )
+    region_adcode = str(point["region_adcode"])
+    service_lng = float(point["lng"])
+    service_lat = float(point["lat"])
+    service_address = str(point["address"])
+
     skills = _normalize_required_skills(required_skills, catalog["skills"], urgent=is_sos)
     if not service_time:
         service_time = _shanghai_now().strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute("""
         INSERT INTO orders
             (elder_id, created_by, service_type, service_time, service_hours, address, notes, status,
-             region_adcode, proxy_created_by, proxy_reason)
-        VALUES (%s, %s, %s, %s::timestamp, %s, %s, %s, 'pending', %s, %s, %s)
+             region_adcode, proxy_created_by, proxy_reason, service_lng, service_lat)
+        VALUES (%s, %s, %s, %s::timestamp, %s, %s, %s, 'pending', %s, %s, %s, %s, %s)
         RETURNING order_id
-    """, (elder_id, created_by, service_type, service_time, service_hours or catalog["hours"], address, notes,
-           region_adcode, proxy_created_by, proxy_reason))
+    """, (elder_id, created_by, service_type, service_time, service_hours or catalog["hours"], service_address, notes,
+           region_adcode, proxy_created_by, proxy_reason, service_lng, service_lat))
     order_id = int(cursor.fetchone()["order_id"])
     is_scheduled = (not is_sos) and _appointment_is_future(service_time)
     cursor.execute("""
@@ -5496,10 +5843,13 @@ def start_auto_sos_service(incident_id: int):
                     "message": "SOS 服务单已存在，系统按自动派单处理",
                     "data": {"order_id": order_id, "assigned": bool(order and order.get("volunteer_id")), "required_skills": selected_skills},
                 })
+            # Use the elder's confirmed service pin/address (not admin location /
+            # signup district). Pin is synced when the elder opens the SOS.
             order_id, msg = create_smart_order_for_elder(
                 cursor, elder_id=int(incident["elder_id"]), created_by=int(admin_user_id),
                 service_type="SOS紧急救助", notes=str(incident.get("description") or "紧急求助"),
                 urgent=True, proxy_created_by=int(admin_user_id), proxy_reason="管理员接警后启动自动 SOS 志愿服务",
+                location_mode="current",
                 manual_only=False,
                 incident_id=incident_id,
                 required_skills=selected_skills,
@@ -5546,54 +5896,103 @@ def create_dispatch_order():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT elder_id, region_adcode FROM elders WHERE user_id = %s", (user_id,))
+            cursor.execute("SELECT elder_id, region_adcode, address FROM elders WHERE user_id = %s", (user_id,))
             elder = cursor.fetchone()
             if not elder:
                 return jsonify({"code": 404, "message": "当前账号没有老人档案"}), 404
-            region_adcode = str(elder.get("region_adcode") or DEFAULT_REGION_ADCODE)
-            if not is_active_region(region_adcode, REGION_CATALOG):
-                return jsonify({"code": 400, "message": "老人所属区县尚未开通或已停用，无法下单"}), 400
+            home_region = str(elder.get("region_adcode") or DEFAULT_REGION_ADCODE)
             catalog = SERVICE_CATALOG[service_type]
             skills = _normalize_required_skills(data.get("required_skills"), catalog["skills"], urgent=urgent)
             service_time = data.get("service_time") or _shanghai_now().strftime("%Y-%m-%d %H:%M:%S")
             notes = str(data.get("notes") or data.get("situation") or "").strip()[:500]
             location_mode = str(data.get("location_mode") or "address").strip().lower()
             if location_mode == "live":
+                # Frontend resolveBrowserLocation already returns GCJ-02 coords.
                 try:
-                    service_location = reverse_geocode(data.get("lng"), data.get("lat"))
+                    service_location = reverse_geocode(data.get("lng"), data.get("lat"), from_gps=False)
                 except Exception as exc:
                     return jsonify({"code": 400, "message": f"实时位置不可用：{exc}"}), 400
-                if str(service_location.get("adcode") or "") != region_adcode:
-                    return jsonify({
-                        "code": 400,
-                        "message": "实时位置不在老人当前登记区县内，请切换地址或联系管理员调整管辖区",
-                    }), 400
+                live_adcode = str(service_location.get("adcode") or "").strip()
+                if not live_adcode:
+                    return jsonify({"code": 400, "message": "无法识别实时定位所属区域"}), 400
+                if not is_active_region(live_adcode, REGION_CATALOG):
+                    return jsonify({"code": 400, "message": "该区域尚未开通服务，无法派单"}), 400
+                # Live-point orders use the standing district, even when it
+                # differs from the elder's registered home district.
+                region_adcode = live_adcode
                 service_lng = float(service_location["lng"])
                 service_lat = float(service_location["lat"])
                 service_address = str(service_location.get("formatted_address") or "老人实时位置")
-                cursor.execute(
-                    """UPDATE elder_location_state
-                       SET lng = %s, lat = %s, location_source = 'browser_live',
-                           is_home_fixed = FALSE, updated_at = CURRENT_TIMESTAMP
-                       WHERE elder_id = %s""",
-                    (service_lng, service_lat, elder["elder_id"]),
-                )
+                cursor.execute("SELECT elder_id FROM elder_location_state WHERE elder_id = %s", (elder["elder_id"],))
+                if cursor.fetchone():
+                    cursor.execute(
+                        """UPDATE elder_location_state
+                           SET lng = %s, lat = %s, location_source = 'browser_gps',
+                               is_home_fixed = FALSE, updated_at = CURRENT_TIMESTAMP
+                           WHERE elder_id = %s""",
+                        (service_lng, service_lat, elder["elder_id"]),
+                    )
+                else:
+                    cursor.execute(
+                        """INSERT INTO elder_location_state
+                           (elder_id, lng, lat, location_source, is_home_fixed)
+                           VALUES (%s, %s, %s, 'browser_gps', FALSE)""",
+                        (elder["elder_id"], service_lng, service_lat),
+                    )
             else:
-                service_lng = float(elder.get("saved_lng") or elder["current_lng"])
-                service_lat = float(elder.get("saved_lat") or elder["current_lat"])
-                service_address = str(elder.get("saved_address") or elder.get("address") or "老人当前地址")
+                # Must join from elders: origin/master used elder["current_lng"] without
+                # selecting it, which raised KeyError and surfaced as 调度失败.
                 cursor.execute(
-                    """UPDATE elder_location_state
-                       SET lng = %s, lat = %s, location_source = 'address_book',
-                           is_home_fixed = TRUE, updated_at = CURRENT_TIMESTAMP
-                       WHERE elder_id = %s""",
-                    (service_lng, service_lat, elder["elder_id"]),
+                    """SELECT l.lng AS current_lng, l.lat AS current_lat,
+                              ea.full_address AS saved_address,
+                              ea.lng AS saved_lng, ea.lat AS saved_lat,
+                              ea.region_adcode AS saved_region_adcode
+                       FROM elders e
+                       LEFT JOIN elder_location_state l ON l.elder_id = e.elder_id
+                       LEFT JOIN elder_addresses ea
+                         ON ea.elder_id = e.elder_id AND ea.is_current = TRUE
+                       WHERE e.elder_id = %s""",
+                    (elder["elder_id"],),
                 )
+                location_row = cursor.fetchone() or {}
+                service_lng = float(location_row.get("saved_lng") or location_row.get("current_lng") or 0)
+                service_lat = float(location_row.get("saved_lat") or location_row.get("current_lat") or 0)
+                if not service_lng or not service_lat:
+                    return jsonify({"code": 400, "message": "尚未配置可用服务地址，请先在个人中心设置地址"}), 400
+                service_address = str(
+                    location_row.get("saved_address") or elder.get("address") or "老人当前地址"
+                )
+                region_adcode = str(
+                    location_row.get("saved_region_adcode") or home_region or DEFAULT_REGION_ADCODE
+                ).strip()
+                if not is_active_region(region_adcode, REGION_CATALOG):
+                    return jsonify({"code": 400, "message": "该区域尚未开通服务，无法派单"}), 400
+                if location_row.get("saved_address"):
+                    cursor.execute(
+                        "UPDATE elders SET address = %s WHERE elder_id = %s",
+                        (location_row["saved_address"], elder["elder_id"]),
+                    )
+                cursor.execute("SELECT elder_id FROM elder_location_state WHERE elder_id = %s", (elder["elder_id"],))
+                if cursor.fetchone():
+                    cursor.execute(
+                        """UPDATE elder_location_state
+                           SET lng = %s, lat = %s, location_source = 'address_book',
+                               is_home_fixed = TRUE, updated_at = CURRENT_TIMESTAMP
+                           WHERE elder_id = %s""",
+                        (service_lng, service_lat, elder["elder_id"]),
+                    )
+                else:
+                    cursor.execute(
+                        """INSERT INTO elder_location_state
+                           (elder_id, lng, lat, location_source, is_home_fixed)
+                           VALUES (%s, %s, %s, 'address_book', TRUE)""",
+                        (elder["elder_id"], service_lng, service_lat),
+                    )
             cursor.execute("""
                 INSERT INTO orders
                     (elder_id, created_by, service_type, service_time, service_hours,
-                     address, notes, status, region_adcode)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', %s)
+                     address, notes, status, region_adcode, service_lng, service_lat)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s)
                 RETURNING order_id
             """, (
                 elder["elder_id"],
@@ -5604,6 +6003,8 @@ def create_dispatch_order():
                 service_address,
                 notes,
                 region_adcode,
+                service_lng,
+                service_lat,
             ))
             order_id = int(cursor.fetchone()["order_id"])
             is_scheduled = (not urgent) and _appointment_is_future(service_time)
@@ -5742,7 +6143,9 @@ def volunteer_feed():
                 SELECT c.order_id, c.candidate_rank, c.distance_km, c.eta_minutes, c.distance_score,
                        c.traffic_score, c.fatigue_score, c.rating_score, c.total_score, c.response_status,
                        o.service_type, o.status, o.notes, d.urgency, d.forced_assignment, d.dispatch_phase, e.name AS elder_name,
-                       e.address AS elder_address, el.lng AS elder_lng, el.lat AS elder_lat,
+                       e.address AS elder_address,
+                       COALESCE(o.service_lng, el.lng) AS elder_lng,
+                       COALESCE(o.service_lat, el.lat) AS elder_lat,
                        d.required_skills, r.route_json
                 FROM orders o JOIN dispatch_orders d ON d.order_id = o.order_id
                 LEFT JOIN dispatch_candidates c ON c.order_id = o.order_id AND c.volunteer_id = %s

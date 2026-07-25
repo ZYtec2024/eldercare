@@ -5,6 +5,7 @@ import type {
   ServiceRequestCard,
   ServiceRequestDraft,
 } from '@/types/domain'
+import type { AddressPoiSuggestion, ElderAddress } from '@/services/adapters/profile-adapter'
 
 type FamilyElderApiRow = {
   elder_id?: number
@@ -14,6 +15,13 @@ type FamilyElderApiRow = {
   gender?: string
   address?: string
   addressPreview?: string
+  default_address?: string
+  default_label?: string
+  current_service_address?: string
+  location_source?: string
+  has_live_location?: boolean
+  has_current_service_point?: boolean
+  live_location_hint?: string
   relation_type?: string
   relationType?: string
   medical_history?: string
@@ -31,12 +39,21 @@ type HealthRecordApiRow = {
 }
 
 function mapFamilyElderRow(row: FamilyElderApiRow): ElderSummary {
+  const defaultAddress = String(row.default_address ?? row.addressPreview ?? row.address ?? '地址待补充')
+  const currentServiceAddress = String(row.current_service_address ?? row.address ?? defaultAddress)
   return {
     elderId: Number(row.elder_id ?? row.elderId ?? 0),
     name: String(row.name ?? '未命名长辈'),
     age: Number(row.age ?? 0),
     gender: row.gender,
-    addressPreview: String(row.addressPreview ?? row.address ?? '地址待补充'),
+    addressPreview: currentServiceAddress || defaultAddress,
+    defaultAddress,
+    defaultLabel: String(row.default_label ?? '家'),
+    currentServiceAddress,
+    locationSource: String(row.location_source ?? ''),
+    hasLiveLocation: Boolean(row.has_live_location),
+    hasCurrentServicePoint: Boolean(row.has_current_service_point ?? row.has_live_location),
+    liveLocationHint: String(row.live_location_hint ?? ''),
     relationType: String(row.relation_type ?? row.relationType ?? '亲属'),
     relationLabel: String(row.relation_type ?? row.relationType ?? '亲属'),
     riskLevel: 'normal',
@@ -46,36 +63,55 @@ function mapFamilyElderRow(row: FamilyElderApiRow): ElderSummary {
   }
 }
 
+function pickHealthField(row: Record<string, unknown>, snake: string, camel: string) {
+  const value = row[snake] ?? row[camel]
+  return value === undefined || value === null || value === '' ? undefined : value
+}
+
 function normalizeHealthTrend(
   elderId: number,
   payload: HealthTrendSnapshot | HealthRecordApiRow[],
 ): HealthTrendSnapshot {
   if (!Array.isArray(payload)) {
-    return payload
+    // Already-normalized snapshot (e.g. mock). Keep if it has dates; otherwise empty.
+    if (payload?.dateRange?.length) return payload
+    return {
+      elderId,
+      dateRange: [],
+      systolicSeries: [],
+      diastolicSeries: [],
+      heartRateSeries: [],
+      abnormalFlag: false,
+      annotationText: '暂无健康记录，请先完成健康打卡。',
+    }
   }
 
   const records = payload
     .filter((item) => item && typeof item === 'object')
-    .map((item) => item as HealthRecordApiRow)
+    .map((item) => item as Record<string, unknown>)
 
   return {
     elderId,
-    dateRange: records.map((item) => String(item.record_date ?? '')),
-    systolicSeries: records.map((item) => Number(item.blood_pressure_sys ?? 0)),
-    diastolicSeries: records.map((item) => Number(item.blood_pressure_dia ?? 0)),
-    heartRateSeries: records.map((item) => Number(item.heart_rate ?? 0)),
-    bloodOxygenSeries: records.map((item) =>
-      item.blood_oxygen === undefined ? null : Number(item.blood_oxygen),
-    ),
-    bloodSugarSeries: records.map((item) =>
-      item.blood_sugar === undefined ? null : Number(item.blood_sugar),
-    ),
-    temperatureSeries: records.map((item) =>
-      item.temperature === undefined ? null : Number(item.temperature),
-    ),
-    weightSeries: records.map((item) =>
-      item.weight === undefined ? null : Number(item.weight),
-    ),
+    dateRange: records.map((item) => String(pickHealthField(item, 'record_date', 'recordDate') ?? '')),
+    systolicSeries: records.map((item) => Number(pickHealthField(item, 'blood_pressure_sys', 'bloodPressureSys') ?? 0)),
+    diastolicSeries: records.map((item) => Number(pickHealthField(item, 'blood_pressure_dia', 'bloodPressureDia') ?? 0)),
+    heartRateSeries: records.map((item) => Number(pickHealthField(item, 'heart_rate', 'heartRate') ?? 0)),
+    bloodOxygenSeries: records.map((item) => {
+      const value = pickHealthField(item, 'blood_oxygen', 'bloodOxygen')
+      return value === undefined ? null : Number(value)
+    }),
+    bloodSugarSeries: records.map((item) => {
+      const value = pickHealthField(item, 'blood_sugar', 'bloodSugar')
+      return value === undefined ? null : Number(value)
+    }),
+    temperatureSeries: records.map((item) => {
+      const value = pickHealthField(item, 'temperature', 'temperature')
+      return value === undefined ? null : Number(value)
+    }),
+    weightSeries: records.map((item) => {
+      const value = pickHealthField(item, 'weight', 'weight')
+      return value === undefined ? null : Number(value)
+    }),
     abnormalFlag: false,
     annotationText: records.length
       ? '近 7 天健康记录'
@@ -152,6 +188,136 @@ export async function fetchFamilyHealthTrend(elderId: number) {
   return normalizeHealthTrend(elderId, response.data.data)
 }
 
+function mapElderAddress(item: Record<string, unknown>): ElderAddress {
+  return {
+    addressId: Number(item.address_id ?? item.addressId),
+    label: String(item.label ?? '家'),
+    provinceName: String(item.province_name ?? item.provinceName ?? ''),
+    cityName: String(item.city_name ?? item.cityName ?? ''),
+    districtName: String(item.district_name ?? item.districtName ?? ''),
+    regionAdcode: String(item.region_adcode ?? item.regionAdcode ?? ''),
+    detailAddress: String(item.detail_address ?? item.detailAddress ?? ''),
+    fullAddress: String(item.full_address ?? item.fullAddress ?? ''),
+    lng: item.lng == null ? undefined : Number(item.lng),
+    lat: item.lat == null ? undefined : Number(item.lat),
+    isCurrent: Boolean(item.is_current ?? item.isCurrent),
+  }
+}
+
+export async function fetchFamilyElderAddresses(familyUserId: number, elderId: number) {
+  const response = await http.get<ApiEnvelope<{
+    addresses?: Array<Record<string, unknown>>
+    current_service_point?: Record<string, unknown> | null
+  }>>(`/family/elders/${elderId}/addresses`, {
+    params: { family_user_id: familyUserId },
+  })
+  const payload = response.data.data || {}
+  const list = Array.isArray(payload.addresses) ? payload.addresses : []
+  return {
+    addresses: list.map(mapElderAddress),
+    currentServicePoint: payload.current_service_point
+      ? {
+          lng: Number(payload.current_service_point.lng),
+          lat: Number(payload.current_service_point.lat),
+          address: String(payload.current_service_point.address ?? ''),
+          locationSource: String(payload.current_service_point.location_source ?? ''),
+          isLive: Boolean(
+            payload.current_service_point.is_live
+            ?? ['browser_gps', 'virtual'].includes(String(payload.current_service_point.location_source ?? '')),
+          ),
+          isHomeFixed: Boolean(payload.current_service_point.is_home_fixed),
+          updatedAt: payload.current_service_point.updated_at
+            ? String(payload.current_service_point.updated_at)
+            : undefined,
+        }
+      : null,
+  }
+}
+
+export async function addFamilyElderAddress(payload: {
+  familyUserId: number
+  elderId: number
+  label: string
+  provinceName: string
+  cityName: string
+  districtName: string
+  regionAdcode: string
+  detailAddress: string
+  addressSupplement?: string
+  poi?: AddressPoiSuggestion
+  isCurrent?: boolean
+}) {
+  const response = await http.post<ApiEnvelope<{ address_id: number }>>(
+    `/family/elders/${payload.elderId}/addresses`,
+    {
+      family_user_id: payload.familyUserId,
+      label: payload.label,
+      province_name: payload.provinceName,
+      city_name: payload.cityName,
+      district_name: payload.districtName,
+      region_adcode: payload.regionAdcode,
+      detail_address: payload.detailAddress,
+      address_supplement: payload.addressSupplement,
+      poi_lng: payload.poi?.lng,
+      poi_lat: payload.poi?.lat,
+      poi_name: payload.poi?.name,
+      poi_full_address: payload.poi?.fullAddress,
+      is_current: payload.isCurrent !== false,
+    },
+  )
+  return response.data
+}
+
+export async function updateFamilyElderAddress(payload: {
+  familyUserId: number
+  elderId: number
+  addressId: number
+  label: string
+  provinceName: string
+  cityName: string
+  districtName: string
+  regionAdcode: string
+  detailAddress: string
+  addressSupplement?: string
+  poi?: AddressPoiSuggestion
+  isCurrent?: boolean
+}) {
+  const response = await http.put<ApiEnvelope<{ address_id: number }>>(
+    `/family/elders/${payload.elderId}/addresses/${payload.addressId}`,
+    {
+      family_user_id: payload.familyUserId,
+      label: payload.label,
+      province_name: payload.provinceName,
+      city_name: payload.cityName,
+      district_name: payload.districtName,
+      region_adcode: payload.regionAdcode,
+      detail_address: payload.detailAddress,
+      address_supplement: payload.addressSupplement,
+      poi_lng: payload.poi?.lng,
+      poi_lat: payload.poi?.lat,
+      poi_name: payload.poi?.name,
+      poi_full_address: payload.poi?.fullAddress,
+      is_current: payload.isCurrent,
+    },
+  )
+  return response.data
+}
+
+export async function selectFamilyElderAddress(payload: {
+  familyUserId: number
+  elderId: number
+  addressId: number
+}) {
+  const response = await http.post<ApiEnvelope<null>>(
+    `/family/elders/${payload.elderId}/addresses/select`,
+    {
+      family_user_id: payload.familyUserId,
+      address_id: payload.addressId,
+    },
+  )
+  return response.data
+}
+
 export async function createFamilyServiceRequest(payload: ServiceRequestDraft) {
   const response = await http.post<
     ApiEnvelope<{ order_id: number; status: string }>
@@ -161,7 +327,8 @@ export async function createFamilyServiceRequest(payload: ServiceRequestDraft) {
     service_type: payload.serviceType,
     service_time: payload.serviceTime,
     service_hours: payload.serviceHours,
-    address: payload.address || '',
+    location_mode: payload.locationMode || 'current',
+    address_id: payload.addressId,
     notes: payload.notes,
   })
 
@@ -280,10 +447,15 @@ export async function fetchFamilyAlerts(familyUserId: number) {
   } satisfies FamilyAlertItem))
 }
 
-export async function ackFamilyAlert(familyUserId: number, notificationId: number) {
+export async function ackFamilyAlert(
+  familyUserId: number,
+  notificationId: number,
+  category: FamilyAlertItem['category'] = 'sos',
+) {
   const response = await http.post<ApiEnvelope<null>>('/family/alerts/ack', {
     family_user_id: familyUserId,
     notification_id: notificationId,
+    category,
   })
   return response.data
 }

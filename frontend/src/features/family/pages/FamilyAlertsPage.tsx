@@ -45,7 +45,7 @@ export default function FamilyAlertsPage() {
     if (!session) return
     setAckingId(item.notificationId)
     try {
-      await ackFamilyAlert(session.userId, item.notificationId)
+      await ackFamilyAlert(session.userId, item.notificationId, item.category)
       message.success('已确认收到')
       await loadAlerts()
     } catch (err: any) {
@@ -59,7 +59,7 @@ export default function FamilyAlertsPage() {
 
   const alertTypeConfig: Record<string, { color: string; icon: ReactNode; text: string }> = {
     sos: { color: 'red', icon: <WarningOutlined />, text: 'SOS 求助' },
-    health_warning: { color: 'orange', icon: <BellOutlined />, text: '健康异常' },
+    health_warning: { color: 'gold', icon: <BellOutlined />, text: '健康异常' },
   }
 
   const columns = [
@@ -92,11 +92,19 @@ export default function FamilyAlertsPage() {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      render: (status: string, record: FamilyAlertItem) => (
-        <Tag color={record.unread ? 'red' : status === 'resolved' ? 'green' : 'blue'}>
-          {record.unread ? '未读 · ' : ''}{statusText[status] || status}
-        </Tag>
-      ),
+      render: (status: string, record: FamilyAlertItem) => {
+        const unreadColor = record.category === 'health_warning' ? 'gold' : 'red'
+        const healthStatus = record.category === 'health_warning'
+          ? (record.unread ? '待确认' : '已确认')
+          : (statusText[status] || status)
+        return (
+          <Tag color={record.unread ? unreadColor : status === 'resolved' ? 'green' : 'blue'}>
+            {record.category === 'health_warning'
+              ? healthStatus
+              : `${record.unread ? '未读 · ' : ''}${healthStatus}`}
+          </Tag>
+        )
+      },
     },
     {
       title: '操作',
@@ -115,7 +123,7 @@ export default function FamilyAlertsPage() {
               loading={ackingId === record.notificationId}
               onClick={() => void handleAck(record)}
             >
-              我知道了
+              {record.category === 'health_warning' ? '确认已知晓' : '我知道了'}
             </Button>
           ) : null}
         </div>
@@ -131,19 +139,26 @@ export default function FamilyAlertsPage() {
           异常告警
         </Typography.Title>
         <Typography.Text className="text-gray-500">
-          长辈一键求助后，这里和右上角都会出现提示
+          长辈一键求助或健康打卡异常后，这里和右上角都会出现提示（健康异常为黄色）。健康异常需点击「我知道了」才算确认，仅关闭右上角提示不算。
         </Typography.Text>
       </div>
 
       {unread.length ? (
         <Alert
-          type="error"
+          type={unread.some((item) => item.category === 'sos') ? 'error' : 'warning'}
           showIcon
-          message={`您有 ${unread.length} 条未读求助提醒`}
+          message={`您有 ${unread.length} 条未读提醒`}
           description={unread.slice(0, 3).map((item) => `${item.elderName}：${item.description}`).join('；')}
           action={
-            unread[0]?.conversationId ? (
-              <Button size="small" danger onClick={() => navigate(`/conversations?id=${unread[0].conversationId}`)}>
+            unread.find((item) => item.conversationId)?.conversationId ? (
+              <Button
+                size="small"
+                danger={unread.some((item) => item.category === 'sos')}
+                onClick={() => {
+                  const target = unread.find((item) => item.conversationId)
+                  if (target?.conversationId) navigate(`/conversations?id=${target.conversationId}`)
+                }}
+              >
                 立即查看
               </Button>
             ) : undefined
@@ -158,7 +173,7 @@ export default function FamilyAlertsPage() {
           <Table
             dataSource={alerts}
             columns={columns}
-            rowKey="notificationId"
+            rowKey={(record) => `${record.category}-${record.notificationId}`}
             pagination={{ pageSize: 20 }}
             size="middle"
           />

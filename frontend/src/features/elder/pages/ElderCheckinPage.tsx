@@ -4,8 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import ReactEChartsCore from 'echarts-for-react'
 
 import { useSession } from '@/features/auth/useSession'
-import { submitElderCheckIn } from '@/services/adapters/elder-adapter'
-import { fetchFamilyHealthTrend } from '@/services/adapters/family-adapter'
+import { fetchElderHealthTrend, submitElderCheckIn } from '@/services/adapters/elder-adapter'
 import { buildHealthTrendOptions } from '@/charts/health-trend-options'
 import type { HealthTrendSnapshot } from '@/types/domain'
 
@@ -21,10 +20,13 @@ export default function ElderCheckinPage() {
     if (!session?.userId) return
     setTrendLoading(true)
     try {
-      const snapshot = await fetchFamilyHealthTrend(session.userId)
-      setTrend(snapshot)
+      // Must resolve via elder API (user_id → elder_id). Family chart expects elder_id.
+      const snapshot = await fetchElderHealthTrend(session.userId)
+      const hasPoints = snapshot.dateRange.some((d) => Boolean(String(d || '').trim()))
+      setTrend(hasPoints ? snapshot : null)
     } catch (err: any) {
       message.error(err?.message || '健康趋势加载失败')
+      setTrend(null)
     } finally {
       setTrendLoading(false)
     }
@@ -48,9 +50,9 @@ export default function ElderCheckinPage() {
         weight: values.weight,
       })
       if (result.data.abnormal) {
-        message.warning('部分指标异常，已通知家属和社区关注')
+        message.warning(result.message || '部分指标异常，已记入告警')
       } else {
-        message.success('健康打卡成功！')
+        message.success(result.message || '健康打卡成功！')
       }
       await loadTrend()
     } catch (err: any) {

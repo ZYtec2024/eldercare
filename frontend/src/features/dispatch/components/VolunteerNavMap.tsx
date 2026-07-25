@@ -48,6 +48,12 @@ function loadAmap() {
   return amapLoader
 }
 
+function amapHostHint(reason: string) {
+  const host = typeof window !== 'undefined' ? window.location.hostname : ''
+  if (!host) return reason
+  return `${reason}。当前主机「${host}」。本地演示请清空白名单/不校验；只加 127.0.0.1 却用 localhost 打开会导致地图空白`
+}
+
 function bearingDegrees(from: Point, to: Point) {
   const toRad = (deg: number) => (deg * Math.PI) / 180
   const lat1 = toRad(from[1])
@@ -359,10 +365,13 @@ export function VolunteerNavMap({
         setFollow(false)
       })
       mapRef.current = map
+      const resize = () => map.resize?.()
+      requestAnimationFrame(resize)
+      window.setTimeout(resize, 120)
       setStatus('ready')
     }).catch((reason: Error) => {
       if (alive) {
-        setError(reason.message)
+        setError(amapHostHint(reason.message))
         setStatus('error')
       }
     })

@@ -2,7 +2,7 @@
 from flask import Blueprint, request, jsonify
 from db import get_db_connection
 from utils import get_validated_data
-from region_service import geocode_address, reverse_geocode, search_address_pois
+from region_service import canonicalize_active_adcode, geocode_address, reverse_geocode, search_address_pois
 
 profile_bp = Blueprint('profile', __name__)
 
@@ -28,15 +28,30 @@ def get_profile_info():
 
             # 根据角色拉取额外的扩展信息
             if role == 'elder':
-                sql_ext = "SELECT age, gender, address, medical_history, alert_sys_threshold FROM elders WHERE user_id = %s"
-                cursor.execute(sql_ext, (user_id,))
+                cursor.execute(
+                    """SELECT e.age, e.gender, e.address, e.medical_history, e.alert_sys_threshold,
+                              e.region_adcode,
+                              COALESCE(ar.name, e.region_adcode) AS region_name
+                       FROM elders e
+                       LEFT JOIN administrative_regions ar ON ar.adcode = e.region_adcode
+                       WHERE e.user_id = %s""",
+                    (user_id,),
+                )
                 elder_ext = cursor.fetchone()
                 if elder_ext:
-                    user_info.update(elder_ext) # 将字典合并返回前端
+                    user_info.update(elder_ext)
 
             elif role == 'volunteer':
-                sql_ext = "SELECT id_card, skills, total_hours, weekly_hours, awards, likes_count FROM volunteers_profile WHERE user_id = %s"
-                cursor.execute(sql_ext, (user_id,))
+                cursor.execute(
+                    """SELECT vp.id_card, vp.skills, vp.total_hours, vp.weekly_hours, vp.awards, vp.likes_count,
+                              p.service_region_adcode AS region_adcode,
+                              COALESCE(ar.name, p.service_region_adcode) AS region_name
+                       FROM volunteers_profile vp
+                       LEFT JOIN volunteer_location_state p ON p.volunteer_id = vp.user_id
+                       LEFT JOIN administrative_regions ar ON ar.adcode = p.service_region_adcode
+                       WHERE vp.user_id = %s""",
+                    (user_id,),
+                )
                 vol_ext = cursor.fetchone()
                 if vol_ext:
                     user_info.update(vol_ext)
@@ -60,7 +75,7 @@ def list_elder_addresses():
                 return jsonify({"code": 403, "message": "仅老人账号可管理地址"}), 403
             cursor.execute(
                 """SELECT address_id, label, province_name, city_name, district_name,
-                          region_adcode, detail_address, full_address, is_current
+                          region_adcode, detail_address, full_address, lng, lat, is_current
                    FROM elder_addresses
                    WHERE elder_id = %s
                    ORDER BY is_current DESC, address_id DESC""",
@@ -107,13 +122,28 @@ def resolve_live_location():
             account = cursor.fetchone()
             if not account:
                 return jsonify({"code": 404, "message": "当前账号尚未配置服务区县"}), 404
-            resolved = reverse_geocode(data.get('lng'), data.get('lat'))
-            registered_region = str(account.get('region_adcode') or '')
-            if str(resolved.get('adcode') or '') != registered_region:
+            # AMap JS coords are GCJ-02 (from_gps=false). Browser GPS is WGS-84
+            # (from_gps=true) and must be converted for accurate street reverse-geocode.
+            from_gps = data.get('from_gps', False)
+            if isinstance(from_gps, str):
+                from_gps = from_gps.strip().lower() in ('1', 'true', 'yes')
+            else:
+                from_gps = bool(from_gps)
+            try:
+                resolved = reverse_geocode(data.get('lng'), data.get('lat'), from_gps=from_gps)
+            except Exception:
+                if not from_gps:
+                    raise
+                # Convert API hiccup: still try raw coords rather than fail hard.
+                resolved = reverse_geocode(data.get('lng'), data.get('lat'), from_gps=False)
+            live_adcode = canonicalize_active_adcode(str(resolved.get('adcode') or ''))
+            if not live_adcode:
+                district = resolved.get('district_name') or resolved.get('adcode') or '未知区域'
                 return jsonify({
                     "code": 400,
-                    "message": f"当前定位在「{resolved.get('district_name') or resolved.get('adcode') or '其他区域'}」，不属于已配置服务区县",
+                    "message": f"当前定位在「{district}」，该区域尚未开通服务",
                 }), 400
+            resolved = {**resolved, "adcode": live_adcode}
             return jsonify({"code": 200, "message": "实时位置获取成功", "data": resolved})
     except Exception as exc:
         return jsonify({"code": 502, "message": f"实时位置解析失败：{exc}"}), 502
@@ -141,15 +171,28 @@ def update_volunteer_live_location():
             volunteer = cursor.fetchone()
             if not volunteer:
                 return jsonify({"code": 404, "message": "志愿者服务区县尚未配置"}), 404
-            resolved = reverse_geocode(data.get('lng'), data.get('lat'))
-            if str(resolved.get('adcode') or '') != str(volunteer.get('service_region_adcode') or ''):
+            from_gps = data.get('from_gps', False)
+            if isinstance(from_gps, str):
+                from_gps = from_gps.strip().lower() in ('1', 'true', 'yes')
+            else:
+                from_gps = bool(from_gps)
+            try:
+                resolved = reverse_geocode(data.get('lng'), data.get('lat'), from_gps=from_gps)
+            except Exception:
+                if not from_gps:
+                    raise
+                resolved = reverse_geocode(data.get('lng'), data.get('lat'), from_gps=False)
+            live_adcode = canonicalize_active_adcode(str(resolved.get('adcode') or ''))
+            if not live_adcode:
+                district = resolved.get('district_name') or resolved.get('adcode') or '未知区域'
                 return jsonify({
                     "code": 400,
-                    "message": f"当前位置不在注册服务区县内，不能更新为接单位置",
+                    "message": f"当前位置在「{district}」，该区域尚未开通服务",
                 }), 400
+            resolved = {**resolved, "adcode": live_adcode}
             cursor.execute(
                 """UPDATE volunteer_location_state
-                   SET lng = %s, lat = %s, location_source = 'browser_live',
+                   SET lng = %s, lat = %s, location_source = 'browser_gps',
                        updated_at = CURRENT_TIMESTAMP
                    WHERE volunteer_id = %s""",
                 (resolved['lng'], resolved['lat'], user_id),
@@ -157,7 +200,7 @@ def update_volunteer_live_location():
             conn.commit()
             return jsonify({
                 "code": 200,
-                "message": "实时位置已更新；正式联网后可直接复用此定位入口",
+                "message": "实时位置已更新，地图与管理端将使用此坐标",
                 "data": resolved,
             })
     except Exception as exc:
@@ -167,8 +210,8 @@ def update_volunteer_live_location():
         conn.close()
 
 
-def _save_elder_address(data, address_id=None):
-    user_id = data.get('user_id')
+def save_elder_address_for_elder(elder_id: int, data: dict, address_id=None):
+    """Shared address-book write used by elder profile and family proxy management."""
     province = str(data.get('province_name') or '').strip()
     city = str(data.get('city_name') or '').strip()
     district = str(data.get('district_name') or '').strip()
@@ -176,7 +219,7 @@ def _save_elder_address(data, address_id=None):
     detail = str(data.get('detail_address') or '').strip()
     supplement = str(data.get('address_supplement') or '').strip()
     label = str(data.get('label') or '家').strip()[:40] or '家'
-    if not user_id or not all([province, city, district, adcode, detail]):
+    if not all([province, city, district, adcode, detail]):
         return jsonify({"code": 400, "message": "请完整选择省、市、区县并填写详细地址"}), 400
     poi_lng = data.get('poi_lng')
     poi_lat = data.get('poi_lat')
@@ -201,11 +244,6 @@ def _save_elder_address(data, address_id=None):
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT elder_id FROM elders WHERE user_id = %s", (user_id,))
-            elder = cursor.fetchone()
-            if not elder:
-                return jsonify({"code": 403, "message": "仅老人账号可管理地址"}), 403
-            elder_id = int(elder['elder_id'])
             make_current = bool(data.get('is_current', True))
 
             current_address = None
@@ -272,9 +310,11 @@ def _save_elder_address(data, address_id=None):
                 saved_address_id = int(address_id)
 
             if make_current:
+                # Keep signup registration district (elders.region_adcode) immutable;
+                # only refresh display address + map pin from the chosen address book row.
                 cursor.execute(
-                    "UPDATE elders SET address = %s, region_adcode = %s WHERE elder_id = %s",
-                    (resolved['formatted_address'], adcode, elder_id),
+                    "UPDATE elders SET address = %s WHERE elder_id = %s",
+                    (resolved['formatted_address'], elder_id),
                 )
                 cursor.execute(
                     "SELECT elder_id FROM elder_location_state WHERE elder_id = %s",
@@ -306,6 +346,23 @@ def _save_elder_address(data, address_id=None):
         return jsonify({"code": 500, "message": f"保存地址失败：{exc}"}), 500
     finally:
         conn.close()
+
+
+def _save_elder_address(data, address_id=None):
+    user_id = data.get('user_id')
+    if not user_id:
+        return jsonify({"code": 400, "message": "缺少用户编号"}), 400
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT elder_id FROM elders WHERE user_id = %s", (user_id,))
+            elder = cursor.fetchone()
+            if not elder:
+                return jsonify({"code": 403, "message": "仅老人账号可管理地址"}), 403
+            elder_id = int(elder['elder_id'])
+    finally:
+        conn.close()
+    return save_elder_address_for_elder(elder_id, data, address_id)
 
 
 @profile_bp.route('/addresses', methods=['POST'])
@@ -353,8 +410,8 @@ def select_elder_address():
                 (address_id, elder_id),
             )
             cursor.execute(
-                "UPDATE elders SET address = %s, region_adcode = %s WHERE elder_id = %s",
-                (address['full_address'], address['region_adcode'], elder_id),
+                "UPDATE elders SET address = %s WHERE elder_id = %s",
+                (address['full_address'], elder_id),
             )
             cursor.execute(
                 "SELECT elder_id FROM elder_location_state WHERE elder_id = %s",

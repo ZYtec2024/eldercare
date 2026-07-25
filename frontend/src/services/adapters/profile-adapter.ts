@@ -10,6 +10,8 @@ export interface ElderAddress {
   regionAdcode: string
   detailAddress: string
   fullAddress: string
+  lng?: number
+  lat?: number
   isCurrent: boolean
 }
 
@@ -57,12 +59,15 @@ export async function resolveBrowserLocation(
   role: 'elder' | 'volunteer',
   lng: number,
   lat: number,
+  options?: { fromGps?: boolean },
 ): Promise<ResolvedLiveLocation> {
   const response = await http.post<ApiEnvelope<Record<string, unknown>>>('/profile/location/resolve', {
     user_id: userId,
     role,
     lng,
     lat,
+    // Match uploaded/master: omit conversion unless caller explicitly requests it.
+    from_gps: options?.fromGps === true,
   })
   const item = response.data.data
   return {
@@ -76,11 +81,17 @@ export async function resolveBrowserLocation(
   }
 }
 
-export async function updateVolunteerLiveLocation(userId: number, lng: number, lat: number) {
+export async function updateVolunteerLiveLocation(
+  userId: number,
+  lng: number,
+  lat: number,
+  options?: { fromGps?: boolean },
+) {
   const response = await http.post<ApiEnvelope<Record<string, unknown>>>('/profile/volunteer/location', {
     user_id: userId,
     lng,
     lat,
+    from_gps: options?.fromGps === true,
   })
   return response.data
 }
@@ -138,6 +149,12 @@ export async function fetchProfileInfo(userId: number, role: Role) {
     weeklyHours: toNumber(data.weeklyHours ?? data.weekly_hours),
     awards: parseAwards(data.awards),
     likesCount: toNumber(data.likesCount ?? data.likes_count),
+    regionAdcode: data.region_adcode == null && data.regionAdcode == null
+      ? undefined
+      : String(data.regionAdcode ?? data.region_adcode),
+    regionName: data.region_name == null && data.regionName == null
+      ? undefined
+      : String(data.regionName ?? data.region_name),
   }
 }
 
@@ -179,6 +196,8 @@ export async function fetchElderAddresses(userId: number): Promise<ElderAddress[
     regionAdcode: String(item.region_adcode ?? item.regionAdcode ?? ''),
     detailAddress: String(item.detail_address ?? item.detailAddress ?? ''),
     fullAddress: String(item.full_address ?? item.fullAddress ?? ''),
+    lng: item.lng == null ? undefined : Number(item.lng),
+    lat: item.lat == null ? undefined : Number(item.lat),
     isCurrent: Boolean(item.is_current ?? item.isCurrent),
   }))
 }

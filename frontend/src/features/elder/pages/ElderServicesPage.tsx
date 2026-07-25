@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Card, List, Tag, Typography, Button, Modal, Form, Input, Rate, App, Popconfirm, Space } from 'antd'
+import { Alert, Card, List, Tag, Typography, Button, Modal, Form, Input, Rate, App, Popconfirm, Space } from 'antd'
 import { LikeOutlined, LikeFilled } from '@ant-design/icons'
 
 import { useSession } from '@/features/auth/useSession'
@@ -107,6 +107,7 @@ export default function ElderServicesPage() {
 
   const active = services.filter((item) => ['pending', 'accepted', 'in_progress'].includes(item.status))
   const history = services.filter((item) => !['pending', 'accepted', 'in_progress'].includes(item.status))
+  const proxyActive = active.filter((item) => item.isFamilyProxy)
 
   const renderActions = (item: PendingService) => {
     const isLiked = likedOrders.has(item.orderId)
@@ -184,7 +185,14 @@ export default function ElderServicesPage() {
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-lg font-medium text-slate-900">{item.serviceType}</span>
             <Tag color={st.color}>{st.text}</Tag>
+            {item.isFamilyProxy ? <Tag color="gold">家属代下</Tag> : null}
           </div>
+          {item.isFamilyProxy ? (
+            <div className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              {item.proxyFamilyName || '家属'}已为您代下此单
+              {item.address ? ` · ${item.address}` : ''}
+            </div>
+          ) : null}
           <div className="mt-1 text-base text-slate-600">
             {item.time}
             {item.volunteerName ? ` · 志愿者：${item.volunteerName}` : ' · 还在安排志愿者'}
@@ -203,6 +211,17 @@ export default function ElderServicesPage() {
           志愿者赶来途中可取消或确认完成；服务中请点「确认完成服务」；结束后可评价和点赞
         </Typography.Text>
       </div>
+
+      {proxyActive.length ? (
+        <Alert
+          showIcon
+          type="warning"
+          message="家属已为您代下服务单"
+          description={proxyActive.slice(0, 3).map((item) => (
+            `${item.proxyFamilyName || '家属'} · ${item.serviceType}${item.address ? ` · ${item.address}` : ''}`
+          )).join('；')}
+        />
+      ) : null}
 
       <Card title="进行中的服务" className="!rounded-2xl" loading={loading}>
         {active.length ? (

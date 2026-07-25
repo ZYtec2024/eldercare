@@ -14,7 +14,7 @@ const features = [
   {
     icon: <DashboardOutlined className="text-5xl text-violet-600" />,
     title: '实时守护',
-    desc: '查看绑定长辈的固定服务点；志愿者接单、出发和服务期间同步路线，服务结束后自动锁定志愿者位置。',
+    desc: '查看绑定长辈的当前服务点；志愿者接单、出发和服务期间同步路线，服务结束后自动锁定志愿者位置。',
     path: '/family/live-tracking',
     color: 'border-violet-200 bg-violet-50/50',
   },

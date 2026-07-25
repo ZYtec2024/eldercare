@@ -33,7 +33,10 @@ def _admin_regions(cursor, raw_admin_user_id):
     if '*' in scopes:
         return admin_user_id, True, set(), None
     if not scopes:
-        return None, False, set(), (jsonify({"code": 403, "message": "该管理员未分配区县管理范围"}), 403)
+        return None, False, set(), (jsonify({
+            "code": 403,
+            "message": "还未绑定区域，请联系总管理员在「区域管理」中为您分配区县后再查看",
+        }), 403)
     return admin_user_id, False, scopes, None
 
 
@@ -103,12 +106,18 @@ def _region_user_filter_sql():
     )"""
 
 
-def _enrich_admin_users(cursor, users):
-    """Attach district and elder-binding context for admin CRM views."""
+def _enrich_admin_users(cursor, users, *, is_global: bool = True, viewer_regions: set[str] | None = None):
+    """Attach district and elder-binding context for admin CRM views.
+
+    Family related_elders are intentionally cross-region: if a family binds one
+    elder in Baoshan and another in Pudong, both district admins who can see the
+    family (via either elder) receive the full binding list for troubleshooting.
+    """
     if not users:
         return []
     user_ids = tuple(int(row['user_id']) for row in users)
     placeholders = ','.join(['%s'] * len(user_ids))
+    scope_set = set() if is_global else {str(code) for code in (viewer_regions or set())}
 
     elder_by_user: dict[int, dict] = {}
     cursor.execute(
@@ -130,7 +139,7 @@ def _enrich_admin_users(cursor, users):
 
     family_elders: dict[int, list[dict]] = {}
     cursor.execute(
-        f"""SELECT rel.family_user_id, e.elder_id, e.name, e.address, e.region_adcode,
+        f"""SELECT rel.family_user_id, rel.relation_type, e.elder_id, e.name, e.address, e.region_adcode,
                    COALESCE(ar.name, e.region_adcode) AS region_name
             FROM user_elder_relation rel
             JOIN elders e ON e.elder_id = rel.elder_id
@@ -140,12 +149,17 @@ def _enrich_admin_users(cursor, users):
         user_ids,
     )
     for row in cursor.fetchall():
+        elder_region = str(row.get('region_adcode') or '')
         family_elders.setdefault(int(row['family_user_id']), []).append({
             'elder_id': int(row['elder_id']),
             'name': row['name'],
             'address': row.get('address') or '',
+            'relation_type': str(row.get('relation_type') or '') or None,
             'region_adcode': row.get('region_adcode'),
             'region_name': row.get('region_name') or row.get('region_adcode') or '',
+            # True when this elder's registered district is in the viewer's scope
+            # (or viewer is root). Never used to hide cross-district bindings.
+            'in_admin_scope': bool(is_global or (elder_region and elder_region in scope_set)),
         })
 
     volunteer_region: dict[int, dict] = {}
@@ -203,12 +217,14 @@ def _enrich_admin_users(cursor, users):
                 region_adcodes = [str(profile['region_adcode'])]
                 region_names = [profile['region_name']]
         elif role == 'family':
-            related_elders = family_elders.get(uid, [])
+            # Full cross-district bindings — do not slice by viewer region.
+            related_elders = list(family_elders.get(uid, []))
             for elder in related_elders:
                 code = str(elder.get('region_adcode') or '')
                 if code and code not in region_adcodes:
                     region_adcodes.append(code)
                     region_names.append(elder.get('region_name') or code)
+            item['family_binding_policy'] = 'full_cross_region'
         elif role == 'volunteer' and uid in volunteer_region:
             profile = volunteer_region[uid]
             if profile.get('region_adcode'):
@@ -316,7 +332,12 @@ def get_user_list():
             params.extend([limit, offset])
 
             cursor.execute(base_sql, tuple(scope_params + params))
-            users = _enrich_admin_users(cursor, cursor.fetchall())
+            users = _enrich_admin_users(
+                cursor,
+                cursor.fetchall(),
+                is_global=is_global,
+                viewer_regions=set(regions) if not is_global else None,
+            )
 
             return jsonify({
                 "code": 200, "message": "获取成功",

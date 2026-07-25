@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import urllib.parse
 import urllib.request
@@ -15,9 +16,19 @@ from typing import Any
 
 from db import get_db_connection
 
+# Shanghai-style door detail: "380号", "99号甲", "123弄", "123弄45号".
+_DOOR_DETAIL_RE = re.compile(
+    r"(\d{1,5}\s*弄(?:\d{1,5}\s*号[甲乙丙丁]?)?|\d{1,5}\s*号[甲乙丙丁]?)"
+)
+_ROAD_WITH_DOOR_RE = re.compile(
+    r"([\u4e00-\u9fff0-9]{2,24}?(?:路|街|巷|道|大街|大道))"
+    r"(\d{1,5}\s*弄(?:\d{1,5}\s*号[甲乙丙丁]?)?|\d{1,5}\s*号[甲乙丙丁]?)"
+)
+
 AMAP_DISTRICT_URL = "https://restapi.amap.com/v3/config/district"
 AMAP_GEOCODE_URL = "https://restapi.amap.com/v3/geocode/geo"
 AMAP_REGEOCODE_URL = "https://restapi.amap.com/v3/geocode/regeo"
+AMAP_CONVERT_URL = "https://restapi.amap.com/v3/assistant/coordinate/convert"
 AMAP_INPUT_TIPS_URL = "https://restapi.amap.com/v3/assistant/inputtips"
 AMAP_POI_TEXT_URL = "https://restapi.amap.com/v3/place/text"
 
@@ -192,24 +203,227 @@ def _location_pair(raw: Any) -> tuple[float, float] | None:
     return round(lng, 6), round(lat, 6)
 
 
-def reverse_geocode(lng: Any, lat: Any) -> dict[str, Any]:
-    """Resolve browser/GPS coordinates into a district-validated address."""
+def convert_gps_to_amap(lng: Any, lat: Any) -> tuple[float, float]:
+    """Convert browser/GPS WGS-84 coordinates to AMap GCJ-02.
+
+    Without this, phone GPS pins commonly land one compound away on AMap
+    basemaps and reverse-geocode into the neighboring community name.
+    """
     try:
         point_lng, point_lat = float(lng), float(lat)
     except (TypeError, ValueError) as exc:
         raise RuntimeError("实时位置坐标无效") from exc
-    payload = _amap_service_get(AMAP_REGEOCODE_URL, {
-        "location": f"{point_lng:.6f},{point_lat:.6f}",
-        "extensions": "base",
-        "radius": 100,
+    payload = _amap_service_get(AMAP_CONVERT_URL, {
+        "locations": f"{point_lng:.6f},{point_lat:.6f}",
+        "coordsys": "gps",
     })
+    converted = _location_pair(payload.get("locations"))
+    if not converted:
+        raise RuntimeError("GPS 坐标转换失败")
+    return converted
+
+
+def _normalize_door_detail(raw: Any) -> str:
+    """Normalize to 弄/号 detail (prefer 弄+号 when both exist)."""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    match = _DOOR_DETAIL_RE.search(text)
+    if match:
+        return re.sub(r"\s+", "", match.group(1))
+    # AMap sometimes returns bare digits without 号.
+    if re.fullmatch(r"\d{1,5}", text):
+        return f"{text}号"
+    return ""
+
+
+def _road_door_from_text(text: Any) -> tuple[str, str]:
+    """Return (street, 弄/号) from free text when present."""
+    raw = str(text or "").strip()
+    if not raw:
+        return "", ""
+    match = _ROAD_WITH_DOOR_RE.search(raw)
+    if not match:
+        return "", _normalize_door_detail(raw)
+    return match.group(1).strip(), re.sub(r"\s+", "", match.group(2))
+
+
+def _pick_road_and_door(
+    *,
+    street: str,
+    street_number_raw: Any,
+    street_distance: float,
+    amap_formatted: str,
+    pois: list[Any],
+) -> tuple[str, str]:
+    """Prefer 路名 + 弄/号 for live pins; recover from POI/formatted text."""
+    primary = _normalize_door_detail(street_number_raw)
+    # Browser GPS is often 80–150m; old 90m cutoff wiped real door numbers.
+    if primary and street and street_distance <= 180:
+        return street, primary
+    if primary and street_distance <= 180:
+        fmt_street, fmt_door = _road_door_from_text(amap_formatted)
+        return (fmt_street or street), primary
+
+    candidates: list[tuple[str, str, float]] = []
+    fmt_street, fmt_door = _road_door_from_text(amap_formatted)
+    if fmt_door:
+        candidates.append((fmt_street or street, fmt_door, 40.0 if fmt_street else 80.0))
+
+    for item in pois:
+        if not isinstance(item, dict):
+            continue
+        try:
+            distance = float(item.get("distance") or 9999)
+        except (TypeError, ValueError):
+            distance = 9999
+        if distance > 150:
+            continue
+        for blob in (item.get("address"), item.get("name")):
+            poi_street, poi_door = _road_door_from_text(blob)
+            if not poi_door:
+                continue
+            # Prefer same road when known.
+            score = distance
+            if street and poi_street and street not in poi_street and poi_street not in street:
+                score += 40
+            candidates.append((poi_street or street, poi_door, score))
+
+    if candidates:
+        candidates.sort(key=lambda row: row[2])
+        best_street, best_door, _ = candidates[0]
+        return best_street or street, best_door
+
+    # Last resort: keep a farther streetNumber rather than omitting 弄/号.
+    if primary and street_distance <= 300:
+        return street, primary
+    return street, ""
+
+
+def reverse_geocode(lng: Any, lat: Any, *, from_gps: bool = False) -> dict[str, Any]:
+    """Resolve coordinates into a district-validated address.
+
+    Pass ``from_gps=True`` for browser/phone geolocation so WGS-84 is converted
+    to GCJ-02 first. AMap POI / geocode results are already GCJ-02 — leave
+    ``from_gps=False`` for those.
+
+    Prefer street + 弄/号 over neighborhood-centric formatted_address.
+    """
+    try:
+        point_lng, point_lat = float(lng), float(lat)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("实时位置坐标无效") from exc
+    if from_gps:
+        point_lng, point_lat = convert_gps_to_amap(point_lng, point_lat)
+
+    # Prefer a tight radius that still returns street + door number.
+    payload: dict[str, Any] | None = None
+    last_error: Exception | None = None
+    for extensions, radius in (("all", 80), ("all", 120), ("all", 200), ("base", 200)):
+        try:
+            candidate = _amap_service_get(AMAP_REGEOCODE_URL, {
+                "location": f"{point_lng:.6f},{point_lat:.6f}",
+                "extensions": extensions,
+                "radius": radius,
+            })
+            component_probe = (candidate.get("regeocode") or {}).get("addressComponent") or {}
+            street_probe = component_probe.get("streetNumber") or {}
+            if not isinstance(street_probe, dict):
+                street_probe = {}
+            has_door = bool(
+                str(street_probe.get("street") or "").strip()
+                and _normalize_door_detail(street_probe.get("number"))
+            )
+            payload = candidate
+            if has_door or extensions == "base":
+                break
+        except Exception as exc:  # noqa: BLE001 - fall back to simpler regeo
+            last_error = exc
+    if payload is None:
+        raise RuntimeError(str(last_error) if last_error else "实时位置解析失败")
+
     regeocode = payload.get("regeocode") or {}
     component = regeocode.get("addressComponent") or {}
+    street_number = component.get("streetNumber") or {}
+    if not isinstance(street_number, dict):
+        street_number = {}
+    street = str(street_number.get("street") or "").strip()
+    try:
+        street_distance = float(street_number.get("distance") or 0)
+    except (TypeError, ValueError):
+        street_distance = 0.0
+    pois = list(regeocode.get("pois") or [])
+    amap_formatted = str(regeocode.get("formatted_address") or "").strip()
+    street, number = _pick_road_and_door(
+        street=street,
+        street_number_raw=street_number.get("number"),
+        street_distance=street_distance,
+        amap_formatted=amap_formatted,
+        pois=pois,
+    )
+    township = str(component.get("township") or "").strip()
+    building = street_number.get("building")
+    if isinstance(building, list):
+        building_name = "".join(str(part) for part in building if part).strip()
+    else:
+        building_name = str(building or "").strip()
+
+    province = str(component.get("province") or "")
+    city_raw = component.get("city")
+    if isinstance(city_raw, list):
+        city = str((city_raw or [province])[0] or province)
+    else:
+        city = str(city_raw or component.get("province") or "")
+    district = str(component.get("district") or "")
+
+    # Avoid neighborhood/community labels: they are the usual “隔壁小区” source.
+    road_label = f"{street}{number}".strip()
+    precise_parts = []
+    for part in (province, city, district, township, road_label, building_name):
+        if not part:
+            continue
+        if precise_parts and part == precise_parts[-1]:
+            continue
+        if len(precise_parts) >= 2 and part == precise_parts[-2]:
+            continue
+        precise_parts.append(part)
+    precise = "".join(precise_parts)
+
+    nearest_poi = ""
+    nearest_poi_distance = 9999.0
+    for item in pois:
+        if not isinstance(item, dict):
+            continue
+        try:
+            distance = float(item.get("distance") or 9999)
+        except (TypeError, ValueError):
+            distance = 9999
+        name = str(item.get("name") or "").strip()
+        if name and distance < nearest_poi_distance:
+            nearest_poi = name
+            nearest_poi_distance = distance
+    if nearest_poi_distance > 60:
+        nearest_poi = ""
+
+    if road_label:
+        formatted = precise
+        if nearest_poi and nearest_poi not in formatted:
+            formatted = f"{formatted}（近{nearest_poi}）"
+    elif nearest_poi:
+        base = "".join(part for part in (province, city, district, township) if part)
+        formatted = f"{base}近{nearest_poi}"
+    else:
+        formatted = precise or amap_formatted or "实时位置"
+
+    # Prefer AMap's own line when it already includes 弄/号 and ours does not.
+    if amap_formatted and _normalize_door_detail(amap_formatted) and not _normalize_door_detail(formatted):
+        formatted = amap_formatted
+
     return {
-        "formatted_address": str(regeocode.get("formatted_address") or "实时位置"),
-        "province_name": str(component.get("province") or ""),
-        "city_name": str(component.get("city") or component.get("province") or ""),
-        "district_name": str(component.get("district") or ""),
+        "formatted_address": formatted or "实时位置",
+        "province_name": province,
+        "city_name": city,
+        "district_name": district,
         "adcode": str(component.get("adcode") or ""),
         "lng": round(point_lng, 6),
         "lat": round(point_lat, 6),
@@ -574,10 +788,22 @@ def admin_is_root(cursor: Any, admin_user_id: int) -> bool:
     return bool(cursor.fetchone())
 
 
-def is_active_region(adcode: str | None, catalog: dict[str, dict[str, Any]] | None = None) -> bool:
-    """True when the district is opened (active) in the runtime catalog."""
+def canonicalize_active_adcode(
+    adcode: str | None,
+    catalog: dict[str, dict[str, Any]] | None = None,
+) -> str | None:
+    """Return the opened district adcode, tolerating longer AMap codes (e.g. street-level)."""
     code = str(adcode or "").strip()
     if not code:
-        return False
+        return None
     source = catalog if catalog is not None else _ACTIVE_CATALOG
-    return code in source
+    if code in source:
+        return code
+    if len(code) >= 6 and code[:6] in source:
+        return code[:6]
+    return None
+
+
+def is_active_region(adcode: str | None, catalog: dict[str, dict[str, Any]] | None = None) -> bool:
+    """True when the district is opened (active) in the runtime catalog."""
+    return canonicalize_active_adcode(adcode, catalog) is not None

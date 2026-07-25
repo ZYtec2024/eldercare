@@ -1,5 +1,55 @@
 import { http, type ApiEnvelope } from '@/services/http'
-import type { CheckInPayload, PendingService } from '@/types/domain'
+import type { CheckInPayload, HealthTrendSnapshot, PendingService } from '@/types/domain'
+
+type HealthRecordApiRow = {
+  record_date?: string
+  blood_pressure_sys?: number
+  blood_pressure_dia?: number
+  heart_rate?: number
+  blood_oxygen?: number
+  blood_sugar?: number
+  temperature?: number
+  weight?: number
+}
+
+function pickRecordField(row: Record<string, unknown>, snake: string, camel: string) {
+  const value = row[snake] ?? row[camel]
+  return value === undefined || value === null || value === '' ? undefined : value
+}
+
+function normalizeElderHealthTrend(
+  elderId: number,
+  records: Array<HealthRecordApiRow | Record<string, unknown>>,
+): HealthTrendSnapshot {
+  const rows = records.map((item) => item as Record<string, unknown>)
+  return {
+    elderId,
+    dateRange: rows.map((item) => String(pickRecordField(item, 'record_date', 'recordDate') ?? '')),
+    systolicSeries: rows.map((item) => Number(pickRecordField(item, 'blood_pressure_sys', 'bloodPressureSys') ?? 0)),
+    diastolicSeries: rows.map((item) => Number(pickRecordField(item, 'blood_pressure_dia', 'bloodPressureDia') ?? 0)),
+    heartRateSeries: rows.map((item) => Number(pickRecordField(item, 'heart_rate', 'heartRate') ?? 0)),
+    bloodOxygenSeries: rows.map((item) => {
+      const value = pickRecordField(item, 'blood_oxygen', 'bloodOxygen')
+      return value === undefined ? null : Number(value)
+    }),
+    bloodSugarSeries: rows.map((item) => {
+      const value = pickRecordField(item, 'blood_sugar', 'bloodSugar')
+      return value === undefined ? null : Number(value)
+    }),
+    temperatureSeries: rows.map((item) => {
+      const value = pickRecordField(item, 'temperature', 'temperature')
+      return value === undefined ? null : Number(value)
+    }),
+    weightSeries: rows.map((item) => {
+      const value = pickRecordField(item, 'weight', 'weight')
+      return value === undefined ? null : Number(value)
+    }),
+    abnormalFlag: false,
+    annotationText: rows.length
+      ? '近 7 天健康记录'
+      : '暂无健康记录，请先完成健康打卡。',
+  }
+}
 
 export type EmergencyIncident = {
   incidentId: number
@@ -18,18 +68,40 @@ export type EmergencyIncident = {
 }
 
 export async function fetchPendingServices(userId = 201) {
-  const response = await http.get<ApiEnvelope<PendingService[]>>(
+  const response = await http.get<ApiEnvelope<Array<Record<string, unknown>>>>(
     '/elder/my-services',
     {
       params: { user_id: userId },
     },
   )
-  return response.data.data
+  const list = Array.isArray(response.data.data) ? response.data.data : []
+  return list.map((row): PendingService => ({
+    orderId: Number(row.orderId ?? row.order_id ?? 0),
+    serviceType: String(row.serviceType ?? row.service_type ?? ''),
+    time: String(row.time ?? ''),
+    address: typeof row.address === 'string' ? row.address : undefined,
+    status: String(row.status ?? 'pending') as PendingService['status'],
+    volunteerId: Number(row.volunteerId ?? row.volunteer_id ?? 0) || undefined,
+    volunteerName: typeof (row.volunteerName ?? row.volunteer_name) === 'string'
+      ? String(row.volunteerName ?? row.volunteer_name)
+      : undefined,
+    dispatchState: typeof (row.dispatchState ?? row.dispatch_state) === 'string'
+      ? String(row.dispatchState ?? row.dispatch_state)
+      : undefined,
+    reviewSubmitted: Boolean(row.reviewSubmitted ?? row.review_submitted),
+    canReview: Boolean(row.canReview ?? row.can_review),
+    canComplete: Boolean(row.canComplete ?? row.can_complete),
+    proxyCreatedBy: Number(row.proxyCreatedBy ?? row.proxy_created_by ?? 0) || null,
+    proxyFamilyName: typeof (row.proxyFamilyName ?? row.proxy_family_name) === 'string'
+      ? String(row.proxyFamilyName ?? row.proxy_family_name)
+      : null,
+    isFamilyProxy: Boolean(row.isFamilyProxy ?? row.is_family_proxy ?? row.proxyCreatedBy ?? row.proxy_created_by),
+  }))
 }
 
 export async function submitElderCheckIn(payload: CheckInPayload) {
   const response = await http.post<
-    ApiEnvelope<{ abnormal: boolean; alert_id?: number | null }>
+    ApiEnvelope<{ abnormal: boolean; alert_id?: number | null; elder_id?: number }>
   >('/elder/health/checkin', {
     user_id: payload.userId ?? 201,
     blood_pressure_sys: payload.bloodPressureSys,
@@ -42,6 +114,23 @@ export async function submitElderCheckIn(payload: CheckInPayload) {
   })
 
   return response.data
+}
+
+/** Elder check-in page trend: keyed by login user_id, backend resolves elder_id. */
+export async function fetchElderHealthTrend(userId: number): Promise<HealthTrendSnapshot> {
+  const response = await http.get<ApiEnvelope<{
+    elder_id?: number
+    records?: HealthRecordApiRow[]
+  } | HealthRecordApiRow[]>>('/elder/health/chart', {
+    params: { user_id: userId },
+  })
+  const payload = response.data.data
+  if (Array.isArray(payload)) {
+    return normalizeElderHealthTrend(userId, payload)
+  }
+  const elderId = Number(payload?.elder_id ?? userId)
+  const records = Array.isArray(payload?.records) ? payload.records : []
+  return normalizeElderHealthTrend(elderId, records)
 }
 
 export async function triggerElderSos(userId = 201) {
@@ -61,7 +150,13 @@ export async function createEmergencyIncident(payload: {
   description?: string
   dispatchService?: boolean
   requiredSkills?: string[]
+  locationMode?: 'address' | 'current' | 'live'
+  addressId?: number
+  lng?: number
+  lat?: number
+  address?: string
 }) {
+  const locationMode = payload.locationMode === 'live' ? 'current' : (payload.locationMode || 'address')
   const response = await http.post<ApiEnvelope<{ incident_id: number; conversation_id: number; order_id?: number | null }>>(
     '/elder/emergency/incidents',
     {
@@ -71,6 +166,11 @@ export async function createEmergencyIncident(payload: {
       description: payload.description ?? '一键紧急求助',
       dispatch_service: payload.dispatchService ?? false,
       required_skills: payload.requiredSkills,
+      location_mode: locationMode,
+      address_id: payload.addressId,
+      lng: payload.lng,
+      lat: payload.lat,
+      address: payload.address,
     },
   )
   return response.data

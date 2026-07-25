@@ -18,6 +18,36 @@ def error_response(message, code=500):
     return api_response({"code": code, "message": message}, code)
 
 
+def fetch_health_trend_rows(cursor, elder_id: int, limit_days: int = 7) -> list[dict]:
+    """Latest health points for one elder (one row per calendar day).
+
+    Always keyed by elders.elder_id — never by users.user_id. Callers that only
+    have a login user_id must resolve elder_id first (see elder health routes).
+    """
+    cursor.execute(
+        """SELECT record_date, blood_pressure_sys, blood_pressure_dia,
+                  heart_rate, blood_oxygen, blood_sugar, temperature, weight
+           FROM health_records
+           WHERE elder_id = %s
+           ORDER BY record_date DESC, record_id DESC
+           LIMIT %s""",
+        (int(elder_id), max(int(limit_days) * 2, 14)),
+    )
+    records = cursor.fetchall() or []
+    by_date: dict[str, dict] = {}
+    for row in records:
+        item = dict(row)
+        record_date = item.get("record_date")
+        if isinstance(record_date, datetime.date):
+            item["record_date"] = record_date.strftime("%Y-%m-%d")
+        key = str(item.get("record_date") or "")
+        if key and key not in by_date:
+            by_date[key] = item
+        if len(by_date) >= int(limit_days):
+            break
+    return sorted(by_date.values(), key=lambda item: str(item.get("record_date") or ""))
+
+
 # ========== 参数验证 ==========
 def get_validated_data(data, required_fields):
     """验证必需字段并返回验证结果"""
@@ -32,7 +62,12 @@ _SHANGHAI = datetime.timezone(datetime.timedelta(hours=8))
 
 
 def _as_shanghai(value):
-    """Treat naive DB timestamps as UTC, then convert to Asia/Shanghai."""
+    """Treat naive system timestamps as UTC, then convert to Asia/Shanghai.
+
+    openGauss in this stack runs with TimeZone=UTC, so CURRENT_TIMESTAMP written
+    into TIMESTAMP columns stores UTC wall-clock digits without tzinfo. User-entered
+    appointment times use format_wall_datetime instead (already Asia/Shanghai).
+    """
     if not isinstance(value, datetime.datetime):
         return value
     if value.tzinfo is None:
@@ -43,7 +78,7 @@ def _as_shanghai(value):
 
 
 def format_datetime(value, fmt='%Y-%m-%d %H:%M:%S'):
-    """Format timestamps for the UI in Asia/Shanghai (UTC+8)."""
+    """Format system timestamps (created_at / alerts) for the UI in Asia/Shanghai."""
     if isinstance(value, datetime.datetime):
         return _as_shanghai(value).strftime(fmt)
     return value

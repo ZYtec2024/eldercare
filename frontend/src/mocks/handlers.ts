@@ -513,10 +513,34 @@ export const handlers = [
     return ok(getMockDatabase().pendingServices, '待办服务加载成功')
   }),
 
+  http.get('/api/elder/health/chart', async ({ request }) => {
+    await delay(100)
+    const userId = Number(new URL(request.url).searchParams.get('user_id') || 0)
+    const db = getMockDatabase()
+    // Mock elders often use elderId === userId; fall back to shared fixture.
+    const snapshot = db.health[userId] || db.health[201] || {
+      elderId: userId,
+      dateRange: [] as string[],
+      systolicSeries: [] as number[],
+      diastolicSeries: [] as number[],
+      heartRateSeries: [] as number[],
+      abnormalFlag: false,
+      annotationText: '暂无健康记录，请先完成健康打卡。',
+    }
+    const records = (snapshot.dateRange || []).map((date, index) => ({
+      record_date: date,
+      blood_pressure_sys: snapshot.systolicSeries?.[index],
+      blood_pressure_dia: snapshot.diastolicSeries?.[index],
+      heart_rate: snapshot.heartRateSeries?.[index],
+    }))
+    return ok({ elder_id: snapshot.elderId ?? userId, user_id: userId, records }, '获取健康数据成功')
+  }),
+
   http.post('/api/elder/health/checkin', async ({ request }) => {
     await delay(100)
     const body = (await request.json()) as Record<string, number>
     const db = getMockDatabase()
+    const userId = Number(body.user_id ?? 201)
     const values = [
       body.blood_pressure_sys,
       body.blood_pressure_dia,
@@ -531,26 +555,37 @@ export const handlers = [
       return fail(400, '至少填写一项健康指标')
     }
 
-    const trend = db.health[201]
+    const trendKey = db.health[userId] ? userId : 201
+    const trend = db.health[trendKey]
     const alertNeeded = Number(body.blood_pressure_sys ?? 0) >= 140
+    const today = new Date().toISOString().slice(0, 10)
 
     if (trend) {
-      trend.systolicSeries = [
-        ...trend.systolicSeries.slice(1),
-        Number(body.blood_pressure_sys ?? trend.systolicSeries.at(-1) ?? 130),
-      ]
-      trend.diastolicSeries = [
-        ...trend.diastolicSeries.slice(1),
-        Number(body.blood_pressure_dia ?? trend.diastolicSeries.at(-1) ?? 82),
-      ]
-      trend.heartRateSeries = [
-        ...trend.heartRateSeries.slice(1),
-        Number(body.heart_rate ?? trend.heartRateSeries.at(-1) ?? 72),
-      ]
+      const lastIdx = Math.max((trend.dateRange?.length || 1) - 1, 0)
+      if (trend.dateRange?.[lastIdx] === today) {
+        trend.systolicSeries[lastIdx] = Number(body.blood_pressure_sys ?? trend.systolicSeries[lastIdx] ?? 130)
+        trend.diastolicSeries[lastIdx] = Number(body.blood_pressure_dia ?? trend.diastolicSeries[lastIdx] ?? 82)
+        trend.heartRateSeries[lastIdx] = Number(body.heart_rate ?? trend.heartRateSeries[lastIdx] ?? 72)
+      } else {
+        trend.dateRange = [...(trend.dateRange || []).slice(-6), today]
+        trend.systolicSeries = [
+          ...(trend.systolicSeries || []).slice(-6),
+          Number(body.blood_pressure_sys ?? 130),
+        ]
+        trend.diastolicSeries = [
+          ...(trend.diastolicSeries || []).slice(-6),
+          Number(body.blood_pressure_dia ?? 82),
+        ]
+        trend.heartRateSeries = [
+          ...(trend.heartRateSeries || []).slice(-6),
+          Number(body.heart_rate ?? 72),
+        ]
+      }
       trend.abnormalFlag = alertNeeded
       trend.annotationText = alertNeeded
         ? '今天的血压数据偏高，系统已提醒家属与社区关注。'
         : '今日指标记录成功，整体趋势保持稳定。'
+      db.health[userId] = trend
     }
 
     let alertId: number | null = null
@@ -563,7 +598,7 @@ export const handlers = [
         createdAt: '2026-03-30 09:20',
         status: 'new',
         sourceLabel: '老人健康打卡触发异常提醒',
-        linkedEntityId: 201,
+        linkedEntityId: userId,
       })
     }
 
@@ -571,6 +606,7 @@ export const handlers = [
       {
         abnormal: alertNeeded,
         alert_id: alertId,
+        elder_id: trend?.elderId ?? userId,
       },
       '今日健康打卡已记录',
     )

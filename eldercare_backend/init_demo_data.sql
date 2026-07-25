@@ -119,6 +119,9 @@ CREATE TABLE orders (
     reward_points INT NOT NULL DEFAULT 0,
     address VARCHAR(255) DEFAULT NULL,
     region_adcode VARCHAR(12) NOT NULL DEFAULT '310113',
+    -- Snapshot of service point at order create (dispatch must not follow elder GPS moves).
+    service_lng NUMERIC(10,6),
+    service_lat NUMERIC(10,6),
     proxy_created_by INT DEFAULT NULL,
     proxy_reason TEXT,
     status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'in_progress', 'completed', 'cancelled')),
@@ -730,14 +733,15 @@ VALUES
 (16, 121.500023, 31.392852, 'idle', 0, 4.50, 0, 'simulated', 121.402000, 31.382000, FALSE, '310113'),
 (17, 121.453991, 31.408578, 'idle', 10, 4.81, 2, 'simulated', 121.438466, 31.349096, FALSE, '310113'),
 (18, 121.402000, 31.372993, 'idle', 19, 4.15, 3, 'simulated', 121.505281, 31.360575, FALSE, '310113'),
-(40, 121.573116, 31.229492, 'idle', 5, 4.60, 0, 'simulated', 121.577592, 31.212031, TRUE, '310115'),
-(41, 121.552398, 31.225191, 'idle', 10, 4.70, 0, 'simulated', 121.587706, 31.220198, TRUE, '310115'),
-(42, 121.564340, 31.213372, 'idle', 15, 4.50, 0, 'simulated', 121.576574, 31.233494, TRUE, '310115'),
-(43, 121.576678, 31.206983, 'idle', 20, 4.60, 0, 'simulated', 121.563808, 31.222130, TRUE, '310115'),
-(57, 116.473116, 39.954492, 'idle', 5, 4.60, 0, 'simulated', 116.477592, 39.937031, TRUE, '110105'),
-(58, 116.452398, 39.950191, 'idle', 10, 4.70, 0, 'simulated', 116.487706, 39.945198, TRUE, '110105'),
-(59, 116.464340, 39.938372, 'idle', 15, 4.50, 0, 'simulated', 116.476574, 39.958494, TRUE, '110105'),
-(60, 116.476678, 39.931983, 'idle', 20, 4.60, 0, 'simulated', 116.463808, 39.947130, TRUE, '110105');
+-- Demo volunteers default auto_accept OFF; they must toggle it in the volunteer UI.
+(40, 121.573116, 31.229492, 'idle', 5, 4.60, 0, 'simulated', 121.577592, 31.212031, FALSE, '310115'),
+(41, 121.552398, 31.225191, 'idle', 10, 4.70, 0, 'simulated', 121.587706, 31.220198, FALSE, '310115'),
+(42, 121.564340, 31.213372, 'idle', 15, 4.50, 0, 'simulated', 121.576574, 31.233494, FALSE, '310115'),
+(43, 121.576678, 31.206983, 'idle', 20, 4.60, 0, 'simulated', 121.563808, 31.222130, FALSE, '310115'),
+(57, 116.473116, 39.954492, 'idle', 5, 4.60, 0, 'simulated', 116.477592, 39.937031, FALSE, '110105'),
+(58, 116.452398, 39.950191, 'idle', 10, 4.70, 0, 'simulated', 116.487706, 39.945198, FALSE, '110105'),
+(59, 116.464340, 39.938372, 'idle', 15, 4.50, 0, 'simulated', 116.476574, 39.958494, FALSE, '110105'),
+(60, 116.476678, 39.931983, 'idle', 20, 4.60, 0, 'simulated', 116.463808, 39.947130, FALSE, '110105');
 
 INSERT INTO volunteer_skill_tags (volunteer_id, skill_tag, verified) VALUES
 (11, '陪诊', TRUE),

@@ -1,7 +1,7 @@
 # routes/family.py
 from flask import Blueprint, request, jsonify
 from db import get_db_connection
-from utils import format_datetime, get_validated_data, get_pagination_params
+from utils import fetch_health_trend_rows, format_datetime, get_validated_data, get_pagination_params
 import datetime
 
 family_bp = Blueprint('family', __name__)
@@ -170,44 +170,255 @@ def get_bound_elders():
         with conn.cursor() as cursor:
             # 💎 高分点：多表 JOIN，把老人基本信息和绑定关系一起查出来
             sql = """
-                SELECT 
-                    e.elder_id, e.name, e.age, e.gender, e.address, e.medical_history, 
-                    uer.relation_type
+                SELECT
+                    e.elder_id, e.name, e.age, e.gender, e.address, e.medical_history,
+                    uer.relation_type,
+                    ea.full_address AS default_address,
+                    ea.lng AS default_lng,
+                    ea.lat AS default_lat,
+                    ea.label AS default_label,
+                    l.lng AS live_lng,
+                    l.lat AS live_lat,
+                    l.location_source,
+                    l.updated_at AS location_updated_at
                 FROM user_elder_relation uer
                 JOIN elders e ON uer.elder_id = e.elder_id
+                LEFT JOIN elder_addresses ea
+                  ON ea.elder_id = e.elder_id AND ea.is_current = TRUE
+                LEFT JOIN elder_location_state l ON l.elder_id = e.elder_id
                 WHERE uer.family_user_id = %s
             """
             cursor.execute(sql, (family_user_id,))
-            elders = cursor.fetchall()
+            elders = []
+            for row in cursor.fetchall():
+                item = dict(row)
+                default_address = item.get("default_address") or item.get("address")
+                display_address = str(item.get("address") or "").strip()
+                has_current = item.get("live_lng") is not None and item.get("live_lat") is not None
+                source = str(item.get("location_source") or "")
+                is_live = has_current and source in {"browser_gps", "virtual"}
+                # Live pins may update coords before display text; fill from reverse geocode once.
+                if is_live and not display_address:
+                    try:
+                        from region_service import reverse_geocode
+                        geo = reverse_geocode(item["live_lng"], item["live_lat"], from_gps=False)
+                        display_address = str(geo.get("formatted_address") or "").strip()
+                        if display_address:
+                            cursor.execute(
+                                "UPDATE elders SET address = %s WHERE elder_id = %s",
+                                (display_address, item["elder_id"]),
+                            )
+                    except Exception:
+                        display_address = ""
+                if not display_address:
+                    display_address = default_address
+                item["default_address"] = default_address
+                item["current_service_address"] = display_address
+                item["addressPreview"] = display_address or default_address
+                item["has_current_service_point"] = bool(has_current)
+                item["has_live_location"] = bool(is_live)
+                item["location_source"] = source
+                if is_live and display_address:
+                    item["live_location_hint"] = f"实时位置：{display_address}"
+                elif has_current and display_address:
+                    item["live_location_hint"] = f"当前服务点：{display_address}"
+                elif has_current:
+                    item["live_location_hint"] = "当前服务点已就绪（地址待补充）"
+                else:
+                    item["live_location_hint"] = "长辈暂无当前服务点，请先选其他地址或添加地址"
+                if item.get("location_updated_at") is not None:
+                    item["location_updated_at"] = str(item["location_updated_at"])
+                elders.append(item)
+            conn.commit()
             return jsonify({"code": 200, "message": "获取成功", "data": elders})
     finally:
         conn.close()
 
-# 3. 获取长辈健康趋势图 (Echarts 绘图数据)
-@family_bp.route('/elder-health-chart/<int:elder_id>', methods=['GET'])
-def get_health_chart(elder_id):
+def _assert_family_elder_bound(cursor, family_user_id: int, elder_id: int) -> bool:
+    cursor.execute(
+        "SELECT 1 FROM user_elder_relation WHERE family_user_id = %s AND elder_id = %s",
+        (family_user_id, elder_id),
+    )
+    return bool(cursor.fetchone())
+
+
+@family_bp.route('/elders/<int:elder_id>/addresses', methods=['GET'])
+def list_family_elder_addresses(elder_id: int):
+    family_user_id = request.args.get('family_user_id', type=int)
+    if not family_user_id:
+        return jsonify({"code": 400, "message": "缺少家属ID"}), 400
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            # 💎 高分点：倒序 LIMIT 取最新7条，然后在 Python 里反转为正序(时间轴)
-            sql = """
-                SELECT record_date, blood_pressure_sys, blood_pressure_dia, 
-                       heart_rate, blood_oxygen, blood_sugar, temperature, weight 
-                FROM health_records 
-                WHERE elder_id = %s
-                ORDER BY record_date DESC LIMIT 7
-            """
-            cursor.execute(sql, (elder_id,))
-            records = cursor.fetchall()
-            
-            # 按日期正序排列 (更符合折线图习惯)
-            records.reverse()
-            
-            # 格式化日期，防止 JSON 序列化报错
-            for r in records:
-                if isinstance(r['record_date'], datetime.date):
-                    r['record_date'] = r['record_date'].strftime('%Y-%m-%d')
-                    
+            if not _assert_family_elder_bound(cursor, family_user_id, elder_id):
+                return jsonify({"code": 403, "message": "您只能查看已绑定长辈的地址"}), 403
+            cursor.execute(
+                """SELECT e.address AS display_address,
+                          l.lng, l.lat, l.location_source, l.is_home_fixed, l.updated_at
+                   FROM elders e
+                   LEFT JOIN elder_location_state l ON l.elder_id = e.elder_id
+                   WHERE e.elder_id = %s""",
+                (elder_id,),
+            )
+            pin = cursor.fetchone() or {}
+            cursor.execute(
+                """SELECT address_id, label, province_name, city_name, district_name,
+                          region_adcode, detail_address, full_address, lng, lat, is_current
+                   FROM elder_addresses
+                   WHERE elder_id = %s
+                   ORDER BY is_current DESC, address_id DESC""",
+                (elder_id,),
+            )
+            addresses = cursor.fetchall()
+            current_address = str(pin.get("display_address") or "").strip()
+            if not current_address:
+                for row in addresses:
+                    if row.get("is_current") and row.get("full_address"):
+                        current_address = str(row["full_address"])
+                        break
+            current_point = None
+            if pin.get("lng") is not None and pin.get("lat") is not None:
+                source = str(pin.get("location_source") or "")
+                if not current_address:
+                    try:
+                        from region_service import reverse_geocode
+                        geo = reverse_geocode(pin["lng"], pin["lat"], from_gps=False)
+                        current_address = str(geo.get("formatted_address") or "").strip()
+                        if current_address:
+                            cursor.execute(
+                                "UPDATE elders SET address = %s WHERE elder_id = %s",
+                                (current_address, elder_id),
+                            )
+                            conn.commit()
+                    except Exception:
+                        current_address = ""
+                current_point = {
+                    "lng": float(pin["lng"]),
+                    "lat": float(pin["lat"]),
+                    "address": current_address or None,
+                    "location_source": source,
+                    "is_live": source in {"browser_gps", "virtual"},
+                    "is_home_fixed": bool(pin.get("is_home_fixed")),
+                    "updated_at": str(pin["updated_at"]) if pin.get("updated_at") is not None else None,
+                }
+            return jsonify({
+                "code": 200,
+                "message": "获取成功",
+                "data": {
+                    "addresses": addresses,
+                    "current_service_point": current_point,
+                },
+            })
+    finally:
+        conn.close()
+
+
+@family_bp.route('/elders/<int:elder_id>/addresses', methods=['POST'])
+def add_family_elder_address(elder_id: int):
+    data = request.get_json(silent=True) or {}
+    family_user_id = data.get('family_user_id')
+    if not family_user_id:
+        return jsonify({"code": 400, "message": "缺少家属ID"}), 400
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            if not _assert_family_elder_bound(cursor, int(family_user_id), elder_id):
+                return jsonify({"code": 403, "message": "您只能为已绑定长辈添加地址"}), 403
+    finally:
+        conn.close()
+    from routes.profile import save_elder_address_for_elder
+    return save_elder_address_for_elder(elder_id, data)
+
+
+@family_bp.route('/elders/<int:elder_id>/addresses/<int:address_id>', methods=['PUT'])
+def update_family_elder_address(elder_id: int, address_id: int):
+    data = request.get_json(silent=True) or {}
+    family_user_id = data.get('family_user_id')
+    if not family_user_id:
+        return jsonify({"code": 400, "message": "缺少家属ID"}), 400
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            if not _assert_family_elder_bound(cursor, int(family_user_id), elder_id):
+                return jsonify({"code": 403, "message": "您只能编辑已绑定长辈的地址"}), 403
+    finally:
+        conn.close()
+    from routes.profile import save_elder_address_for_elder
+    return save_elder_address_for_elder(elder_id, data, address_id)
+
+
+@family_bp.route('/elders/<int:elder_id>/addresses/select', methods=['POST'])
+def select_family_elder_address(elder_id: int):
+    data = request.get_json(silent=True) or {}
+    family_user_id = data.get('family_user_id')
+    address_id = data.get('address_id')
+    if not family_user_id or not address_id:
+        return jsonify({"code": 400, "message": "缺少家属或地址编号"}), 400
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            if not _assert_family_elder_bound(cursor, int(family_user_id), elder_id):
+                return jsonify({"code": 403, "message": "您只能切换已绑定长辈的地址"}), 403
+            cursor.execute(
+                """SELECT address_id, full_address, region_adcode, lng, lat
+                   FROM elder_addresses WHERE address_id = %s AND elder_id = %s""",
+                (address_id, elder_id),
+            )
+            address = cursor.fetchone()
+            if not address:
+                return jsonify({"code": 404, "message": "地址不存在"}), 404
+            cursor.execute(
+                "UPDATE elder_addresses SET is_current = FALSE WHERE elder_id = %s",
+                (elder_id,),
+            )
+            cursor.execute(
+                """UPDATE elder_addresses SET is_current = TRUE
+                   WHERE address_id = %s AND elder_id = %s""",
+                (address_id, elder_id),
+            )
+            cursor.execute(
+                "UPDATE elders SET address = %s WHERE elder_id = %s",
+                (address['full_address'], elder_id),
+            )
+            cursor.execute(
+                "SELECT elder_id FROM elder_location_state WHERE elder_id = %s",
+                (elder_id,),
+            )
+            if cursor.fetchone():
+                cursor.execute(
+                    """UPDATE elder_location_state SET lng = %s, lat = %s,
+                              location_source = 'address_book', is_home_fixed = TRUE,
+                              updated_at = CURRENT_TIMESTAMP
+                       WHERE elder_id = %s""",
+                    (address['lng'], address['lat'], elder_id),
+                )
+            else:
+                cursor.execute(
+                    """INSERT INTO elder_location_state
+                       (elder_id, lng, lat, location_source, is_home_fixed)
+                       VALUES (%s, %s, %s, 'address_book', TRUE)""",
+                    (elder_id, address['lng'], address['lat']),
+                )
+            conn.commit()
+            return jsonify({"code": 200, "message": "长辈当前服务点已切换，老人端同步可见"})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"code": 500, "message": f"切换地址失败: {exc}"}), 500
+    finally:
+        conn.close()
+
+
+# 3. 获取长辈健康趋势图 (Echarts 绘图数据)
+@family_bp.route('/elder-health-chart/<int:elder_id>', methods=['GET'])
+def get_health_chart(elder_id):
+    """Family/admin chart — path param MUST be elders.elder_id (not user_id)."""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT elder_id FROM elders WHERE elder_id = %s", (elder_id,))
+            if not cursor.fetchone():
+                return jsonify({"code": 404, "message": "长辈不存在"}), 404
+            records = fetch_health_trend_rows(cursor, elder_id, limit_days=7)
             return jsonify({"code": 200, "message": "获取健康数据成功", "data": records})
     finally:
         conn.close()
@@ -223,8 +434,12 @@ def publish_order():
     # [V5.0 修改] 纯公益平台，发布时预估志愿时长(小时)
     service_hours = int(data.get('service_hours', 1)) 
     notes = data.get('notes', '')
-    # [V5.1 修改] 家属填写的服务地址
-    address = data.get('address', '')
+    location_mode = str(data.get('location_mode') or 'current').strip().lower()
+    if location_mode in ('live', 'default'):
+        location_mode = 'current' if location_mode == 'live' else 'address'
+    if location_mode not in ('address', 'current'):
+        location_mode = 'current'
+    address_id = data.get('address_id')
 
     if not all([family_user_id, elder_id, service_type, service_time]):
         return jsonify({"code": 400, "message": "订单信息填写不完整"})
@@ -241,6 +456,7 @@ def publish_order():
                 return jsonify({"code": 400, "message": "家属代下单只能发普通服务，紧急求助请由长辈本人发起"}), 400
             from routes.dispatch import create_smart_order_for_elder
             try:
+                # Resolve current pin / selected address book row at publish time.
                 order_id, message = create_smart_order_for_elder(
                     cursor,
                     elder_id=int(elder_id),
@@ -249,7 +465,8 @@ def publish_order():
                     service_hours=service_hours,
                     service_time=str(service_time),
                     notes=str(notes or ""),
-                    address=str(address or "") or None,
+                    location_mode=location_mode,
+                    address_id=int(address_id) if address_id else None,
                     urgent=False,
                     proxy_created_by=int(family_user_id),
                     proxy_reason="家属代老人下单",
@@ -257,7 +474,11 @@ def publish_order():
             except ValueError as exc:
                 return jsonify({"code": 400, "message": str(exc)}), 400
             conn.commit()
-            return jsonify({"code": 200, "message": message, "data": {"order_id": order_id, "status": "pending"}})
+            return jsonify({
+                "code": 200,
+                "message": f"{message}（长辈端会收到家属代下单提示）",
+                "data": {"order_id": order_id, "status": "pending"},
+            })
             # 直接插入订单表，不再有扣积分的复杂事务！公益发单毫无心理负担！
             sql = """
                 INSERT INTO orders (elder_id, created_by, service_type, service_time, service_hours, notes)
@@ -488,7 +709,7 @@ def confirm_order_hours():
 
 @family_bp.route('/alerts', methods=['GET'])
 def get_family_alerts():
-    """SOS / health notices for a bound family account (not the admin desk)."""
+    """SOS + health_warning notices for a bound family account."""
     family_user_id = request.args.get('family_user_id', type=int)
     if not family_user_id:
         return jsonify({"code": 400, "message": "缺少家属账号"}), 400
@@ -499,6 +720,7 @@ def get_family_alerts():
             account = cursor.fetchone()
             if not account or account.get('role') != 'family':
                 return jsonify({"code": 403, "message": "仅家属可查看"}), 403
+            rows = []
             cursor.execute(
                 """
                 SELECT en.notification_id, en.read_at, ei.incident_id, ei.status, ei.description,
@@ -516,7 +738,6 @@ def get_family_alerts():
                 """,
                 (family_user_id,),
             )
-            rows = []
             for item in cursor.fetchall():
                 created = item.get('created_at')
                 if isinstance(created, datetime.datetime):
@@ -533,7 +754,39 @@ def get_family_alerts():
                     'conversation_id': int(item['conversation_id']) if item.get('conversation_id') else None,
                     'unread': item.get('read_at') is None and str(item.get('status') or '') != 'resolved',
                 })
-            return jsonify({"code": 200, "message": "ok", "data": rows})
+            # Health check-in warnings for bound elders (yellow in UI).
+            cursor.execute(
+                """
+                SELECT a.alert_id, a.description, a.is_handled, a.created_at, e.name AS elder_name
+                FROM alerts a
+                JOIN elders e ON e.elder_id = a.elder_id
+                JOIN user_elder_relation uer ON uer.elder_id = a.elder_id
+                WHERE uer.family_user_id = %s
+                  AND a.alert_type = 'health_warning'
+                ORDER BY a.alert_id DESC
+                LIMIT 30
+                """,
+                (family_user_id,),
+            )
+            for item in cursor.fetchall():
+                created = item.get('created_at')
+                if isinstance(created, datetime.datetime):
+                    created = format_datetime(created)
+                handled = bool(item.get('is_handled'))
+                rows.append({
+                    'notification_id': int(item['alert_id']),
+                    'alert_id': int(item['alert_id']),
+                    'incident_id': 0,
+                    'category': 'health_warning',
+                    'elder_name': item.get('elder_name') or '长辈',
+                    'description': item.get('description') or '健康打卡异常',
+                    'status': 'resolved' if handled else 'reported',
+                    'created_at': created,
+                    'conversation_id': None,
+                    'unread': not handled,
+                })
+            rows.sort(key=lambda item: str(item.get('created_at') or ''), reverse=True)
+            return jsonify({"code": 200, "message": "ok", "data": rows[:50]})
     except Exception as exc:
         return jsonify({"code": 500, "message": f"加载家属告警失败: {exc}"}), 500
     finally:
@@ -545,17 +798,30 @@ def ack_family_alert():
     data = request.get_json() or {}
     family_user_id = data.get('family_user_id')
     notification_id = data.get('notification_id')
+    category = str(data.get('category') or 'sos').strip().lower()
     if not family_user_id or not notification_id:
         return jsonify({"code": 400, "message": "缺少家属账号或通知编号"}), 400
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute(
-                """UPDATE emergency_notifications
-                   SET read_at = CURRENT_TIMESTAMP
-                   WHERE notification_id = %s AND recipient_user_id = %s""",
-                (int(notification_id), int(family_user_id)),
-            )
+            if category == 'health_warning':
+                cursor.execute(
+                    """UPDATE alerts a
+                       SET is_handled = TRUE
+                       FROM user_elder_relation uer
+                       WHERE a.alert_id = %s
+                         AND a.alert_type = 'health_warning'
+                         AND uer.elder_id = a.elder_id
+                         AND uer.family_user_id = %s""",
+                    (int(notification_id), int(family_user_id)),
+                )
+            else:
+                cursor.execute(
+                    """UPDATE emergency_notifications
+                       SET read_at = CURRENT_TIMESTAMP
+                       WHERE notification_id = %s AND recipient_user_id = %s""",
+                    (int(notification_id), int(family_user_id)),
+                )
             conn.commit()
             return jsonify({"code": 200, "message": "已确认收到"})
     except Exception as exc:

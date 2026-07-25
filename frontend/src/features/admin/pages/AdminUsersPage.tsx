@@ -16,6 +16,7 @@ import { CheckOutlined, CloseOutlined, SafetyCertificateOutlined } from '@ant-de
 import { useSearchParams } from 'react-router-dom'
 
 import { auditVolunteer, deleteAdminUser, fetchAdminUsers } from '@/services/adapters/admin-adapter'
+import { SOS_SKILL_OPTIONS } from '@/services/adapters/dispatch-adapter'
 import type { AdminUserRow, Role } from '@/types/domain'
 import { useSession } from '@/features/auth/useSession'
 import { AdminRegionScopeNotice } from '@/features/admin/components/AdminRegionScopeNotice'
@@ -44,16 +45,8 @@ const statusMap: Record<string, { color: string; text: string }> = {
   archived: { color: 'default', text: '已归档' },
 }
 
-const skillOptions = [
-  { value: 'medical_support', label: '医疗照护' },
-  { value: 'emergency_response', label: '应急救援' },
-  { value: 'mobility_assist', label: '出行陪护' },
-  { value: 'errand', label: '代办跑腿' },
-  { value: 'companion', label: '陪伴关怀' },
-  { value: 'rehab', label: '康复协助' },
-  { value: 'digital_assist', label: '智能设备协助' },
-  { value: 'grooming', label: '生活护理' },
-]
+// Keep labels identical to backend SKILL_LABELS / SOS_SKILL_OPTIONS.
+const skillOptions = SOS_SKILL_OPTIONS.map((item) => ({ value: item.code, label: item.label }))
 
 const skillLabels = Object.fromEntries(skillOptions.map((item) => [item.value, item.label]))
 
@@ -180,8 +173,9 @@ export default function AdminUsersPage() {
       render: (role: Role) => <Tag color={roleColors[role]}>{roleLabels[role]}</Tag>,
     },
     {
-      title: '所属区县',
+      title: '注册区县',
       key: 'regions',
+      width: 160,
       render: (_: unknown, record: AdminUserRow) => record.regionNames?.length ? (
         <Space size={[4, 4]} wrap>
           {record.regionNames.map((name, index) => (
@@ -196,13 +190,25 @@ export default function AdminUsersPage() {
       render: (_: unknown, record: AdminUserRow) => {
         if (record.role === 'family') {
           if (!record.relatedElders?.length) return <span className="text-gray-400">未绑定老人</span>
-          return record.relatedElders.map((elder) => (
-            <div key={elder.elderId} className="text-sm">
-              {elder.name}
-              {elder.regionName ? <span className="text-gray-400"> · {elder.regionName}</span> : null}
-              {elder.address ? <div className="text-xs text-gray-400">{elder.address}</div> : null}
+          return (
+            <div className="space-y-2">
+              {record.relatedElders.map((elder) => (
+                <div key={elder.elderId} className="text-sm leading-5">
+                  <Space size={[4, 4]} wrap>
+                    <span>{elder.name}</span>
+                    {elder.relationType ? <Tag>{elder.relationType}</Tag> : null}
+                    {elder.regionName ? <Tag color="blue">{elder.regionName}</Tag> : null}
+                    {elder.inAdminScope === false ? <Tag color="orange">跨区关联</Tag> : null}
+                    {elder.inAdminScope === true ? <Tag color="green">本区</Tag> : null}
+                  </Space>
+                  {elder.address ? <div className="text-xs text-gray-400">{elder.address}</div> : null}
+                </div>
+              ))}
+              {record.relatedElders.some((elder) => elder.inAdminScope === false) ? (
+                <div className="text-xs text-slate-500">跨区关联完整展示，便于排障核对</div>
+              ) : null}
             </div>
-          ))
+          )
         }
         if (record.role === 'elder') return <span className="text-sm text-gray-600">{record.address || '—'}</span>
         return <span className="text-gray-400">—</span>
@@ -213,7 +219,7 @@ export default function AdminUsersPage() {
       key: 'skills',
       width: 290,
       render: (_: unknown, record: AdminUserRow) => (
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           <div className="text-sm text-slate-600">{record.skillsDescription || '注册时未填写技能说明'}</div>
           <Space size={[4, 4]} wrap>
             {record.verifiedSkills?.length
@@ -331,8 +337,8 @@ export default function AdminUsersPage() {
           rowKey="userId"
           loading={loading}
           pagination={{ current: page, pageSize: 20, total, onChange: setPage }}
-          size="middle"
-          scroll={{ x: 1150 }}
+          size="small"
+          scroll={{ x: 1180 }}
         />
       </Card>
 
@@ -349,7 +355,7 @@ export default function AdminUsersPage() {
           <Descriptions.Item label="志愿者">
             {reviewingUser?.name || reviewingUser?.username}
           </Descriptions.Item>
-          <Descriptions.Item label="服务区县">
+          <Descriptions.Item label="注册区县">
             {reviewingUser?.regionNames?.join('、') || '未配置'}
           </Descriptions.Item>
           <Descriptions.Item label="注册说明">

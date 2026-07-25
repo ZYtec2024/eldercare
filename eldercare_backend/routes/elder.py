@@ -1,17 +1,32 @@
 # routes/elder.py
 from flask import Blueprint, request, jsonify
 from db import get_db_connection
-from region_service import is_active_region
-from utils import format_datetime, send_health_alert_email, send_sos_email, get_validated_data
+from utils import (
+    fetch_health_trend_rows,
+    format_datetime,
+    get_validated_data,
+    send_health_alert_email,
+    send_sos_email,
+)
 import datetime
 
 elder_bp = Blueprint('elder', __name__)
 
 
+def _elder_profile_by_user_id(cursor, user_id):
+    """Resolve elders row from login users.user_id (works for demo + newly registered)."""
+    cursor.execute(
+        """SELECT elder_id, name, alert_sys_threshold
+           FROM elders WHERE user_id = %s""",
+        (user_id,),
+    )
+    return cursor.fetchone()
+
+
 # 1. 老人每日健康打卡 (支持全指标，异常自动报警)
 @elder_bp.route('/health/checkin', methods=['POST'])
 def health_checkin():
-    data = request.get_json()
+    data = request.get_json() or {}
     user_id = data.get('user_id') 
     
     sys = data.get('blood_pressure_sys')
@@ -24,29 +39,48 @@ def health_checkin():
     notes = data.get('notes', '')
 
     if not user_id:
-        return jsonify({"code": 400, "message": "缺失用户信息"})
+        return jsonify({"code": 400, "message": "缺失用户信息"}), 400
+    if all(v is None for v in (sys, dia, heart_rate, blood_oxygen, blood_sugar, temperature, weight)):
+        return jsonify({"code": 400, "message": "请至少填写一项健康指标"}), 400
 
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            # 查出老人档案ID、姓名和自定义的高压报警线 (默认140)
-            cursor.execute("SELECT elder_id, name, alert_sys_threshold FROM elders WHERE user_id = %s", (user_id,))
-            elder = cursor.fetchone()
+            # Always user_id → elder_id (never treat login id as elder_id).
+            elder = _elder_profile_by_user_id(cursor, user_id)
             if not elder:
-                return jsonify({"code": 404, "message": "找不到老人档案"})
+                return jsonify({"code": 404, "message": "找不到老人档案，请确认已用老人角色完成注册"}), 404
 
             elder_id = elder['elder_id']
             sys_threshold = elder['alert_sys_threshold'] or 140
 
-            # 插入健康记录
-            sql = """
-                INSERT INTO health_records 
-                (elder_id, record_date, blood_pressure_sys, blood_pressure_dia, heart_rate, 
-                 blood_oxygen, blood_sugar, temperature, weight, notes)
-                VALUES (%s, CURRENT_DATE, %s, %s, %s, %s, %s, %s, %s, %s)
-            """
-            cursor.execute(sql, (elder_id, sys, dia, heart_rate, blood_oxygen, blood_sugar, temperature, weight, notes))
-            
+            # Same-day check-in overwrites the existing row (avoid duplicate chart points).
+            cursor.execute(
+                """SELECT record_id FROM health_records
+                   WHERE elder_id = %s AND record_date = CURRENT_DATE
+                   ORDER BY record_id DESC LIMIT 1""",
+                (elder_id,),
+            )
+            existing = cursor.fetchone()
+            if existing:
+                cursor.execute(
+                    """UPDATE health_records SET
+                           blood_pressure_sys = %s, blood_pressure_dia = %s, heart_rate = %s,
+                           blood_oxygen = %s, blood_sugar = %s, temperature = %s,
+                           weight = %s, notes = %s
+                       WHERE record_id = %s""",
+                    (sys, dia, heart_rate, blood_oxygen, blood_sugar, temperature, weight, notes,
+                     existing["record_id"]),
+                )
+            else:
+                cursor.execute(
+                    """INSERT INTO health_records
+                       (elder_id, record_date, blood_pressure_sys, blood_pressure_dia, heart_rate,
+                        blood_oxygen, blood_sugar, temperature, weight, notes)
+                       VALUES (%s, CURRENT_DATE, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (elder_id, sys, dia, heart_rate, blood_oxygen, blood_sugar, temperature, weight, notes),
+                )
+
             # 🚨 智能报警联动逻辑
             alerts = []
             if sys is not None and int(sys) > sys_threshold:
@@ -58,33 +92,41 @@ def health_checkin():
 
             if alerts:
                 warning_msg = "健康异常报警：" + "，".join(alerts)
-                alert_sql = "INSERT INTO alerts (elder_id, alert_type, description) VALUES (%s, 'health_warning', %s) RETURNING alert_id"
-                cursor.execute(alert_sql, (elder_id, warning_msg))
-                alert_id = cursor.fetchone()['alert_id']
-                
-                # 查询该老人的所有家属邮箱
-                sql_family = """
-                    SELECT u.email 
-                    FROM users u 
-                    JOIN user_elder_relation uer ON u.user_id = uer.family_user_id 
-                    WHERE uer.elder_id = %s AND u.email IS NOT NULL
-                """
-                cursor.execute(sql_family, (elder_id,))
-                families = cursor.fetchall()
+                # Deduplicate same-day health alerts for this elder (trigger may also insert on INSERT).
+                cursor.execute(
+                    """SELECT alert_id FROM alerts
+                       WHERE elder_id = %s AND alert_type = 'health_warning'
+                         AND created_at::date = CURRENT_DATE
+                         AND description = %s
+                       ORDER BY alert_id DESC LIMIT 1""",
+                    (elder_id, warning_msg),
+                )
+                existing_alert = cursor.fetchone()
+                if existing_alert:
+                    alert_id = existing_alert["alert_id"]
+                else:
+                    cursor.execute(
+                        """INSERT INTO alerts (elder_id, alert_type, description)
+                           VALUES (%s, 'health_warning', %s) RETURNING alert_id""",
+                        (elder_id, warning_msg),
+                    )
+                    alert_id = cursor.fetchone()["alert_id"]
 
-                # 查询所有管理员邮箱
-                sql_admins = "SELECT email FROM users WHERE role = 'admin' AND email IS NOT NULL"
-                cursor.execute(sql_admins)
+                cursor.execute(
+                    """SELECT u.email
+                       FROM users u
+                       JOIN user_elder_relation uer ON u.user_id = uer.family_user_id
+                       WHERE uer.elder_id = %s AND u.email IS NOT NULL""",
+                    (elder_id,),
+                )
+                families = cursor.fetchall()
+                cursor.execute("SELECT email FROM users WHERE role = 'admin' AND email IS NOT NULL")
                 admins = cursor.fetchall()
 
                 email_sent_count = 0
-                
-                # 发送给家属
                 for family in families:
                     if send_health_alert_email(family['email'], elder['name'], warning_msg):
                         email_sent_count += 1
-                
-                # 发送给管理员
                 for admin in admins:
                     if send_health_alert_email(admin['email'], elder['name'], warning_msg):
                         email_sent_count += 1
@@ -92,29 +134,59 @@ def health_checkin():
                 conn.commit()
                 return jsonify({
                     "code": 200,
-                    "message": f"今日健康打卡成功！异常已记录，已向 {email_sent_count} 位家属和管理员发送告警通知。",
+                    "message": f"今日健康打卡已保存。检测到异常：{'、'.join(alerts)}。已通知家属/管理员。",
                     "data": {
                         "abnormal": True,
                         "alert_id": alert_id,
                         "alerts": alerts,
                         "notified_families": email_sent_count,
+                        "elder_id": elder_id,
                     },
                 })
 
             conn.commit()
             return jsonify({
                 "code": 200,
-                "message": "今日健康打卡成功！",
+                "message": "今日健康打卡成功！下方健康趋势已更新。",
                 "data": {
                     "abnormal": False,
                     "alert_id": None,
+                    "elder_id": elder_id,
                 },
             })
     except Exception as e:
         conn.rollback()
-        return jsonify({"code": 500, "message": f"打卡失败: {str(e)}"})
+        return jsonify({"code": 500, "message": f"打卡失败: {str(e)}"}), 500
     finally:
         conn.close()
+
+
+@elder_bp.route('/health/chart', methods=['GET'])
+def health_chart():
+    """Elder-side trend chart for any elder account (demo or newly registered).
+
+    Query param is login user_id; server resolves elders.elder_id before reading
+    health_records. Never pass user_id into the family elder_id chart route.
+    """
+    user_id = request.args.get('user_id', type=int)
+    if not user_id:
+        return jsonify({"code": 400, "message": "缺少 user_id"}), 400
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            elder = _elder_profile_by_user_id(cursor, user_id)
+            if not elder:
+                return jsonify({"code": 404, "message": "找不到老人档案，请确认已用老人角色完成注册"}), 404
+            elder_id = int(elder["elder_id"])
+            ordered = fetch_health_trend_rows(cursor, elder_id, limit_days=7)
+            return jsonify({
+                "code": 200,
+                "message": "获取健康数据成功",
+                "data": {"elder_id": elder_id, "user_id": int(user_id), "records": ordered},
+            })
+    finally:
+        conn.close()
+
 
 # 2. 获取老人的待办服务列表
 @elder_bp.route('/my-services', methods=['GET'])
@@ -127,15 +199,18 @@ def my_services():
     try:
         with conn.cursor() as cursor:
             sql = """
-                                SELECT o.order_id, o.service_type, o.service_time, o.status,
-                                             o.volunteer_id, v.real_name AS volunteer_name,
-                                             d.dispatch_state,
-                                             EXISTS(SELECT 1 FROM reviews r WHERE r.order_id = o.order_id) AS review_submitted
+                SELECT o.order_id, o.service_type, o.service_time, o.status, o.address,
+                       o.volunteer_id, v.real_name AS volunteer_name,
+                       o.proxy_created_by, o.proxy_reason,
+                       pu.real_name AS proxy_family_name,
+                       d.dispatch_state,
+                       EXISTS(SELECT 1 FROM reviews r WHERE r.order_id = o.order_id) AS review_submitted
                 FROM orders o
                 LEFT JOIN users v ON o.volunteer_id = v.user_id
+                LEFT JOIN users pu ON pu.user_id = o.proxy_created_by
                 LEFT JOIN dispatch_orders d ON d.order_id = o.order_id
                 WHERE o.elder_id = (SELECT elder_id FROM elders WHERE user_id = %s)
-                                    AND o.status IN ('pending', 'accepted', 'in_progress', 'completed', 'cancelled')
+                  AND o.status IN ('pending', 'accepted', 'in_progress', 'completed', 'cancelled')
                 ORDER BY o.service_time DESC
             """
             cursor.execute(sql, (user_id,))
@@ -146,17 +221,23 @@ def my_services():
                     service_time = service_time.strftime('%Y-%m-%d %H:%M')
                 status = row['status']
                 can_complete = status in ('accepted', 'in_progress') and bool(row['volunteer_id'])
+                proxy_by = int(row['proxy_created_by']) if row.get('proxy_created_by') else None
                 services.append({
                     'orderId': int(row['order_id']),
                     'serviceType': row['service_type'],
                     'time': str(service_time or ''),
                     'status': status,
+                    'address': row.get('address'),
                     'volunteerId': int(row['volunteer_id']) if row['volunteer_id'] else None,
                     'volunteerName': row['volunteer_name'],
                     'dispatchState': row.get('dispatch_state'),
                     'reviewSubmitted': bool(row['review_submitted']),
                     'canReview': status == 'completed' and bool(row['volunteer_id']) and not bool(row['review_submitted']),
                     'canComplete': can_complete,
+                    'proxyCreatedBy': proxy_by,
+                    'proxyFamilyName': row.get('proxy_family_name'),
+                    'proxyReason': row.get('proxy_reason'),
+                    'isFamilyProxy': bool(proxy_by),
                 })
             return jsonify({"code": 200, "message": "查询成功", "data": services})
     finally:
@@ -198,17 +279,46 @@ def create_emergency_incident():
                     return jsonify({'code': 403, 'message': '您无权替该老人发起紧急求助'}), 403
             if reporter['role'] == 'elder' and int(elder['user_id']) != int(reporter_user_id):
                 return jsonify({'code': 403, 'message': '老人账号只能为本人发起紧急求助'}), 403
+            # Service region = confirmed location at create time (not signup district).
+            from routes.dispatch import (
+                _persist_sos_assigned_admin,
+                _pick_least_loaded_district_admin,
+                create_smart_order_for_elder,
+                resolve_elder_service_point,
+            )
+            location_mode = str(data.get('location_mode') or 'address').strip().lower()
+            if location_mode == 'live':
+                location_mode = 'current'
+            if location_mode not in ('address', 'current'):
+                location_mode = 'address'
+            try:
+                order_lng = data.get('lng')
+                order_lat = data.get('lat')
+                service_point = resolve_elder_service_point(
+                    cursor,
+                    elder_id=int(elder_id),
+                    location_mode=location_mode,
+                    address_id=int(data['address_id']) if data.get('address_id') else None,
+                    lng=float(order_lng) if order_lng is not None else None,
+                    lat=float(order_lat) if order_lat is not None else None,
+                    address=str(data.get('address') or '').strip() or None,
+                    sync_pin=True,
+                )
+            except ValueError as exc:
+                return jsonify({'code': 400, 'message': str(exc)}), 400
+            service_region = str(service_point['region_adcode'])
             if reporter['role'] == 'admin':
-                cursor.execute("SELECT 1 FROM admin_region_scope WHERE admin_user_id = %s AND region_adcode IN (%s, '*')",
-                               (reporter_user_id, elder['region_adcode']))
+                cursor.execute(
+                    """SELECT 1 FROM admin_region_scope
+                       WHERE admin_user_id = %s AND region_adcode IN (%s, %s, '*')""",
+                    (reporter_user_id, service_region, elder['region_adcode']),
+                )
                 if not cursor.fetchone():
                     return jsonify({'code': 403, 'message': '您无权处理该区县紧急事件'}), 403
-            if not is_active_region(elder.get('region_adcode')):
-                return jsonify({'code': 400, 'message': '老人所属区县尚未开通或已停用，无法发起紧急求助'}), 400
             cursor.execute('''INSERT INTO emergency_incidents
                               (elder_id, region_adcode, incident_type, description, status, created_by)
                               VALUES (%s, %s, %s, %s, 'reported', %s) RETURNING incident_id''',
-                           (elder_id, elder['region_adcode'], incident_type, description, reporter_user_id))
+                           (elder_id, service_region, incident_type, description, reporter_user_id))
             incident_id = int(cursor.fetchone()['incident_id'])
             cursor.execute("""INSERT INTO alerts (elder_id, alert_type, description, emergency_incident_id)
                               VALUES (%s, 'sos', %s, %s) RETURNING alert_id""",
@@ -221,8 +331,7 @@ def create_emergency_incident():
             cursor.execute("SELECT admin_user_id FROM admin_region_scope WHERE region_adcode = '*'")
             root_admin_ids = {int(row['admin_user_id']) for row in cursor.fetchall()}
             recipient_ids.update(root_admin_ids)
-            from routes.dispatch import _persist_sos_assigned_admin, _pick_least_loaded_district_admin
-            assigned_admin_id = _pick_least_loaded_district_admin(cursor, str(elder['region_adcode']))
+            assigned_admin_id = _pick_least_loaded_district_admin(cursor, service_region)
             if assigned_admin_id:
                 recipient_ids.add(assigned_admin_id)
                 _persist_sos_assigned_admin(cursor, incident_id, assigned_admin_id)
@@ -248,17 +357,23 @@ def create_emergency_incident():
                 named = cursor.fetchone()
                 if named and named.get('real_name'):
                     assign_note = f"已平均分配给分管理员 {named['real_name']} 跟进"
+            location_note = '；服务位置：' + str(service_point.get('address') or '已确认')
             cursor.execute('''INSERT INTO conversation_messages
                               (conversation_id, sender_user_id, message_type, content)
                               VALUES (%s, %s, 'system', %s)''',
-                           (conversation_id, reporter_user_id, f'已发起紧急求助：{description}；{assign_note}'))
+                           (conversation_id, reporter_user_id,
+                            f'已发起紧急求助：{description}；{assign_note}{location_note}'))
             order_id = None
             if dispatch_service:
-                from routes.dispatch import create_smart_order_for_elder
                 try:
                     order_id, _ = create_smart_order_for_elder(
                         cursor, elder_id=int(elder_id), created_by=int(reporter_user_id),
                         service_type='SOS紧急救助', notes=description, urgent=True,
+                        address=str(service_point.get('address') or '').strip() or None,
+                        location_mode=str(service_point.get('location_mode') or location_mode),
+                        address_id=int(data['address_id']) if data.get('address_id') else None,
+                        lng=float(service_point['lng']),
+                        lat=float(service_point['lat']),
                         proxy_created_by=int(reporter_user_id) if reporter['role'] != 'elder' else None,
                         proxy_reason='紧急求助代发' if reporter['role'] != 'elder' else None,
                         incident_id=incident_id,

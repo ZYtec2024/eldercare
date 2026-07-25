@@ -202,7 +202,10 @@ def grab_order():
             # user row so every accept attempt for that person is serialized.
             cursor.execute("SELECT user_id FROM users WHERE user_id = %s FOR UPDATE", (volunteer_id,))
             volunteer = cursor.fetchone()
-            cursor.execute("SELECT service_region_adcode FROM volunteer_location_state WHERE volunteer_id = %s", (volunteer_id,))
+            cursor.execute(
+                "SELECT lng, lat, service_region_adcode FROM volunteer_location_state WHERE volunteer_id = %s",
+                (volunteer_id,),
+            )
             volunteer_location = cursor.fetchone()
             if not volunteer:
                 conn.rollback()
@@ -211,11 +214,19 @@ def grab_order():
             if not order:
                 conn.rollback()
                 return jsonify({"code": 404, "message": "订单不存在"})
-            
-            # 2. 校验状态：只有状态是 pending (待接单) 才能抢
-            if not volunteer_location or str(order.get('region_adcode')) != str(volunteer_location.get('service_region_adcode')):
+
+            # Grab by where the volunteer is standing now (opened district),
+            # not only the registered service_region_adcode.
+            from routes.dispatch import _volunteer_current_region
+            standing_region = None
+            if volunteer_location:
+                standing_region = _volunteer_current_region(
+                    volunteer_location.get("lng"),
+                    volunteer_location.get("lat"),
+                )
+            if not standing_region or str(order.get("region_adcode")) != str(standing_region):
                 conn.rollback()
-                return jsonify({"code": 403, "message": "任务不属于您的服务区县"}), 403
+                return jsonify({"code": 403, "message": "任务不属于您当前所在的服务区县"}), 403
 
             if order['status'] != 'pending':
                 conn.rollback() # 解锁放行排队的人

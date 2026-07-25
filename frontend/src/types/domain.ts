@@ -67,6 +67,13 @@ export interface ElderSummary {
   age: number
   gender?: string
   addressPreview: string
+  defaultAddress?: string
+  defaultLabel?: string
+  currentServiceAddress?: string
+  locationSource?: string
+  hasLiveLocation?: boolean
+  hasCurrentServicePoint?: boolean
+  liveLocationHint?: string
   relationType: string
   relationLabel?: string
   riskLevel: RiskLevel
@@ -97,6 +104,8 @@ export interface ServiceRequestDraft {
   serviceTime: string
   serviceHours: number
   address?: string
+  locationMode?: 'address' | 'current' | 'live'
+  addressId?: number
   notes: string
 }
 
@@ -114,6 +123,7 @@ export interface PendingService {
   orderId: number
   serviceType: string
   time: string
+  address?: string
   volunteerId?: number
   volunteerName?: string
   status: ServiceStatus
@@ -121,6 +131,9 @@ export interface PendingService {
   canComplete?: boolean
   canReview?: boolean
   reviewSubmitted?: boolean
+  proxyCreatedBy?: number | null
+  proxyFamilyName?: string | null
+  isFamilyProxy?: boolean
 }
 
 export interface CheckInPayload {
@@ -218,8 +231,11 @@ export interface AdminUserRow {
     elderId: number
     name: string
     address?: string
+    relationType?: string
     regionAdcode?: string
     regionName?: string
+    /** Registered district is inside the viewing admin's scope (root always true). */
+    inAdminScope?: boolean
   }>
 }
 
@@ -289,6 +305,9 @@ export interface ProfileSnapshot {
   weeklyHours?: number
   awards?: string[]
   likesCount?: number
+  /** Registered district adcode (elder home / volunteer service registration). */
+  regionAdcode?: string
+  regionName?: string
 }
 
 export interface RegisterPayload {

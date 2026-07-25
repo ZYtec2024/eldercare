@@ -280,16 +280,38 @@ export async function fetchDispatchTracking(role: 'elder' | 'volunteer' | 'famil
   return response.data.data
 }
 
-export async function updateElderDispatchLocation(payload: { userId: number; lng: number; lat: number; address?: string; source?: 'fixed_home' | 'browser_gps' | 'virtual' }) {
+export async function updateElderDispatchLocation(payload: {
+  userId: number
+  lng: number
+  lat: number
+  address?: string
+  source?: 'fixed_home' | 'browser_gps' | 'virtual' | 'address_book'
+  syncDisplay?: boolean
+}) {
   const response = await http.post<ApiEnvelope<unknown>>('/dispatch/locations/elder', {
-    user_id: payload.userId, lng: payload.lng, lat: payload.lat, address: payload.address, source: payload.source ?? 'fixed_home',
+    user_id: payload.userId,
+    lng: payload.lng,
+    lat: payload.lat,
+    address: payload.address,
+    source: payload.source ?? 'fixed_home',
+    sync_display: payload.syncDisplay === true,
   })
   return response.data
 }
 
-export async function updateVolunteerDispatchLocation(payload: { volunteerId: number; lng: number; lat: number; source?: 'browser_gps' | 'virtual' }) {
+export async function updateVolunteerDispatchLocation(payload: {
+  volunteerId: number
+  lng?: number
+  lat?: number
+  source?: 'browser_gps' | 'virtual' | 'home_default'
+  useHome?: boolean
+}) {
   const response = await http.post<ApiEnvelope<unknown>>('/dispatch/locations/volunteer', {
-    volunteer_id: payload.volunteerId, lng: payload.lng, lat: payload.lat, source: payload.source ?? 'virtual',
+    volunteer_id: payload.volunteerId,
+    lng: payload.lng,
+    lat: payload.lat,
+    source: payload.useHome ? 'home_default' : (payload.source ?? 'virtual'),
+    use_home: payload.useHome === true,
   })
   return response.data
 }
