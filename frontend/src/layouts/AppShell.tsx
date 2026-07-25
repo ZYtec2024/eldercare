@@ -4,6 +4,7 @@ import {
   LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  QuestionCircleOutlined,
   UserOutlined,
 } from '@ant-design/icons'
 import { App, Avatar, Button, Layout, Menu, Space, Typography } from 'antd'
@@ -11,6 +12,8 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 
 import { useSession } from '@/features/auth/useSession'
 import { LiveNoticeHost } from '@/features/shared/LiveNoticeHost'
+import OnboardingGuide from '@/features/onboarding/OnboardingGuide'
+import { hasSeenOnboarding, markOnboardingSeen } from '@/features/onboarding/onboarding-store'
 import {
   getNavigationForRole,
   getRouteDefinition,
@@ -51,6 +54,7 @@ export function AppShell() {
   const location = useLocation()
   const { session, logout, updateLastVisitedRoute } = useSession()
   const [collapsed, setCollapsed] = useState(false)
+  const [onboardingOpen, setOnboardingOpen] = useState(false)
 
   const navigationItems = useMemo(() => {
     if (!session) return []
@@ -128,6 +132,22 @@ export function AppShell() {
     }
   }, [modal, navigate, session?.role, session?.userId])
 
+  // 新手引导：首次登录后自动弹出（按 userId + role 判定）
+  useEffect(() => {
+    if (!session || session.tokenState !== 'active') return
+    if (hasSeenOnboarding(session.userId, session.role)) return
+    const timer = window.setTimeout(() => setOnboardingOpen(true), 300)
+    return () => window.clearTimeout(timer)
+  }, [session?.userId, session?.role, session?.tokenState])
+
+  const handleOnboardingClose = () => setOnboardingOpen(false)
+  const handleOnboardingDontShowAgain = () => {
+    if (session) {
+      markOnboardingSeen(session.userId, session.role)
+    }
+    setOnboardingOpen(false)
+  }
+
   if (!session) return null
 
   return (
@@ -200,6 +220,12 @@ export function AppShell() {
           <Space size={12}>
             <Button
               type="text"
+              icon={<QuestionCircleOutlined className="!text-2xl" />}
+              className="!w-10 !h-10 flex items-center justify-center"
+              onClick={() => setOnboardingOpen(true)}
+            />
+            <Button
+              type="text"
               icon={<HomeOutlined className="!text-2xl" />}
               className="!w-10 !h-10 flex items-center justify-center"
               onClick={() => navigate(getDefaultRoute(session.role))}
@@ -228,6 +254,12 @@ export function AppShell() {
           </div>
         </Content>
       </Layout>
+      <OnboardingGuide
+        open={onboardingOpen}
+        role={session.role}
+        onClose={handleOnboardingClose}
+        onDontShowAgain={handleOnboardingDontShowAgain}
+      />
     </Layout>
   )
 }
