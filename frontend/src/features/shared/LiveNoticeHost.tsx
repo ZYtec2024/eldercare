@@ -22,6 +22,25 @@ function saveDismissed(keys: Set<string>) {
   sessionStorage.setItem(DISMISS_KEY, JSON.stringify([...keys].slice(-80)))
 }
 
+function solidTone(level: LiveNotice['level']) {
+  if (level === 'error') {
+    return {
+      className: 'live-notice-toast live-notice-toast--error',
+      dot: '#ef4444',
+    }
+  }
+  if (level === 'success') {
+    return {
+      className: 'live-notice-toast live-notice-toast--success',
+      dot: '#10b981',
+    }
+  }
+  return {
+    className: 'live-notice-toast live-notice-toast--warning',
+    dot: '#f59e0b',
+  }
+}
+
 /**
  * WeChat-like sticky toasts for SOS / capacity events across roles.
  * Mount once inside AppShell; dismissible via the close icon.
@@ -45,12 +64,28 @@ export function LiveNoticeHost() {
       if (shownRef.current.has(item.notice_key)) return
       shownRef.current.add(item.notice_key)
 
-      const type = item.level === 'error' ? 'error' : item.level === 'success' ? 'success' : 'warning'
-      notification[type]({
+      const tone = solidTone(item.level)
+      notification.open({
         key: item.notice_key,
-        message: item.title,
+        // White card + left color dot; no check / cross glyph.
+        icon: <span className="live-notice-dot" style={{ background: tone.dot }} />,
+        className: tone.className,
+        style: {
+          background: '#ffffff',
+          borderRadius: 12,
+          padding: '14px 16px',
+          boxShadow: '0 10px 28px rgba(15, 23, 42, 0.14)',
+          border: '1px solid #e2e8f0',
+        },
+        styles: {
+          root: {
+            background: '#ffffff',
+            borderRadius: 12,
+          },
+        },
+        message: <span style={{ color: '#0f172a', fontWeight: 700 }}>{item.title}</span>,
         description: (
-          <div className="space-y-2">
+          <div className="space-y-2" style={{ color: '#334155' }}>
             <div>{item.body}</div>
             {item.action_path ? (
               <Button
@@ -66,6 +101,7 @@ export function LiveNoticeHost() {
             ) : null}
           </div>
         ),
+        closeIcon: <span style={{ color: '#64748b', fontSize: 16, lineHeight: 1 }}>×</span>,
         placement: 'topRight',
         duration: 0,
         onClose: () => {
