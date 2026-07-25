@@ -5,9 +5,11 @@ import math
 from flask import Blueprint, request, jsonify
 from db import get_db_connection
 from utils import api_response, get_validated_data
-from region_service import fetch_district_children, geocode_address
+from region_service import fetch_district_children, geocode_address, is_active_region
 
 auth_bp = Blueprint('auth', __name__)
+
+_ALLOWED_REGISTER_ROLES = {'elder', 'volunteer', 'family', 'admin'}
 
 
 @auth_bp.route('/regions/children', methods=['GET'])
@@ -36,6 +38,8 @@ def register():
     
     if not all([username, password, role, real_name, phone, email]):
         return api_response({"code": 400, "message": "基础信息(含邮箱)填写不完整"}, 400)
+    if role not in _ALLOWED_REGISTER_ROLES:
+        return api_response({"code": 400, "message": "注册角色无效"}, 400)
 
     if role == 'admin':
         if data.get('invite_code') != 'SHU2024ADMIN':
@@ -51,6 +55,11 @@ def register():
         detail_address = str(data.get('detail_address') or data.get('address') or '').strip()
         if not all([province_name, city_name, district_name, region_adcode, detail_address]):
             return api_response({"code": 400, "message": "请完整选择省、市、区县并填写详细地址"}, 400)
+        if not is_active_region(region_adcode):
+            return api_response({
+                "code": 400,
+                "message": "所选区县尚未开通服务，请选择已开通区域（如宝山区、浦东新区、朝阳区）",
+            }, 400)
         try:
             resolved_address = geocode_address(
                 f"{province_name}{city_name}{district_name}{detail_address}",
@@ -85,6 +94,18 @@ def register():
     try:
         with conn.cursor() as cursor:
             # ============ 💎 数据库事务开始 ============
+            cursor.execute(
+                "SELECT username, phone, email FROM users WHERE username = %s OR phone = %s OR email = %s LIMIT 1",
+                (username, phone, email),
+            )
+            existing = cursor.fetchone()
+            if existing:
+                if str(existing.get('username') or '') == str(username):
+                    return api_response({"code": 409, "message": "该账号已被注册，请更换用户名"}, 409)
+                if str(existing.get('phone') or '') == str(phone):
+                    return api_response({"code": 409, "message": "该手机号已被注册，请更换手机号"}, 409)
+                return api_response({"code": 409, "message": "该邮箱已被注册，请更换邮箱"}, 409)
+
             # 1. 创建底层登录账号 (带上 email)
             sql_user = """
                 INSERT INTO users (username, password_hash, role, real_name, phone, email)
@@ -255,7 +276,46 @@ def login():
     finally:
         conn.close()
 
-# 3. 忘记密码
+# 3. 修改密码（已登录用户）
+@auth_bp.route('/change-password', methods=['POST'])
+def change_password():
+    data = request.get_json(silent=True) or {}
+    user_id = data.get('user_id')
+    old_password = data.get('old_password')
+    new_password = data.get('new_password')
+    if not user_id or not old_password or not new_password:
+        return api_response({"code": 400, "message": "请填写原密码和新密码"}, 400)
+    if str(old_password) == str(new_password):
+        return api_response({"code": 400, "message": "新密码不能与原密码相同"}, 400)
+
+    conn = get_db_connection()
+    if conn is None:
+        return api_response({"code": 500, "message": "数据库连接失败"}, 500)
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT user_id, password_hash FROM users WHERE user_id = %s",
+                (user_id,),
+            )
+            user = cursor.fetchone()
+            if not user:
+                return api_response({"code": 404, "message": "用户不存在"}, 404)
+            if str(user.get('password_hash') or '') != str(old_password):
+                return api_response({"code": 401, "message": "原密码不正确"}, 401)
+            cursor.execute(
+                "UPDATE users SET password_hash = %s WHERE user_id = %s",
+                (new_password, user_id),
+            )
+            conn.commit()
+            return api_response({"code": 200, "message": "密码修改成功"}, 200)
+    except Exception:
+        conn.rollback()
+        return api_response({"code": 500, "message": "密码修改失败"}, 500)
+    finally:
+        conn.close()
+
+
+# 4. 忘记密码
 @auth_bp.route('/forgot-password', methods=['POST'])
 def forgot_password():
     data = request.get_json()

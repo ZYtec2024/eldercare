@@ -163,6 +163,7 @@ export async function updateProfileInfo(payload: {
   role: Role
   phone: string
   email: string
+  realName?: string
   medicalHistory?: string
   alertSysThreshold?: number
   skills?: string
@@ -174,6 +175,7 @@ export async function updateProfileInfo(payload: {
       role: payload.role,
       phone: payload.phone,
       email: payload.email,
+      real_name: payload.realName,
       medical_history: payload.medicalHistory,
       alert_sys_threshold: payload.alertSysThreshold,
       skills: payload.skills,

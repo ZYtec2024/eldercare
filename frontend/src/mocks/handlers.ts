@@ -170,8 +170,9 @@ export const handlers = [
       return fail(403, '管理员邀请码无效')
     }
 
-    if (role === 'elder' && (!body.age || !body.gender || !body.address)) {
-      return fail(400, '老人注册需要填写年龄、性别和住址')
+    const elderAddress = body.detail_address || body.address
+    if (role === 'elder' && (!body.age || !body.gender || !elderAddress || !body.region_adcode)) {
+      return fail(400, '老人注册需要填写年龄、性别、区县和详细地址')
     }
 
     if (role === 'volunteer' && (!body.id_card || !body.skills)) {
@@ -191,7 +192,7 @@ export const handlers = [
       reviewState: role === 'volunteer' ? 'pending_review' : 'none',
       age: body.age ? Number(body.age) : undefined,
       gender: body.gender ? String(body.gender) : undefined,
-      address: body.address ? String(body.address) : undefined,
+      address: elderAddress ? String(elderAddress) : undefined,
       idCard: body.id_card ? String(body.id_card) : undefined,
       skills: body.skills ? String(body.skills) : undefined,
     }

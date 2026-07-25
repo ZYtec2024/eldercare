@@ -454,12 +454,30 @@ def update_profile():
     try:
         with conn.cursor() as cursor:
             # ============ 💎 跨表更新事务开始 ============
-            # 1. 更新 users 总表的通用字段 (手机号, 邮箱)
+            # 1. 更新 users 总表的通用字段（姓名 / 手机号 / 邮箱可分别更新）
+            real_name = data.get('real_name')
             phone = data.get('phone')
             email = data.get('email')
-            if phone and email:
-                sql_users = "UPDATE users SET phone = %s, email = %s WHERE user_id = %s"
-                cursor.execute(sql_users, (phone, email, user_id))
+            if real_name is not None and str(real_name).strip():
+                cursor.execute(
+                    "UPDATE users SET real_name = %s WHERE user_id = %s",
+                    (str(real_name).strip(), user_id),
+                )
+                if role == 'elder':
+                    cursor.execute(
+                        "UPDATE elders SET name = %s WHERE user_id = %s",
+                        (str(real_name).strip(), user_id),
+                    )
+            if phone is not None and str(phone).strip():
+                cursor.execute(
+                    "UPDATE users SET phone = %s WHERE user_id = %s",
+                    (str(phone).strip(), user_id),
+                )
+            if email is not None and str(email).strip():
+                cursor.execute(
+                    "UPDATE users SET email = %s WHERE user_id = %s",
+                    (str(email).strip(), user_id),
+                )
 
             # 2. 角色特定表更新
             if role == 'elder':

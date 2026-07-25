@@ -15,23 +15,33 @@ def bind_elder():
     relation = data.get('relation_type', '亲属')
 
     if not all([family_user_id, elder_phone]):
-        return jsonify({"code": 400, "message": "参数不完整"})
+        return jsonify({"code": 400, "message": "参数不完整"}), 400
 
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            # 1. 跨表查询：通过手机号在 users 表找人，再关联 elders 表拿到业务 ID
+            cursor.execute(
+                "SELECT user_id, role FROM users WHERE user_id = %s",
+                (family_user_id,),
+            )
+            family_user = cursor.fetchone()
+            if not family_user or str(family_user.get('role') or '') != 'family':
+                return jsonify({"code": 403, "message": "仅家属账号可以绑定长辈"}), 403
+
+            # 1. 跨表查询：通过手机号找老人账号（限定 role=elder，避免绑错角色）
             sql_find_elder = """
-                SELECT e.elder_id 
-                FROM elders e 
-                JOIN users u ON e.user_id = u.user_id 
-                WHERE u.phone = %s
+                SELECT e.elder_id
+                FROM elders e
+                JOIN users u ON e.user_id = u.user_id
+                WHERE u.phone = %s AND u.role = 'elder'
+                ORDER BY e.elder_id
+                LIMIT 1
             """
             cursor.execute(sql_find_elder, (elder_phone,))
             elder = cursor.fetchone()
 
             if not elder:
-                return jsonify({"code": 404, "message": "未找到该手机号对应的老人档案"})
+                return jsonify({"code": 404, "message": "未找到该手机号对应的老人档案"}), 404
 
             elder_id = elder['elder_id']
 
@@ -49,8 +59,8 @@ def bind_elder():
     except Exception as e:
         conn.rollback()
         if "Duplicate entry" in str(e) or "duplicate key value violates unique constraint" in str(e):
-            return jsonify({"code": 409, "message": "您已经绑定过这位长辈了，请勿重复绑定"})
-        return jsonify({"code": 500, "message": f"绑定失败: {str(e)}"})
+            return jsonify({"code": 409, "message": "您已经绑定过这位长辈了，请勿重复绑定"}), 409
+        return jsonify({"code": 500, "message": f"绑定失败: {str(e)}"}), 500
     finally:
         conn.close()
 
