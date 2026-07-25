@@ -81,6 +81,7 @@ export interface ElderSummary {
   latestAlertSummary?: string
   latestSosStatus?: string
   latestCheckinAt?: string
+  personalityBio?: string
 }
 
 export interface HealthTrendSnapshot {
@@ -157,6 +158,7 @@ export interface VolunteerTaskCard {
   rewardPoints?: number
   urgencyLevel: 'low' | 'medium' | 'high'
   elderName?: string
+  personalityBio?: string
   status: Extract<
     ServiceStatus,
     'pending' | 'accepted' | 'in_progress' | 'completed' | 'cancelled' | 'unavailable'

@@ -25,6 +25,9 @@ type FamilyElderApiRow = {
   relation_type?: string
   relationType?: string
   medical_history?: string
+  personality_bio?: string | null
+  bio_updated_by?: number | null
+  bio_updated_at?: string | null
 }
 
 type HealthRecordApiRow = {
@@ -60,6 +63,7 @@ function mapFamilyElderRow(row: FamilyElderApiRow): ElderSummary {
     pendingServiceCount: 0,
     latestAlertSummary: '暂无提醒',
     latestSosStatus: '暂无 SOS',
+    personalityBio: String(row.personality_bio ?? ''),
   }
 }
 
@@ -123,6 +127,7 @@ export async function bindFamilyElder(payload: {
   familyUserId: number
   elderPhone: string
   relationType: string
+  personalityBio?: string
 }) {
   const response = await http.post<ApiEnvelope<{ relation_id: number }>>(
     '/family/bind-elder',
@@ -130,6 +135,23 @@ export async function bindFamilyElder(payload: {
       family_user_id: payload.familyUserId,
       elder_phone: payload.elderPhone,
       relation_type: payload.relationType,
+      personality_bio: payload.personalityBio ?? '',
+    },
+  )
+
+  return response.data
+}
+
+export async function updateFamilyElderBio(payload: {
+  familyUserId: number
+  elderId: number
+  personalityBio: string
+}) {
+  const response = await http.put<ApiEnvelope<null>>(
+    `/family/elders/${payload.elderId}/bio`,
+    {
+      family_user_id: payload.familyUserId,
+      personality_bio: payload.personalityBio,
     },
   )
 

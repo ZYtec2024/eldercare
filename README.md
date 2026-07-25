@@ -9,8 +9,8 @@
 | 角色 | 核心功能 |
 |------|----------|
 | **老人** | 每日健康打卡、一键 SOS 求助、查看服务记录、评价志愿者 |
-| **家属** | 绑定长辈、健康趋势图表、发布公益服务需求、确认服务时长 |
-| **志愿者** | 任务大厅抢单、服务执行、个人成就、荣誉排行榜 |
+| **家属** | 绑定长辈、**填写老人性格简介**、健康趋势图表、发布公益服务需求、确认服务时长 |
+| **志愿者** | 任务大厅抢单、**查看老人简介**、服务执行、个人成就、荣誉排行榜 |
 | **管理员** | 用户管理、志愿者审核、告警处理、时长审计、每周结算、数据看板 |
 
 ---
@@ -217,6 +217,7 @@ pending ──> accepted ──> in_progress ──> completed
 - **字段自动转换**：后端 `after_request` 钩子自动将响应 JSON 的 snake_case 转为前端友好的 camelCase
 - **懒加载路由**：按角色拆分 bundle，减少首屏加载体积
 - **演示数据完备**：`init_demo_data.sql` 包含 16 个用户、35 条健康记录、14 个订单、12 条点赞等
+- **老人性格简介**：家属绑定时可填写简介（选填，200 字内），志愿者接单时可见，便于个性化服务；老人本人不可见
 
 ---
 
@@ -234,6 +235,7 @@ Base URL: `http://localhost:5000/api`
 | Elder | `POST /elder/sos` | SOS 求助 |
 | Family | `GET /family/elder-health-chart/:id` | 近7天健康趋势 |
 | Family | `POST /family/orders/publish` | 发布服务需求 |
+| Family | `PUT /family/elders/:id/bio` | 更新老人性格简介 |
 | Volunteer | `POST /volunteer/orders/grab` | 抢单 |
 | Volunteer | `GET /volunteer/leaderboard` | 荣誉排行榜 |
 | Admin | `GET /admin/dashboard/stats` | 大屏统计 |

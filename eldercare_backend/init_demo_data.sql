@@ -60,6 +60,9 @@ CREATE TABLE elders (
     region_adcode VARCHAR(12) NOT NULL DEFAULT '310113',
     medical_history TEXT,
     alert_sys_threshold INT DEFAULT 140,
+    personality_bio TEXT DEFAULT NULL,
+    bio_updated_by INT DEFAULT NULL,
+    bio_updated_at TIMESTAMP DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
 );
@@ -533,6 +536,11 @@ INSERT INTO elders (user_id, name, age, gender, address, medical_history, alert_
 (8,  '王伯伯', 75, '男', '上海市宝山区新二路183弄57号1号楼103室', '冠心病，安装过心脏支架，需避免剧烈运动', 130),
 (9,  '陈阿姨', 70, '女', '上海市宝山区国权北路828弄139号1号楼104室', '轻度认知障碍，偶有健忘，身体状况总体良好', 140),
 (10, '刘爷爷', 85, '男', '上海市宝山区盘古路528号1号楼201室', '帕金森病早期，行动不便需要助行器，听力下降', 140);
+
+-- 示例：为前 3 位老人补充性格简介（由家属填写）
+UPDATE elders SET personality_bio = '性格开朗健谈，喜欢下象棋和聊时事新闻。听力略有下降，说话需要稍微大声一些。', bio_updated_by = 2, bio_updated_at = NOW() WHERE elder_id = 1;
+UPDATE elders SET personality_bio = '文静内向，喜欢听戏曲和养花。对陌生人比较警惕，需要耐心沟通建立信任。', bio_updated_by = 2, bio_updated_at = NOW() WHERE elder_id = 2;
+UPDATE elders SET personality_bio = '幽默风趣，曾是工程师，喜欢聊科技话题。行动不便但思维清晰，自尊心强。', bio_updated_by = 3, bio_updated_at = NOW() WHERE elder_id = 3;
 
 -- ====== 宝山区调度沙盘老人档案 (elder_id=6~25) ======
 INSERT INTO elders

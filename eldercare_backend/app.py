@@ -65,6 +65,28 @@ def init_db():
             else:
                 print("✓ address列已存在，数据库初始化完成")
 
+            # 检查elders表是否有personality_bio列
+            cursor.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name='elders' AND column_name='personality_bio'
+            """)
+            if not cursor.fetchone():
+                print("📝 检测到elders表缺少personality_bio列，正在添加...")
+                try:
+                    cursor.execute("""
+                        ALTER TABLE elders
+                        ADD COLUMN personality_bio TEXT DEFAULT NULL,
+                        ADD COLUMN bio_updated_by INT DEFAULT NULL,
+                        ADD COLUMN bio_updated_at TIMESTAMP DEFAULT NULL
+                    """)
+                    conn.commit()
+                    print("✓ personality_bio列已成功添加到elders表")
+                except Exception as e:
+                    print(f"⚠️ 添加personality_bio列时出错（可能已存在）: {e}")
+                    conn.rollback()
+            else:
+                print("✓ personality_bio列已存在")
+
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS volunteer_hour_reviews (

@@ -30,6 +30,7 @@ export interface DispatchOrder {
   volunteer_rating?: number | null
   volunteer_skills?: string[]
   elder_name: string
+  personality_bio?: string | null
   urgency: 'normal' | 'sos'
   dispatch_state: string
   search_stage: number
@@ -139,6 +140,7 @@ export interface VolunteerDispatchTask extends DispatchCandidate {
   urgency: 'normal' | 'sos'
   forced_assignment: boolean
   elder_name: string
+  personality_bio?: string | null
   /** Elder-written situation note, e.g. 腿脚不适. */
   notes?: string
   required_skills: string[]

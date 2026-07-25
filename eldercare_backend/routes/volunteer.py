@@ -44,8 +44,9 @@ def get_available_orders():
                 sql = """
                     SELECT 
                         o.order_id, 
-                        e.name AS elder_name, 
-                        o.service_type, 
+                        e.name AS elder_name,
+                        e.personality_bio,
+                        o.service_type,
                         o.service_time, 
                         o.service_hours, 
                         COALESCE(o.address, e.address) AS addressPreview, 
@@ -75,8 +76,9 @@ def get_available_orders():
                 sql = """
                     SELECT 
                         o.order_id, 
-                        e.name AS elder_name, 
-                        o.service_type, 
+                        e.name AS elder_name,
+                        e.personality_bio,
+                        o.service_type,
                         o.service_time, 
                         o.service_hours, 
                         e.address AS addressPreview, 
@@ -129,8 +131,9 @@ def get_task_detail(task_id):
                 sql = """
                     SELECT 
                         o.order_id, 
-                        e.name AS elder_name, 
-                        o.service_type, 
+                        e.name AS elder_name,
+                        e.personality_bio,
+                        o.service_type,
                         o.service_time, 
                         o.service_hours, 
                         COALESCE(o.address, e.address) AS addressPreview, 
@@ -145,8 +148,9 @@ def get_task_detail(task_id):
                 sql = """
                     SELECT 
                         o.order_id, 
-                        e.name AS elder_name, 
-                        o.service_type, 
+                        e.name AS elder_name,
+                        e.personality_bio,
+                        o.service_type,
                         o.service_time, 
                         o.service_hours, 
                         e.address AS addressPreview, 
@@ -618,6 +622,7 @@ def get_my_tasks():
                         ELSE o.status
                     END AS status,
                     e.name AS elder_name,
+                    e.personality_bio,
                     COALESCE(o.address, e.address) AS address_preview
                 FROM orders o
                 JOIN elders e ON o.elder_id = e.elder_id
@@ -654,6 +659,7 @@ def get_my_reviews():
                     o.service_type,
                     o.service_time,
                     e.name AS elder_name,
+                    e.personality_bio,
                     r.rating,
                     r.comment
                 FROM reviews r

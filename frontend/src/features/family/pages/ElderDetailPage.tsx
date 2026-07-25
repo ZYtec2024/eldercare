@@ -1,19 +1,31 @@
 import { useEffect, useState } from 'react'
-import { Card, Typography, Spin, Tag } from 'antd'
-import { useParams } from 'react-router-dom'
+import { Card, Typography, Spin, Tag, Button, Modal, Input, message } from 'antd'
+import { useParams, useNavigate } from 'react-router-dom'
 import ReactEChartsCore from 'echarts-for-react'
 
-import { fetchFamilyElderDetail, fetchFamilyHealthTrend } from '@/services/adapters/family-adapter'
+import { fetchFamilyElderDetail, fetchFamilyHealthTrend, updateFamilyElderBio } from '@/services/adapters/family-adapter'
 import { useSession } from '@/features/auth/useSession'
 import { buildHealthTrendOptions } from '@/charts/health-trend-options'
 import type { ElderSummary, HealthTrendSnapshot } from '@/types/domain'
 
 export default function ElderDetailPage() {
   const { elderId } = useParams<{ elderId: string }>()
+  const navigate = useNavigate()
   const { session } = useSession()
   const [elder, setElder] = useState<ElderSummary | null>(null)
   const [trend, setTrend] = useState<HealthTrendSnapshot | null>(null)
   const [loading, setLoading] = useState(true)
+  const [bioModalOpen, setBioModalOpen] = useState(false)
+  const [bioEditing, setBioEditing] = useState('')
+  const [bioSaving, setBioSaving] = useState(false)
+
+  const loadElder = () => {
+    if (!elderId || !session) return
+    const id = Number(elderId)
+    fetchFamilyElderDetail(id, session.userId)
+      .then(setElder)
+      .catch(() => {})
+  }
 
   useEffect(() => {
     if (!elderId || !session) return
@@ -27,6 +39,30 @@ export default function ElderDetailPage() {
       .finally(() => setLoading(false))
   }, [elderId, session])
 
+  const openBioModal = () => {
+    setBioEditing(elder?.personalityBio ?? '')
+    setBioModalOpen(true)
+  }
+
+  const submitBio = async () => {
+    if (!session || !elderId) return
+    setBioSaving(true)
+    try {
+      await updateFamilyElderBio({
+        familyUserId: session.userId,
+        elderId: Number(elderId),
+        personalityBio: bioEditing.slice(0, 200),
+      })
+      message.success('简介已更新')
+      setBioModalOpen(false)
+      loadElder()
+    } catch (err: any) {
+      message.error(err?.message || '更新失败')
+    } finally {
+      setBioSaving(false)
+    }
+  }
+
   if (loading) {
     return <div className="flex justify-center py-20"><Spin size="large" /></div>
   }
@@ -37,6 +73,7 @@ export default function ElderDetailPage() {
 
   return (
     <div className="space-y-6">
+      <Button onClick={() => navigate('/family/bind-elder')}>← 返回绑定长辈</Button>
       <Card className="!rounded-2xl">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -57,6 +94,22 @@ export default function ElderDetailPage() {
         </div>
       </Card>
 
+      <Card
+        title="老人性格简介"
+        className="!rounded-2xl"
+        extra={<Button size="small" onClick={openBioModal}>编辑</Button>}
+      >
+        {elder.personalityBio ? (
+          <Typography.Paragraph className="!mb-0 text-gray-700">
+            {elder.personalityBio}
+          </Typography.Paragraph>
+        ) : (
+          <Typography.Text className="text-gray-400">
+            暂未填写，点击右上角「编辑」补充。简介将展示给接单的志愿者，便于提供更贴心的服务。
+          </Typography.Text>
+        )}
+      </Card>
+
       {trend && (
         <Card title="健康趋势（近7天）" className="!rounded-2xl">
           {trend.abnormalFlag && (
@@ -67,6 +120,28 @@ export default function ElderDetailPage() {
           <ReactEChartsCore option={buildHealthTrendOptions(trend)} style={{ height: 350 }} />
         </Card>
       )}
+
+      <Modal
+        title="编辑老人性格简介"
+        open={bioModalOpen}
+        onOk={submitBio}
+        onCancel={() => setBioModalOpen(false)}
+        confirmLoading={bioSaving}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Input.TextArea
+          rows={5}
+          maxLength={200}
+          showCount
+          value={bioEditing}
+          onChange={(e) => setBioEditing(e.target.value)}
+          placeholder="简单介绍老人的性格、喜好、习惯等，便于志愿者提供更贴心的服务"
+        />
+        <div className="text-xs text-gray-400 mt-2">
+          简介对所有绑定的家属共享，修改后志愿者接单时将看到最新内容。
+        </div>
+      </Modal>
     </div>
   )
 }

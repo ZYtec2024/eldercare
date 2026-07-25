@@ -48,6 +48,9 @@ function normalizeTask(item: Record<string, unknown>): VolunteerTaskCard {
     rewardPoints: typeof item.rewardPoints === 'number' ? item.rewardPoints : undefined,
     urgencyLevel: String(item.urgencyLevel ?? 'medium') as VolunteerTaskCard['urgencyLevel'],
     elderName: typeof item.elderName === 'string' ? item.elderName : undefined,
+    personalityBio: typeof item.personality_bio === 'string' && item.personality_bio
+      ? item.personality_bio
+      : (typeof item.personalityBio === 'string' ? item.personalityBio : undefined),
     status: String(item.status ?? 'pending') as VolunteerTaskCard['status'],
     availableActions: Array.isArray(item.availableActions)
       ? (item.availableActions.filter((action): action is 'accept' | 'start' | 'complete' | 'cancel' =>

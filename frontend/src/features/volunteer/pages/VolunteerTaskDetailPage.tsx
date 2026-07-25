@@ -73,6 +73,11 @@ export default function VolunteerTaskDetailPage() {
           <div><ClockCircleOutlined className="mr-2" />预计时长：{task.serviceHours} 小时</div>
           <div><EnvironmentOutlined className="mr-2" />地址：{task.addressPreview}</div>
           {task.elderName && <div>服务对象：{task.elderName}</div>}
+          {task.personalityBio && (
+            <div className="rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900">
+              <b>📝 老人简介：</b>{task.personalityBio}
+            </div>
+          )}
         </div>
         {task.availableActions.length > 0 && (
           <div className="flex gap-3">

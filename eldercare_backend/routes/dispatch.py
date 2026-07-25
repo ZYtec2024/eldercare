@@ -1867,7 +1867,7 @@ def _next_assignment_preview(cursor: Any, volunteer_id: int) -> dict[str, Any] |
         return None
     cursor.execute("""
         SELECT o.order_id, o.service_type, o.address, d.urgency, d.required_skills,
-               e.name AS elder_name, e.address AS elder_address,
+               e.name AS elder_name, e.personality_bio, e.address AS elder_address,
                COALESCE(o.service_lng, el.lng) AS lng,
                COALESCE(o.service_lat, el.lat) AS lat
         FROM orders o JOIN dispatch_orders d ON d.order_id = o.order_id
@@ -4443,7 +4443,7 @@ def _overview(cursor: Any, user_id: int | None = None, requested_region: str | N
         if len(elders) >= 25:
             break
     cursor.execute("""
-        SELECT o.order_id, o.service_type, o.status, o.volunteer_id, o.notes, v.real_name AS volunteer_name, e.name AS elder_name,
+        SELECT o.order_id, o.service_type, o.status, o.volunteer_id, o.notes, v.real_name AS volunteer_name, e.name AS elder_name, e.personality_bio,
                d.urgency, d.dispatch_state, d.search_stage, d.dispatch_phase, d.phase_expires_at,
                d.dispatch_version, d.forced_assignment, d.created_at, o.service_time,
                COALESCE(o.service_lng, l.lng) AS lng,
@@ -4709,7 +4709,7 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
         # an order.  Without this, the assignment existed only as an event in
         # the admin log and looked like the return journey simply stopped.
         cursor.execute("""
-            SELECT o.order_id, o.service_type, e.name AS elder_name, o.address,
+            SELECT o.order_id, o.service_type, e.name AS elder_name, e.personality_bio, o.address,
                    d.urgency,
                    COALESCE(o.service_lng, el.lng) AS lng,
                    COALESCE(o.service_lat, el.lat) AS lat
@@ -6235,7 +6235,7 @@ def volunteer_feed():
             cursor.execute("""
                 SELECT c.order_id, c.candidate_rank, c.distance_km, c.eta_minutes, c.distance_score,
                        c.traffic_score, c.fatigue_score, c.rating_score, c.total_score, c.response_status,
-                       o.service_type, o.status, o.notes, d.urgency, d.forced_assignment, d.dispatch_phase, e.name AS elder_name,
+                       o.service_type, o.status, o.notes, d.urgency, d.forced_assignment, d.dispatch_phase, e.name AS elder_name, e.personality_bio,
                        e.address AS elder_address,
                        COALESCE(o.service_lng, el.lng) AS elder_lng,
                        COALESCE(o.service_lat, el.lat) AS elder_lat,
@@ -6299,7 +6299,7 @@ def volunteer_feed():
             # who was swapped out (even while the order continues with someone else).
             cursor.execute("""
                 SELECT * FROM (
-                    SELECT o.order_id, o.service_type, e.name AS elder_name,
+                    SELECT o.order_id, o.service_type, e.name AS elder_name, e.personality_bio,
                            COALESCE(o.address, e.address) AS address,
                            (
                                SELECT MAX(ev.created_at) FROM dispatch_events ev
@@ -6315,7 +6315,7 @@ def volunteer_feed():
                     JOIN elders e ON e.elder_id = o.elder_id
                     WHERE o.volunteer_id = %s AND o.status = 'completed'
                     UNION ALL
-                    SELECT o.order_id, o.service_type, e.name AS elder_name,
+                    SELECT o.order_id, o.service_type, e.name AS elder_name, e.personality_bio,
                            COALESCE(o.address, e.address) AS address,
                            COALESCE(
                                (
