@@ -22,6 +22,7 @@ export const ElderServicesPage = lazy(() => import('@/features/elder/pages/Elder
 export const ElderSosPage = lazy(() => import('@/features/elder/pages/ElderSosPage'))
 export const ElderDispatchPage = lazy(() => import('@/features/elder/pages/ElderDispatchPage'))
 export const ElderCompanionPage = lazy(() => import('@/features/elder/pages/ElderCompanionPage'))
+export const ElderWeeklyReportPage = lazy(() => import('@/features/elder/pages/ElderWeeklyReportPage'))
 
 export const VolunteerTasksPage = lazy(() => import('@/features/volunteer/pages/VolunteerTasksPage'))
 export const VolunteerTaskDetailPage = lazy(() => import('@/features/volunteer/pages/VolunteerTaskDetailPage'))

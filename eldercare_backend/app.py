@@ -21,6 +21,7 @@ from routes.public import public_bp
 from routes.conversation import conversation_bp
 from routes.ai import ai_bp
 from routes.dispatch import dispatch_bp, ensure_dispatch_schema, run_dispatch_clock_tick
+from routes.report import report_bp
 from db import get_db_connection
 
 app = Flask(__name__)
@@ -38,6 +39,7 @@ app.register_blueprint(profile_bp, url_prefix='/api/profile')
 app.register_blueprint(conversation_bp, url_prefix='/api/conversations')
 app.register_blueprint(ai_bp, url_prefix='/api')
 app.register_blueprint(dispatch_bp, url_prefix='/api/dispatch')
+app.register_blueprint(report_bp, url_prefix='/api/elder')
 
 
 def init_db():

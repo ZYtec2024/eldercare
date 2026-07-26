@@ -36,6 +36,7 @@ DROP TABLE IF EXISTS volunteers_profile CASCADE;
 DROP TABLE IF EXISTS elders CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 DROP TABLE IF EXISTS ai_service_settings CASCADE;
+DROP TABLE IF EXISTS weekly_reports CASCADE;
 
 -- 1. 用户总表
 CREATE TABLE users (
@@ -201,6 +202,17 @@ CREATE TABLE ai_service_settings (
     config_key VARCHAR(64) PRIMARY KEY,
     config_value TEXT NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE weekly_reports (
+    report_id SERIAL PRIMARY KEY,
+    elder_id INT NOT NULL,
+    week_start DATE NOT NULL,
+    week_end DATE NOT NULL,
+    template_name VARCHAR(100),
+    content TEXT NOT NULL,
+    generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (elder_id) REFERENCES elders(elder_id) ON DELETE CASCADE
 );
 
 -- 12. 爱心捐赠沙盘记录（仅模拟支付，不接入真实资金渠道）

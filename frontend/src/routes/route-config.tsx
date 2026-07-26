@@ -34,6 +34,7 @@ import {
   ElderServicesPage,
   ElderCompanionPage,
   ElderSosPage,
+  ElderWeeklyReportPage,
   FamilyAlertsPage,
   FamilyDashboardPage,
   FamilyLiveTrackingPage,
@@ -329,6 +330,18 @@ export const appRoutes: AppRouteDefinition[] = [
     navigationOrder: 27,
     navigation: { label: '智能陪聊', description: '', iconKey: 'chat' },
     element: ElderCompanionPage,
+  },
+  {
+    key: 'elder-weekly-report',
+    path: '/elder/weekly-report',
+    roles: ['elder'],
+    title: '智能周报',
+    description: 'AI 根据近7天健康和服务数据自动生成周报',
+    showInNavigation: true,
+    navigationOrder: 25,
+    isHomeAction: true,
+    navigation: { label: '智能周报', description: '', iconKey: 'document' },
+    element: ElderWeeklyReportPage,
   },
   // ── Volunteer ──
   {

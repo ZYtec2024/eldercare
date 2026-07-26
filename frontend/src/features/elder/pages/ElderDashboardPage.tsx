@@ -7,6 +7,7 @@ import {
   AlertOutlined,
   MessageOutlined,
   SoundOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 
@@ -49,6 +50,13 @@ const features = [
     desc: '按一下录音键就能和助手聊天，还可以把回复读给您听。',
     path: '/elder/companion',
     color: 'border-teal-200 bg-teal-50/50',
+  },
+  {
+    icon: <FileTextOutlined className="text-5xl text-violet-600" />,
+    title: '智能周报',
+    desc: 'AI 自动帮您总结近7天的健康变化和服务情况。',
+    path: '/elder/weekly-report',
+    color: 'border-violet-200 bg-violet-50/50',
   },
 ]
 
