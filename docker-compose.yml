@@ -6,11 +6,14 @@ services:
     privileged: true
     environment:
       GS_PASSWORD: Enmo@123
+      TZ: Asia/Shanghai
     volumes:
       # 首次启动自动导入演示数据
       - ./eldercare_backend/init_demo_data.sql:/docker-entrypoint-initdb.d/init.sql
       # 持久化数据（容器重启不丢失）
       - ogdata:/var/lib/opengauss
+      # 时区
+      - /etc/localtime:/etc/localtime:ro
     ports:
       - "5432:5432"
 
@@ -24,12 +27,15 @@ services:
       DB_USER: gaussdb
       DB_PASSWORD: Enmo@123
       DB_NAME: omm
+      TZ: Asia/Shanghai
       # 行政区官方边界（高德 Web 服务 Key；需开通「行政区域查询」）
       AMAP_WEB_KEY: ${AMAP_WEB_KEY:-09b7fc116d61f287bdc729d4818cb583}
     depends_on:
       - db
     ports:
       - "5000:5000"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/')\""]
       interval: 10s
@@ -41,11 +47,15 @@ services:
   frontend:
     build: ./frontend
     container_name: eldercare-frontend
+    environment:
+      TZ: Asia/Shanghai
     depends_on:
       backend:
         condition: service_healthy
     ports:
       - "3000:80"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
 
 volumes:
   ogdata:
