@@ -154,3 +154,7 @@ export async function saveCompanionMessage(userId: number, role: 'user' | 'assis
     content,
   })
 }
+
+export async function clearCompanionHistory(userId: number) {
+  await http.delete('/elder/companion/history', { params: { user_id: userId } })
+}

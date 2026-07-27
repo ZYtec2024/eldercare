@@ -17,6 +17,7 @@ import {
   transcribeCompanionAudio,
   fetchCompanionHistory,
   saveCompanionMessage,
+  clearCompanionHistory,
   type CompanionHistoryItem,
 } from '@/services/adapters/ai-adapter'
 
@@ -116,16 +117,15 @@ export default function ElderCompanionPage() {
     const userMessage = appendMessage('user', trimmed)
     setDraft('')
     setSending(true)
+    // 用户消息立即落库，不怕切页丢失
+    saveCompanionMessage(session.userId, 'user', trimmed).catch(() => {})
     try {
       const reply = await sendCompanionChat({
         userId: session.userId,
         message: trimmed,
         history: previousMessages,
       })
-      await Promise.all([
-        saveCompanionMessage(session.userId, 'user', trimmed),
-        saveCompanionMessage(session.userId, 'assistant', reply.reply),
-      ])
+      saveCompanionMessage(session.userId, 'assistant', reply.reply).catch(() => {})
       const assistant = appendMessage('assistant', reply.reply)
       if (autoSpeak) {
         void speakText(assistant.content)
@@ -235,7 +235,11 @@ export default function ElderCompanionPage() {
             </Button>
             <Button
               icon={<PauseCircleOutlined />}
-              onClick={() => setMessages([{ id: 1, role: 'assistant', content: introMessage }])}
+              onClick={() => {
+                setMessages([{ id: 1, role: 'assistant', content: introMessage }])
+                nextIdRef.current = 2
+                if (session) clearCompanionHistory(session.userId).catch(() => {})
+              }}
             >
               清空聊天
             </Button>

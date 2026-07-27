@@ -569,6 +569,29 @@ def companion_history():
         conn.close()
 
 
+@ai_bp.route('/elder/companion/history', methods=['DELETE'])
+def clear_companion_history():
+    """Delete all chat history for the elder."""
+    user_id = request.args.get('user_id')
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"code": 500, "message": "数据库连接失败"}), 500
+    try:
+        with conn.cursor() as cursor:
+            _, error = _require_elder(cursor, user_id)
+            if error:
+                return error
+            _ensure_ai_schema(cursor)
+            cursor.execute(
+                "DELETE FROM companion_chat_history WHERE user_id = %s",
+                (int(user_id),),
+            )
+            conn.commit()
+        return jsonify({"code": 200, "message": "聊天记录已清除"})
+    finally:
+        conn.close()
+
+
 @ai_bp.route('/elder/companion/history', methods=['POST'])
 def save_companion_message():
     """Save a single chat message (user or assistant)."""
