@@ -132,13 +132,14 @@ export function AppShell() {
     }
   }, [modal, navigate, session?.role, session?.userId])
 
-  // 新手引导：首次登录后自动弹出（按 userId + role 判定）
+  // 新手引导：首次登录后自动弹出（系统管理员 isRoot 无需新手引导，普通管理员及其他角色弹出）
   useEffect(() => {
     if (!session || session.tokenState !== 'active') return
+    if (session.isRoot) return
     if (hasSeenOnboarding(session.userId, session.role)) return
     const timer = window.setTimeout(() => setOnboardingOpen(true), 300)
     return () => window.clearTimeout(timer)
-  }, [session?.userId, session?.role, session?.tokenState])
+  }, [session?.userId, session?.role, session?.tokenState, session?.isRoot])
 
   const handleOnboardingClose = () => setOnboardingOpen(false)
   const handleOnboardingDontShowAgain = () => {
@@ -184,7 +185,7 @@ export function AppShell() {
                     {session.displayName}
                   </Typography.Text>
                   <Typography.Text className="!text-blue-400 !text-xs">
-                    {roleLabels[session.role]}
+                    {session.isRoot ? '系统管理员' : roleLabels[session.role]}
                   </Typography.Text>
                 </div>
               </div>
@@ -218,12 +219,15 @@ export function AppShell() {
             </Typography.Text>
           </div>
           <Space size={12}>
-            <Button
-              type="text"
-              icon={<QuestionCircleOutlined className="!text-2xl" />}
-              className="!w-10 !h-10 flex items-center justify-center"
-              onClick={() => setOnboardingOpen(true)}
-            />
+            {!session.isRoot && (
+              <Button
+                type="text"
+                icon={<QuestionCircleOutlined className="!text-2xl" />}
+                className="!w-10 !h-10 flex items-center justify-center"
+                title="新手引导"
+                onClick={() => setOnboardingOpen(true)}
+              />
+            )}
             <Button
               type="text"
               icon={<HomeOutlined className="!text-2xl" />}
