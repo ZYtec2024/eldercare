@@ -40,6 +40,10 @@ DEFAULT_AI_SETTINGS: dict[str, str] = {
     'tts_voice': os.getenv('EDGE_TTS_VOICE', 'zh-CN-XiaoxiaoNeural'),
     'tts_rate': os.getenv('EDGE_TTS_RATE', '+0%'),
     'tts_volume': os.getenv('EDGE_TTS_VOLUME', '+0%'),
+    # 智能周报专用模型（OpenAI 兼容接口）
+    'report_api_key': os.getenv('REPORT_API_KEY', ''),
+    'report_api_base_url': os.getenv('REPORT_API_BASE_URL', ''),
+    'report_model_name': os.getenv('REPORT_MODEL_NAME', ''),
     # System prompt
     'companion_system_prompt': os.getenv(
         'COMPANION_SYSTEM_PROMPT',
@@ -259,6 +263,9 @@ def get_ai_config():
                     "tts_rate": settings.get('tts_rate', DEFAULT_AI_SETTINGS['tts_rate']),
                     "tts_volume": settings.get('tts_volume', DEFAULT_AI_SETTINGS['tts_volume']),
                     "companion_system_prompt": settings.get('companion_system_prompt', DEFAULT_AI_SETTINGS['companion_system_prompt']),
+                    "has_report_api_key": _has_api_key(settings.get('report_api_key', '')),
+                    "report_api_base_url": settings.get('report_api_base_url', DEFAULT_AI_SETTINGS['report_api_base_url']),
+                    "report_model_name": settings.get('report_model_name', DEFAULT_AI_SETTINGS['report_model_name']),
                 },
             })
     finally:
@@ -288,6 +295,9 @@ def update_ai_config():
                 'tts_rate': str(data.get('tts_rate') or current.get('tts_rate', DEFAULT_AI_SETTINGS['tts_rate'])).strip(),
                 'tts_volume': str(data.get('tts_volume') or current.get('tts_volume', DEFAULT_AI_SETTINGS['tts_volume'])).strip(),
                 'companion_system_prompt': str(data.get('companion_system_prompt') or current.get('companion_system_prompt', DEFAULT_AI_SETTINGS['companion_system_prompt'])).strip(),
+                'report_api_key': str(data.get('report_api_key') or '').strip() or current.get('report_api_key', ''),
+                'report_api_base_url': str(data.get('report_api_base_url') or current.get('report_api_base_url', DEFAULT_AI_SETTINGS['report_api_base_url'])).strip(),
+                'report_model_name': str(data.get('report_model_name') or current.get('report_model_name', DEFAULT_AI_SETTINGS['report_model_name'])).strip(),
             }
             _persist_settings(cursor, updates)
             conn.commit()
@@ -305,6 +315,9 @@ def update_ai_config():
                     "tts_rate": updates['tts_rate'],
                     "tts_volume": updates['tts_volume'],
                     "companion_system_prompt": updates['companion_system_prompt'],
+                    "has_report_api_key": _has_api_key(updates['report_api_key']),
+                    "report_api_base_url": updates['report_api_base_url'],
+                    "report_model_name": updates['report_model_name'],
                 },
             })
     finally:

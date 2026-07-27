@@ -16,6 +16,9 @@ export interface CompanionConfig {
   ttsRate: string
   ttsVolume: string
   companionSystemPrompt: string
+  hasReportApiKey: boolean
+  reportApiBaseUrl: string
+  reportModelName: string
 }
 
 function decodeArrayBufferJson(buffer: ArrayBuffer) {
@@ -55,6 +58,9 @@ export async function updateCompanionConfig(payload: {
   ttsRate: string
   ttsVolume: string
   companionSystemPrompt: string
+  reportApiKey?: string
+  reportApiBaseUrl: string
+  reportModelName: string
 }) {
   const response = await http.put<ApiEnvelope<CompanionConfig>>('/admin/ai-config', {
     admin_user_id: payload.adminUserId,
@@ -68,6 +74,9 @@ export async function updateCompanionConfig(payload: {
     tts_rate: payload.ttsRate,
     tts_volume: payload.ttsVolume,
     companion_system_prompt: payload.companionSystemPrompt,
+    report_api_key: payload.reportApiKey,
+    report_api_base_url: payload.reportApiBaseUrl,
+    report_model_name: payload.reportModelName,
   })
   return response.data.data
 }
