@@ -3,8 +3,10 @@ import { App, Button, Card, Empty, Input, Space, Switch, Tag, Typography } from 
 import {
   AudioOutlined,
   BulbOutlined,
+  EditOutlined,
   LoadingOutlined,
   PauseCircleOutlined,
+  ReloadOutlined,
   SendOutlined,
   SoundOutlined,
   StopOutlined,
@@ -34,6 +36,8 @@ export default function ElderCompanionPage() {
   const [recording, setRecording] = useState(false)
   const [autoSpeak, setAutoSpeak] = useState(true)
   const [busyAudio, setBusyAudio] = useState(false)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editDraft, setEditDraft] = useState('')
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const chunksRef = useRef<Blob[]>([])
@@ -136,6 +140,41 @@ export default function ElderCompanionPage() {
     } finally {
       setSending(false)
     }
+  }
+
+  const retractExchange = (userMsgId: number) => {
+    setMessages((current) => {
+      const idx = current.findIndex((m) => m.id === userMsgId)
+      if (idx === -1 || current[idx].role !== 'user') return current
+      // Remove the user message and the assistant reply that immediately follows
+      const next = current[idx + 1]
+      const toRemove = new Set([userMsgId])
+      if (next && next.role === 'assistant') toRemove.add(next.id)
+      return current.filter((m) => !toRemove.has(m.id))
+    })
+  }
+
+  const handleEditConfirm = (msgId: number) => {
+    const text = editDraft.trim()
+    if (!text) return
+    setEditingId(null)
+    setEditDraft('')
+    retractExchange(msgId)
+    void submitMessage(text)
+  }
+
+  const handleRegenerate = (assistantMsgId: number) => {
+    setMessages((current) => {
+      const idx = current.findIndex((m) => m.id === assistantMsgId)
+      if (idx === -1 || current[idx].role !== 'assistant') return current
+      const prev = current[idx - 1]
+      if (!prev || prev.role !== 'user') return current
+      // Remove the assistant reply; submitMessage will append new exchange
+      const removed = current.filter((m) => m.id !== assistantMsgId)
+      // Fire the resubmit after state update
+      setTimeout(() => { void submitMessage(prev.content) }, 0)
+      return removed
+    })
   }
 
   const startRecording = async () => {
@@ -262,20 +301,56 @@ export default function ElderCompanionPage() {
                 <div className={`max-w-[82%] rounded-2xl px-4 py-3 shadow-sm ${item.role === 'user' ? 'bg-emerald-500 text-white rounded-br-md' : 'bg-white text-slate-800 rounded-bl-md'}`}>
                   <div className="mb-1 flex items-center justify-between gap-3 text-xs opacity-70">
                     <span>{item.role === 'user' ? '我' : '智能助手'}</span>
-                    {item.role === 'assistant' ? (
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<SoundOutlined />}
-                        className="!h-6 !px-2 !text-xs"
-                        loading={busyAudio}
-                        onClick={() => void speakText(item.content)}
-                      >
-                        朗读
-                      </Button>
-                    ) : null}
+                    <Space size={2}>
+                      {item.role === 'user' && !sending && (
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<EditOutlined />}
+                          className="!h-6 !px-1 !text-xs !text-inherit hover:!opacity-100"
+                          onClick={() => { setEditingId(item.id); setEditDraft(item.content) }}
+                        />
+                      )}
+                      {item.role === 'assistant' && !sending && (
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<ReloadOutlined />}
+                          className="!h-6 !px-1 !text-xs !text-inherit hover:!opacity-100"
+                          onClick={() => handleRegenerate(item.id)}
+                        />
+                      )}
+                      {item.role === 'assistant' && (
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<SoundOutlined />}
+                          className="!h-6 !px-2 !text-xs"
+                          loading={busyAudio}
+                          onClick={() => void speakText(item.content)}
+                        >
+                          朗读
+                        </Button>
+                      )}
+                    </Space>
                   </div>
-                  <div className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">{item.content}</div>
+                  {editingId === item.id ? (
+                    <div className="flex gap-2">
+                      <Input.TextArea
+                        size="small"
+                        value={editDraft}
+                        onChange={(e) => setEditDraft(e.target.value)}
+                        autoSize={{ minRows: 1, maxRows: 4 }}
+                        maxLength={1000}
+                        className="!text-slate-800 !rounded-lg"
+                        onPressEnter={(e) => { if (!e.shiftKey) { e.preventDefault(); handleEditConfirm(item.id) } }}
+                      />
+                      <Button size="small" type="primary" onClick={() => handleEditConfirm(item.id)}>确认</Button>
+                      <Button size="small" onClick={() => setEditingId(null)}>取消</Button>
+                    </div>
+                  ) : (
+                    <div className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">{item.content}</div>
+                  )}
                 </div>
               </div>
             ))
