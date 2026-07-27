@@ -16,6 +16,7 @@ export const onboardingContent: Record<Role, OnboardingStep[]> = {
       title: '欢迎使用智慧伴老平台',
       description: '欢迎使用社区智慧伴老平台！作为家属，您可以通过本平台随时关注长辈的日常健康打卡数据、一键代为发布养老服务需求、实时查看志愿服务轨迹与接单进度，全方位保障长辈的晚年生活安全与生活照护。',
       icon: '🏠',
+      image: '/guide-images/family-welcome.png',
     },
     {
       key: 'bind-elder',
@@ -31,6 +32,7 @@ export const onboardingContent: Record<Role, OnboardingStep[]> = {
       description: '【健康监控】在长辈详情与健康看板中，您可以查看长辈近 7 天、30 天的血压、心率、血糖、体温走势图。当系统检测到长辈连续未打卡或血压/血糖指标超过安全红线时，系统将通过微信/短信及系统消息即时向您推送异常告警信息。',
       icon: '📊',
       ctaPath: '/family/dashboard',
+      image: '/guide-images/family-health.png',
     },
     {
       key: 'orders',
@@ -46,6 +48,7 @@ export const onboardingContent: Record<Role, OnboardingStep[]> = {
       description: '【服务追踪】志愿者接单并开启前往行程后，您可以在实时追踪地图上查看志愿者的实时地理位置、移动路线及预计到达时间。服务圆满完成后，您还可以对志愿者的服务质量进行评价与点赞。',
       icon: '📍',
       ctaPath: '/family/live-tracking',
+      image: '/guide-images/family-tracking.png',
     },
   ],
 
@@ -55,6 +58,7 @@ export const onboardingContent: Record<Role, OnboardingStep[]> = {
       title: '欢迎使用智慧伴老平台',
       description: '欢迎来到智慧伴老平台！为了方便您的使用，系统已为您自动开启专属大字号与高对比度关怀模式。在这里您可以轻松完成每天的健康打卡、在遇到困难时随时发起一键紧急求助，以及查看志愿者对您的照料服务记录。',
       icon: '🏠',
+      image: '/guide-images/elder-welcome.png',
     },
     {
       key: 'companion',
@@ -86,6 +90,7 @@ export const onboardingContent: Record<Role, OnboardingStep[]> = {
       description: '【服务记录与评价】您可以在此查看志愿者为您提供的陪同就医、代买物品、上门关怀等历史服务明细。服务完成后，您可以为贴心的志愿者点击【👍 点赞】予以鼓励，或者提交您的切身服务评价。',
       icon: '📋',
       ctaPath: '/elder/services',
+      image: '/guide-images/elder-services.png',
     },
     {
       key: 'weekly-report',
@@ -93,6 +98,7 @@ export const onboardingContent: Record<Role, OnboardingStep[]> = {
       description: '【AI 智能健康分析周报】每周系统会自动汇总分析您的血压、心率、血糖打卡记录与志愿关怀陪伴情况，由智能算法为您生成专属的每周健康分析报告与生活建议，助您轻松掌握身体健康动态。',
       icon: '📈',
       ctaPath: '/elder/weekly-report',
+      image: '/guide-images/elder-weekly-report.png',
     },
   ],
 
@@ -102,6 +108,7 @@ export const onboardingContent: Record<Role, OnboardingStep[]> = {
       title: '欢迎使用智慧伴老平台',
       description: '欢迎加入社区智慧伴老志愿者团队！在这里您可以通过智能推荐接单匹配、帮助身边的社区老人解决就医与生活困难。每一次志愿服务都将精准记录入您的个人志愿时长档案，并可参与每周荣誉榜评比。',
       icon: '🏠',
+      image: '/guide-images/volunteer-welcome.png',
     },
     {
       key: 'dispatch',
@@ -117,6 +124,7 @@ export const onboardingContent: Record<Role, OnboardingStep[]> = {
       description: '【任务管理】在任务大厅与进行中列表中，您可以查看已接订单的详细地址、老人性格喜好与特殊照护提示。点击「开始前往」后即可开启路线追踪，服务完成后点击「完成服务」提交拍照打卡。',
       icon: '📋',
       ctaPath: '/volunteer/tasks',
+      image: '/guide-images/volunteer-tasks.png',
     },
     {
       key: 'navigation',
@@ -124,6 +132,7 @@ export const onboardingContent: Record<Role, OnboardingStep[]> = {
       description: '【地图导航】接单后系统自动规划前往老人住址的最优道路路线（支持步导、骑导与驾车导航），显示实时路况与预计抵达分钟数，也可一键调起外部高德地图App进行语音导航。',
       icon: '🗺️',
       ctaPath: '/volunteer/tasks',
+      image: '/guide-images/volunteer-navigation.png',
     },
     {
       key: 'leaderboard',
@@ -131,6 +140,7 @@ export const onboardingContent: Record<Role, OnboardingStep[]> = {
       description: '【时长与荣誉】您完成的所有有效关怀服务时长都将实时计入时长库。每周日深夜系统会自动执行每周结算，排名前三名的优秀志愿者将获得社区专属荣誉勋章与志愿积分奖励。',
       icon: '🏆',
       ctaPath: '/volunteer/leaderboard',
+      image: '/guide-images/volunteer-leaderboard.png',
     },
   ],
 
@@ -140,6 +150,7 @@ export const onboardingContent: Record<Role, OnboardingStep[]> = {
       title: '欢迎使用智慧伴老平台',
       description: '欢迎登录智慧伴老社区管理后台！作为管理员，您拥有全区老人家属与志愿者数据管理、高德调度沙盘监控、SOS 告警快速处置分流、志愿者服务时长审核及全站数据大屏监控等核心权限。',
       icon: '🏠',
+      image: '/guide-images/admin-welcome.png',
     },
     {
       key: 'users',
@@ -163,6 +174,7 @@ export const onboardingContent: Record<Role, OnboardingStep[]> = {
       description: '【告警监控与处置】集中监控老人发起的 SOS 紧急求助告警及连续未打卡/血压异常告警。管理员可在此进行人工干预、联系家属、指派专属志愿者或联动社区救援力量，确保每一起告警均得到妥善处置。',
       icon: '🔔',
       ctaPath: '/admin/alerts',
+      image: '/guide-images/admin-alerts.png',
     },
     {
       key: 'settlement',
@@ -170,6 +182,7 @@ export const onboardingContent: Record<Role, OnboardingStep[]> = {
       description: '【时长审计与每周结算】针对服务时长显著超过预估或存在争议的关怀订单进行人工审计核扣；支持手动或系统定时执行每周志愿时长结算、排行榜更新与勋章自动发放。',
       icon: '⏱️',
       ctaPath: '/admin/hour-reviews',
+      image: '/guide-images/admin-settlement.png',
     },
     {
       key: 'dashboard',
@@ -177,6 +190,7 @@ export const onboardingContent: Record<Role, OnboardingStep[]> = {
       description: '【运营数据大屏】全方位展示社区养老运营指标，包括老人建档数、服务完成率、告警处置率、志愿者活跃度及各区县服务贡献排名走势，为社区照护决策提供数据支撑。',
       icon: '📊',
       ctaPath: '/admin/dashboard',
+      image: '/guide-images/admin-dashboard.png',
     },
   ],
 }
