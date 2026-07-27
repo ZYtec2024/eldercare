@@ -61,7 +61,7 @@ export function RealDispatchPanel({ overview }: { overview: DispatchOverview | n
       三级优先：<strong>P0 SOS</strong> → <strong>P1 升级</strong>（35秒后兜底）→ <strong>P2 普通</strong>（Top1→Top3→Top10）。
       SOS 只派给「自动接单 + 技能匹配 + 评分≥4 + 空闲/返程」，并优先占用这些人；普通单/兜底不能抢走。管理员接警/盯进度/结案，异常时用换人重派。
     </div>
-    <DispatchMap overview={realOverview} height={430} />
+    <DispatchMap overview={realOverview} height={500} />
     <div className="mt-4 grid gap-3 md:grid-cols-2">
       <Card size="small" title={`正在出发 / 服务 (${active.length})`}>
         <div className="space-y-2 text-sm">

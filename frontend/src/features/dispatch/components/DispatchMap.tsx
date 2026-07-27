@@ -259,7 +259,7 @@ export async function getAmapPointAtProgress(start: Point, end: Point, progress:
 
 export function DispatchMap({
   overview,
-  height = 390,
+  height = 420,
   expandable = false,
   onExpand,
 }: {

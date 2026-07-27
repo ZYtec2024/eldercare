@@ -353,7 +353,7 @@ export default function ElderDispatchPage() {
           ) : null}
         </Form></Card>
       </div>
-      <div><DispatchMap overview={mapOverview} /><div className="mt-3 rounded-xl bg-sky-50 p-3 text-sm text-sky-900">{tracking?.privacy_message || '正在载入位置说明…'}<div className="mt-2"><Tag color="green">绿色：路况好</Tag><Tag color="gold">黄色：有点堵</Tag><Tag color="red">红色：很堵</Tag></div></div></div>
+      <div><DispatchMap overview={mapOverview} height={440} /><div className="mt-3 rounded-xl bg-sky-50 p-3 text-sm text-sky-900">{tracking?.privacy_message || '正在载入位置说明…'}<div className="mt-2"><Tag color="green">绿色：路况好</Tag><Tag color="gold">黄色：有点堵</Tag><Tag color="red">红色：很堵</Tag></div></div></div>
     </div>
     <div>
       <Typography.Title level={3}>进行中的帮助</Typography.Title>
