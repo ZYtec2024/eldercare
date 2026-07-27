@@ -88,3 +88,64 @@ a {
 .elder-mode .ant-modal .ant-rate {
   font-size: 28px;
 }
+
+/* Live notices: white card, black text, left color dot (no check / cross) */
+.live-notice-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  margin-top: 7px;
+  flex-shrink: 0;
+}
+.ant-notification-notice.live-notice-toast,
+.live-notice-toast.ant-notification-notice {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.14) !important;
+}
+.live-notice-toast .ant-notification-notice-message,
+.live-notice-toast .ant-notification-notice-description,
+.live-notice-toast .ant-notification-notice-close {
+  color: #0f172a !important;
+}
+.live-notice-toast .ant-notification-notice-description {
+  color: #334155 !important;
+}
+.live-notice-toast .ant-btn-link {
+  color: #2563eb !important;
+}
+.live-notice-toast--success .live-notice-dot { background: #10b981; }
+.live-notice-toast--error .live-notice-dot { background: #ef4444; }
+.live-notice-toast--warning .live-notice-dot { background: #f59e0b; }
+
+/* antd message: white card + left color dot via border, no glyph icons */
+.ant-message .anticon {
+  display: none !important;
+}
+.ant-message .ant-message-notice-content {
+  position: relative;
+  padding: 10px 16px 10px 28px !important;
+  border-radius: 10px !important;
+  background: #ffffff !important;
+  color: #0f172a !important;
+  border: 1px solid #e2e8f0 !important;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12) !important;
+}
+.ant-message .ant-message-notice-content::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  transform: translateY(-50%);
+  background: #94a3b8;
+}
+.ant-message-notice-success .ant-message-notice-content::before { background: #10b981; }
+.ant-message-notice-error .ant-message-notice-content::before { background: #ef4444; }
+.ant-message-notice-warning .ant-message-notice-content::before { background: #f59e0b; }
+.ant-message-notice-info .ant-message-notice-content::before { background: #2563eb; }

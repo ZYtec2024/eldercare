@@ -921,6 +921,15 @@ INSERT INTO orders (elder_id, created_by, service_type, service_time, service_ho
 INSERT INTO orders (elder_id, created_by, service_type, service_time, service_hours, address, status, notes, created_at) VALUES
 (4, 4, '陪同就医', '2026-04-12 09:00:00', 2, '上海市宝山区国权北路828弄139号1号楼104室', 'cancelled', '陈阿姨身体好转，取消就医安排', '2026-04-10 10:00:00');
 
+-- Demo seed: snapshot each order's service point from elder home pin (matches create-time behavior).
+UPDATE orders o
+SET service_lng = el.lng,
+    service_lat = el.lat
+FROM elder_location_state el
+WHERE o.elder_id = el.elder_id
+  AND o.service_lng IS NULL
+  AND o.service_lat IS NULL;
+
 -- ====== 订单评价 ======
 INSERT INTO reviews (order_id, rating, comment) VALUES
 (1, 5, '王佳明同学非常耐心，全程陪同张大爷看完了所有检查项目，非常感谢！'),

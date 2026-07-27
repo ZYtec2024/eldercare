@@ -99,13 +99,6 @@ function amapLoadHint(reason: string) {
   return `${reason}。当前主机「${host}」。本地演示请把 JS Key 白名单清空或选不校验 Referer；不要只加 127.0.0.1（用 localhost 打开会整图空白）。若必须加白名单，请同时加 localhost 与 127.0.0.1`
 }
 
-function coordKey(prefix: string, id: number, lng?: number | null, lat?: number | null) {
-  if (lng == null || lat == null || Number.isNaN(Number(lng)) || Number.isNaN(Number(lat))) {
-    return `${prefix}${id}`
-  }
-  return `${prefix}${id}:${Number(lng).toFixed(5)},${Number(lat).toFixed(5)}`
-}
-
 function markerHtml(color: string, icon: string, text: string) {
   return `<div style="display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 2px 7px rgba(15,23,42,.35);color:#fff;font-size:12px;font-weight:700" title="${text}">${icon}</div>`
 }
@@ -116,12 +109,42 @@ function routePoints(result: any): Point[] {
   return points
 }
 
+function parseAmapPath(raw: unknown): Point[] {
+  if (!raw) return []
+  if (typeof raw === 'string') {
+    return raw
+      .split(';')
+      .map((pair) => pair.trim())
+      .filter(Boolean)
+      .map((pair) => {
+        const [lngText, latText] = pair.split(',')
+        const lng = Number(lngText)
+        const lat = Number(latText)
+        return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] as Point : null
+      })
+      .filter((point): point is Point => Boolean(point))
+  }
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((point: any) => {
+      if (Array.isArray(point) && point.length >= 2) {
+        const lng = Number(point[0])
+        const lat = Number(point[1])
+        return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] as Point : null
+      }
+      const lng = Number(point?.lng ?? point?.getLng?.())
+      const lat = Number(point?.lat ?? point?.getLat?.())
+      return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] as Point : null
+    })
+    .filter((point): point is Point => Boolean(point))
+}
+
 function routeTrafficSegments(result: any): AmapDrivingRoute['trafficSegments'] {
   const segments: AmapDrivingRoute['trafficSegments'] = []
   result?.routes?.[0]?.steps?.forEach((step: any) => {
     const tmcs = step.tmcs ?? step.tmcsPaths ?? []
     tmcs.forEach((tmc: any) => {
-      const path = (tmc.path ?? []).map((point: any) => [point.lng, point.lat] as Point)
+      const path = parseAmapPath(tmc.path ?? tmc.polyline)
       if (path.length > 1) segments.push({ path, status: String(tmc.status ?? '未知') })
     })
   })
@@ -144,12 +167,28 @@ function pointAlongPath(path: Point[], progress: number): Point {
   return path[path.length - 1]
 }
 
-function trafficStyle(status?: string): { color: string; severity: number } | null {
-  if (status?.includes('严重拥堵')) return { color: '#991b1b', severity: 4 }
-  if (status?.includes('拥堵')) return { color: '#dc2626', severity: 3 }
-  if (status?.includes('缓行')) return { color: '#eab308', severity: 2 }
-  if (status?.includes('畅通')) return { color: '#16a34a', severity: 1 }
+/** Only overlay slow/jammed TMC; keep base green for unknown/smooth. */
+export function trafficStyle(status?: string | number): { color: string; severity: number } | null {
+  const raw = String(status ?? '').trim()
+  const lowered = raw.toLowerCase()
+  if (!raw || raw === '未知' || raw === '0' || raw.includes('畅通') || lowered.includes('smooth') || raw === '1') {
+    return null
+  }
+  if (raw.includes('严重') || lowered.includes('serious') || raw === '4') return { color: '#7f1d1d', severity: 4 }
+  if (raw.includes('拥堵') || lowered.includes('jam') || lowered.includes('congest') || raw === '3') {
+    return { color: '#dc2626', severity: 3 }
+  }
+  if (raw.includes('缓行') || lowered.includes('slow') || raw === '2') return { color: '#eab308', severity: 2 }
   return null
+}
+
+const ROUTE_LINE_STYLE = {
+  strokeWeight: 5,
+  strokeOpacity: 1,
+  lineJoin: 'round' as const,
+  lineCap: 'round' as const,
+  isOutline: false,
+  borderWeight: 0,
 }
 
 function trafficSegments(path: Point[], route: DispatchRoute): Point[][] {
@@ -180,7 +219,7 @@ export async function getAmapRoute(start: Point, end: Point, mode: NavigationMod
         : mode === 'riding'
           ? new AMap.Riding({ map: null, hideMarkers: true })
           : new AMap.Driving({
-              policy: AMap.DrivingPolicy[policyName] ?? AMap.DrivingPolicy.LEAST_TIME,
+              policy: AMap.DrivingPolicy[policyName] ?? AMap.DrivingPolicy.REAL_TRAFFIC ?? AMap.DrivingPolicy.LEAST_TIME,
               extensions: 'all',
               showTraffic: true,
               map: null,
@@ -242,6 +281,7 @@ export function DispatchMap({
   const publishedGeometryRef = useRef(new Set<string>())
   const animationFrameRef = useRef<number | null>(null)
   const focusedRegionRef = useRef<string | null>(null)
+  const userAdjustedViewRef = useRef(false)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState('')
 
@@ -256,8 +296,10 @@ export function DispatchMap({
       })
       map.addControl(new AMap.Scale())
       map.addControl(new AMap.ToolBar({ position: 'RT' }))
-      // Do not enable AMap.TileLayer.Traffic by default: its blue/green road wash
-      // covers the whole map and makes our dispatch polylines hard to read.
+      // Remember manual zoom/pan so polling never snaps the viewport back.
+      const markUserView = () => { userAdjustedViewRef.current = true }
+      map.on?.('zoomstart', markUserView)
+      map.on?.('dragstart', markUserView)
       mapRef.current = map
       // Desktop/mobile layouts often finish sizing after Map() constructs; force a
       // resize so canvas is not stuck at 0×0 (blank gray box with no tiles).
@@ -413,19 +455,19 @@ export function DispatchMap({
       focusPoints.push(route.path[0], route.path[route.path.length - 1])
     })
 
-    // Fit once per privacy scope change (region + who is visible), so idle
-    // elder/volunteer maps center on self instead of the whole district.
-    // Include rounded coordinates so live/default location changes refit the map.
+    // Fit once when the visible cast changes. Do NOT include live GPS coords,
+    // otherwise every poll snaps zoom back after the volunteer zooms/pans.
     map.resize?.()
     const focusKey = [
       overview.region_adcode ?? '',
-      ...overview.elders.map((item) => coordKey('e', item.elder_id, item.lng, item.lat)),
-      ...overview.volunteers.map((item) => coordKey('v', item.volunteer_id, item.lng, item.lat)),
-      ...overview.orders.map((item) => coordKey('o', item.order_id, item.lng, item.lat)),
+      ...overview.elders.map((item) => `e${item.elder_id}`),
+      ...overview.volunteers.map((item) => `v${item.volunteer_id}`),
+      ...overview.orders.map((item) => `o${item.order_id}`),
       ...overview.routes.map((item) => `r${item.order_id}`),
     ].join('|')
     if (focusedRegionRef.current !== focusKey) {
       focusedRegionRef.current = focusKey
+      userAdjustedViewRef.current = false
       if (focusPoints.length === 1) {
         map.setZoomAndCenter?.(14, focusPoints[0])
       } else if (focusPoints.length > 1) {
@@ -470,31 +512,23 @@ export function DispatchMap({
         if (isSos && oldPath?.length && oldPath.length > 1) add(new AMap.Polyline({ path: oldPath, strokeColor: '#94a3b8', strokeWeight: 4, strokeOpacity: .8, strokeStyle: 'dashed', zIndex: 21 }))
         if (isSos) sosRouteHistoryRef.current.set(route.order_id, { version: route.traffic_version, path: points, oldPath: history?.version !== route.traffic_version ? history?.path : history?.oldPath, expiresAt: history?.version !== route.traffic_version ? Date.now() + 6000 : history?.expiresAt })
         const segments = routeWithTraffic.traffic_segments?.length ? routeWithTraffic.traffic_segments : []
-        // Normal road is green. Real AMap yellow/red TMC sections are drawn
-        // wider and above it, matching the familiar traffic-map convention.
+        // Green / yellow / red share one stroke style; only color differs.
         add(new AMap.Polyline({
           path: points,
           strokeColor: '#16a34a',
-          strokeWeight: 6,
-          strokeOpacity: .94,
           strokeStyle: isFallback ? 'dashed' : 'solid',
-          lineJoin: 'round',
-          lineCap: 'round',
           zIndex: 19,
+          ...ROUTE_LINE_STYLE,
         }))
         segments.forEach((segment) => {
           const style = trafficStyle(segment.status)
-          if (!style) return
+          if (!style || segment.path.length < 2) return
           add(new AMap.Polyline({
             path: segment.path,
             strokeColor: style.color,
-            strokeWeight: 6 + style.severity * .6,
-            strokeOpacity: 1,
             strokeStyle: isFallback ? 'dashed' : 'solid',
-            lineJoin: 'round',
-            lineCap: 'round',
-            // Red overlays yellow; yellow overlays green.
             zIndex: 20 + style.severity,
+            ...ROUTE_LINE_STYLE,
           }))
         })
         if (route.progress != null && route.progress <= 100) {

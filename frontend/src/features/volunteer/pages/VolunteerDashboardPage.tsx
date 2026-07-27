@@ -8,8 +8,12 @@ import {
 import { useNavigate } from 'react-router-dom'
 
 import { useSession } from '@/features/auth/useSession'
+import {
+  orderHomeFeatures,
+  type HomeFeatureItem,
+} from '@/features/shared/order-home-features'
 
-const features = [
+const features: HomeFeatureItem[] = [
   {
     icon: <CompassOutlined className="text-5xl text-emerald-600" />,
     title: '智能推荐接单',
@@ -43,6 +47,7 @@ const features = [
 export default function VolunteerDashboardPage() {
   const navigate = useNavigate()
   const { session } = useSession()
+  const orderedFeatures = orderHomeFeatures('volunteer', features)
 
   return (
     <div className="space-y-8">
@@ -58,7 +63,7 @@ export default function VolunteerDashboardPage() {
 
       {/* Feature Cards */}
       <div className="space-y-5">
-        {features.map((f) => (
+        {orderedFeatures.map((f) => (
           <Card
             key={f.path}
             hoverable

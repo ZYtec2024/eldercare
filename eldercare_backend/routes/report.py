@@ -35,9 +35,7 @@ def _elder_profile_by_user_id(cursor, user_id):
 
 def _week_bounds():
     today = datetime.date.today()
-    monday = today - datetime.timedelta(days=today.weekday())
-    sunday = monday + datetime.timedelta(days=6)
-    return monday, sunday
+    return today - datetime.timedelta(days=6), today
 
 
 def _aggregate_health_data(cursor, elder_id):
@@ -406,32 +404,24 @@ def generate_weekly_report():
 
             settings = _load_settings(cursor)
 
-            custom_api_key = str(settings.get('chat_api_key') or '').strip()
-            custom_base_url = str(settings.get('chat_api_base_url') or '').strip()
-            custom_model = str(settings.get('chat_model_name') or '').strip()
-            use_custom = bool(custom_api_key and custom_base_url and custom_model)
-
-            if use_custom:
-                api_key = custom_api_key
-                model = custom_model
-            else:
-                api_key = str(settings.get('groq_api_key') or '').strip()
-                model = str(settings.get('groq_chat_model') or DEFAULT_AI_SETTINGS['groq_chat_model'])
-
-            if not api_key:
-                return jsonify({'code': 400, 'message': '尚未配置 AI API Key，请联系总管理员'}), 400
-
             chat_payload = {
-                'model': model,
                 'messages': messages,
                 'temperature': 0.7,
                 'max_tokens': 4096,
             }
 
-            if use_custom:
-                response_data = _openai_compatible_request(api_key, custom_base_url, chat_payload)
-            else:
-                response_data = _groq_request('chat/completions', api_key, chat_payload)
+            report_api_key = str(settings.get('report_api_key') or '').strip()
+            report_base_url = str(settings.get('report_api_base_url') or '').strip()
+            report_model = str(settings.get('report_model_name') or '').strip()
+
+            if not (report_api_key and report_base_url and report_model):
+                return jsonify({
+                    'code': 400,
+                    'message': '智能周报模型尚未配置，请联系总管理员在"AI模型配置"页面配置后再试。',
+                }), 400
+
+            chat_payload['model'] = report_model
+            response_data = _openai_compatible_request(report_api_key, report_base_url, chat_payload)
 
             report_content = ''
             try:

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Segmented, Switch } from 'antd'
 
 import type { DispatchMapData, DispatchRoute, NavigationMode } from '../dispatch-types'
-import { formatNavDistance, type AmapNavStep } from './DispatchMap'
+import { formatNavDistance, trafficStyle, type AmapNavStep } from './DispatchMap'
 
 type Point = [number, number]
 type RouteMotionState = {
@@ -168,12 +168,14 @@ function lookAheadPoint(path: Point[], progress: number, metersHint = 40): Point
   return ahead
 }
 
-function trafficStyle(status?: string): { color: string; severity: number } | null {
-  if (status?.includes('严重拥堵')) return { color: '#991b1b', severity: 4 }
-  if (status?.includes('拥堵')) return { color: '#dc2626', severity: 3 }
-  if (status?.includes('缓行')) return { color: '#eab308', severity: 2 }
-  if (status?.includes('畅通')) return { color: '#16a34a', severity: 1 }
-  return null
+const ROUTE_LINE_STYLE = {
+  strokeWeight: 5,
+  strokeOpacity: 1,
+  lineJoin: 'round' as const,
+  lineCap: 'round' as const,
+  isOutline: false,
+  borderWeight: 0,
+  showDir: false,
 }
 
 function pickSelfRoute(overview: (DispatchMapData & { return_route?: DispatchRoute }) | null, routeOverride?: DispatchRoute | null): { volunteerId: number; route: DispatchRoute; position: Point } | null {
@@ -449,33 +451,25 @@ export function VolunteerNavMap({
     const self = ego
     if (self?.route?.path?.length && self.route.path.length > 2) {
       const path = self.route.path as Point[]
-      // Normal driving road is green. AMap's classified yellow/red TMC
-      // sections are wider and use higher z-indexes below, so they cover it.
+      const baseColor = navigationMode === 'walking' ? '#2563eb' : navigationMode === 'riding' ? '#7c3aed' : '#16a34a'
+      // Same stroke for green / yellow / red — congestion is only a color change.
       add(new AMap.Polyline({
         path,
-        strokeColor: navigationMode === 'walking' ? '#2563eb' : navigationMode === 'riding' ? '#7c3aed' : '#16a34a',
-        strokeWeight: navigationMode === 'driving' ? 6 : 7,
-        strokeOpacity: 0.96,
-        lineJoin: 'round',
-        lineCap: 'round',
+        strokeColor: baseColor,
         zIndex: 20,
+        ...ROUTE_LINE_STYLE,
         showDir: navigationMode !== 'driving',
       }))
       ;(self.route.traffic_segments || []).forEach((segment) => {
         if (!segment.path || segment.path.length < 2) return
         const style = trafficStyle(segment.status)
         if (!style) return
-        const trafficOverlay = new AMap.Polyline({
+        add(new AMap.Polyline({
           path: segment.path,
           strokeColor: style.color,
-          strokeWeight: 6 + style.severity * 0.6,
-          strokeOpacity: 1,
-          lineJoin: 'round',
-          lineCap: 'round',
-          // Red > yellow > green even when AMap segments overlap.
           zIndex: 24 + style.severity,
-        })
-        add(trafficOverlay)
+          ...ROUTE_LINE_STYLE,
+        }))
       })
     }
 

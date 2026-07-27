@@ -3080,6 +3080,20 @@ def _assign_sos_desk_members(
     return recipient_ids, assigned_admin_id
 
 
+def _sos_service_region(
+    order: dict[str, Any],
+    elder: dict[str, Any],
+    incident: dict[str, Any] | None = None,
+) -> str:
+    """Incident desk district: saved incident → order service point → signup fallback."""
+    return str(
+        (incident or {}).get("region_adcode")
+        or order.get("region_adcode")
+        or elder.get("region_adcode")
+        or DEFAULT_REGION_ADCODE
+    )
+
+
 def _ensure_sos_intervention_for_order(
     cursor: Any,
     order: dict[str, Any],
@@ -3115,8 +3129,21 @@ def _ensure_sos_intervention_for_order(
     def _find_order_conversation() -> int | None:
         return _find_primary_order_conversation(cursor, order)
 
-    def _attach_desk_to_conversation(conversation_id: int, elder: dict[str, Any], incident_id: int) -> int | None:
-        recipient_ids, assigned_admin_id = _assign_sos_desk_members(cursor, elder, requester_user_id)
+    def _attach_desk_to_conversation(
+        conversation_id: int,
+        elder: dict[str, Any],
+        incident_id: int,
+        service_region: str,
+    ) -> int | None:
+        # The desk follows the incident/order service point, never the elder's
+        # signup district. Example: a Baoshan elder served in Pudong is handled
+        # by a Pudong district admin for this incident.
+        recipient_ids, assigned_admin_id = _assign_sos_desk_members(
+            cursor,
+            elder,
+            requester_user_id,
+            region_adcode=service_region,
+        )
         _persist_sos_assigned_admin(cursor, incident_id, assigned_admin_id)
         for recipient_id in recipient_ids:
             _add_conversation_member(cursor, conversation_id, int(recipient_id), can_speak=True)
@@ -3165,7 +3192,7 @@ def _ensure_sos_intervention_for_order(
         return assigned_admin_id
 
     cursor.execute(
-        """SELECT incident_id, status FROM emergency_incidents
+        """SELECT incident_id, status, region_adcode FROM emergency_incidents
            WHERE linked_order_id = %s AND status <> 'resolved'
            ORDER BY incident_id DESC LIMIT 1""",
         (order_id,),
@@ -3181,6 +3208,7 @@ def _ensure_sos_intervention_for_order(
 
     if existing:
         incident_id = int(existing["incident_id"])
+        service_region = _sos_service_region(order, elder, existing)
         conversation_id = _find_order_conversation()
         if not conversation_id:
             cursor.execute(
@@ -3194,7 +3222,12 @@ def _ensure_sos_intervention_for_order(
         _upgrade_urgency_if_needed()
         assigned_admin_id = None
         if conversation_id:
-            assigned_admin_id = _attach_desk_to_conversation(conversation_id, elder, incident_id)
+            assigned_admin_id = _attach_desk_to_conversation(
+                conversation_id,
+                elder,
+                incident_id,
+                service_region,
+            )
             cursor.execute(
                 """INSERT INTO conversation_messages (conversation_id, sender_user_id, message_type, content)
                    VALUES (%s, %s, 'system', %s)""",
@@ -3224,7 +3257,7 @@ def _ensure_sos_intervention_for_order(
         }
 
     description = f"服务中异常求助（订单#{order_id}）：{reason}"[:500]
-    service_region = str(order.get("region_adcode") or elder.get("region_adcode") or DEFAULT_REGION_ADCODE)
+    service_region = _sos_service_region(order, elder)
     order_address = str(order.get("address") or elder.get("address") or "").strip() or None
     order_lng = order.get("service_lng") if order.get("service_lng") is not None else order.get("elder_lng")
     order_lat = order.get("service_lat") if order.get("service_lat") is not None else order.get("elder_lat")
@@ -3256,7 +3289,12 @@ def _ensure_sos_intervention_for_order(
 
     conversation_id = _find_order_conversation()
     if conversation_id:
-        assigned_admin_id = _attach_desk_to_conversation(conversation_id, elder, incident_id)
+        assigned_admin_id = _attach_desk_to_conversation(
+            conversation_id,
+            elder,
+            incident_id,
+            service_region,
+        )
         created = False
     else:
         # No prior service chat (e.g. pending before accept): open one SOS thread only.
@@ -4913,7 +4951,11 @@ def _build_live_notices(cursor: Any, user_id: int) -> list[dict[str, Any]]:
         level: str = "warning",
         action_path: str | None = None,
         notification_id: int | None = None,
+        created_at: Any = None,
     ) -> None:
+        created_text = created_at
+        if isinstance(created_at, (dt.datetime, dt.date)):
+            created_text = created_at.strftime("%Y-%m-%d %H:%M")
         notices.append({
             "notice_key": notice_key,
             "title": title,
@@ -4921,6 +4963,7 @@ def _build_live_notices(cursor: Any, user_id: int) -> list[dict[str, Any]]:
             "level": level,
             "action_path": action_path,
             "notification_id": notification_id,
+            "created_at": str(created_text or ""),
         })
 
     if role == "elder":
@@ -4964,7 +5007,7 @@ def _build_live_notices(cursor: Any, user_id: int) -> list[dict[str, Any]]:
         # Yellow health-warning toasts for the elder themselves.
         cursor.execute(
             """
-            SELECT a.alert_id, a.description
+            SELECT a.alert_id, a.description, a.created_at
             FROM alerts a
             JOIN elders e ON e.elder_id = a.elder_id
             WHERE e.user_id = %s
@@ -4982,7 +5025,8 @@ def _build_live_notices(cursor: Any, user_id: int) -> list[dict[str, Any]]:
                 title="健康打卡异常提醒",
                 body=str(row.get("description") or "今日健康指标异常，请留意身体状况"),
                 level="warning",
-                action_path="/elder/checkin",
+                action_path="/conversations?notice=health",
+                created_at=row.get("created_at"),
             )
 
     elif role == "family":
@@ -5022,7 +5066,7 @@ def _build_live_notices(cursor: Any, user_id: int) -> list[dict[str, Any]]:
             )
         cursor.execute(
             """
-            SELECT a.alert_id, a.description, e.name AS elder_name
+            SELECT a.alert_id, a.description, a.created_at, e.name AS elder_name
             FROM alerts a
             JOIN elders e ON e.elder_id = a.elder_id
             JOIN user_elder_relation uer ON uer.elder_id = a.elder_id
@@ -5041,7 +5085,8 @@ def _build_live_notices(cursor: Any, user_id: int) -> list[dict[str, Any]]:
                 title=f"健康异常 · {row.get('elder_name') or '长辈'}",
                 body=str(row.get("description") or "长辈健康打卡出现异常指标"),
                 level="warning",
-                action_path="/family/alerts",
+                action_path="/conversations?notice=health",
+                created_at=row.get("created_at"),
             )
 
         cursor.execute(

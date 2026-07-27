@@ -12,10 +12,14 @@ import {
 import { useNavigate } from 'react-router-dom'
 
 import { useSession } from '@/features/auth/useSession'
+import {
+  orderHomeFeatures,
+  type HomeFeatureItem,
+} from '@/features/shared/order-home-features'
 import { fetchPendingServices } from '@/services/adapters/elder-adapter'
 import type { PendingService } from '@/types/domain'
 
-const features = [
+const features: HomeFeatureItem[] = [
   {
     icon: <HeartOutlined className="text-5xl text-blue-600" />,
     title: '健康打卡',
@@ -64,6 +68,7 @@ export default function ElderDashboardPage() {
   const navigate = useNavigate()
   const { session } = useSession()
   const [proxyOrders, setProxyOrders] = useState<PendingService[]>([])
+  const orderedFeatures = orderHomeFeatures('elder', features)
 
   useEffect(() => {
     if (!session) return
@@ -121,7 +126,7 @@ export default function ElderDashboardPage() {
       ) : null}
 
       <div className="space-y-4">
-        {features.map((f) => (
+        {orderedFeatures.map((f) => (
           <Card
             key={f.path}
             hoverable

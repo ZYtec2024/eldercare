@@ -14,6 +14,7 @@ export default function AdminAiSettingsPage() {
   const [saving, setSaving] = useState(false)
   const [hasGroqApiKey, setHasGroqApiKey] = useState(false)
   const [hasChatApiKey, setHasChatApiKey] = useState(false)
+  const [hasReportApiKey, setHasReportApiKey] = useState(false)
 
   useEffect(() => {
     if (!session) return
@@ -26,6 +27,7 @@ export default function AdminAiSettingsPage() {
       .then((config) => {
         setHasGroqApiKey(config.hasGroqApiKey)
         setHasChatApiKey(config.hasChatApiKey)
+        setHasReportApiKey(config.hasReportApiKey)
         form.setFieldsValue({
           groqApiKey: '',
           groqChatModel: config.groqChatModel,
@@ -37,6 +39,9 @@ export default function AdminAiSettingsPage() {
           ttsRate: config.ttsRate,
           ttsVolume: config.ttsVolume,
           companionSystemPrompt: config.companionSystemPrompt,
+          reportApiKey: '',
+          reportApiBaseUrl: config.reportApiBaseUrl,
+          reportModelName: config.reportModelName,
         })
       })
       .catch((error: any) => {
@@ -62,11 +67,15 @@ export default function AdminAiSettingsPage() {
         ttsRate: values.ttsRate,
         ttsVolume: values.ttsVolume,
         companionSystemPrompt: values.companionSystemPrompt,
+        reportApiKey: values.reportApiKey,
+        reportApiBaseUrl: values.reportApiBaseUrl,
+        reportModelName: values.reportModelName,
       })
       setHasGroqApiKey(nextConfig.hasGroqApiKey)
       setHasChatApiKey(nextConfig.hasChatApiKey)
+      setHasReportApiKey(nextConfig.hasReportApiKey)
       message.success('AI 配置已保存')
-      form.setFieldsValue({ groqApiKey: '', chatApiKey: '' })
+      form.setFieldsValue({ groqApiKey: '', chatApiKey: '', reportApiKey: '' })
     } catch (error: any) {
       if (error?.errorFields) return
       message.error(error?.message || '保存失败')
@@ -83,11 +92,15 @@ export default function AdminAiSettingsPage() {
     return <div className="flex justify-center py-20"><Spin size="large" /></div>
   }
 
-  const activeModel = hasChatApiKey && form.getFieldValue('chatModelName')
-    ? `自定义: ${form.getFieldValue('chatModelName')}`
+  const companionModel = hasChatApiKey && form.getFieldValue('chatModelName')
+    ? form.getFieldValue('chatModelName')
     : hasGroqApiKey
       ? `Groq: ${form.getFieldValue('groqChatModel')}`
       : '未配置'
+
+  const reportModel = hasReportApiKey && form.getFieldValue('reportModelName')
+    ? form.getFieldValue('reportModelName')
+    : '未配置'
 
   return (
     <div className="space-y-6">
@@ -95,15 +108,21 @@ export default function AdminAiSettingsPage() {
         <Space align="start" className="w-full justify-between">
           <div>
             <Typography.Title level={2} className="!mb-2 !text-white">
-              智能陪聊 API 配置
+              AI 模型配置
             </Typography.Title>
             <Typography.Paragraph className="!mb-0 !max-w-3xl !text-slate-200 leading-relaxed">
-              管理 Groq 语音转写、对话模型（可替换为 DeepSeek / 豆包 / GPT 等）以及 Edge TTS 朗读参数。
+              管理陪聊及周报的默认模型、自定义模型以及 Edge TTS 朗读参数。
             </Typography.Paragraph>
           </div>
-          <div className="rounded-2xl bg-white/10 px-4 py-3 backdrop-blur-sm">
-            <div className="text-sm text-slate-200">当前对话模型</div>
-            <div className="mt-1 text-lg font-semibold">{activeModel}</div>
+          <div className="flex gap-3">
+            <div className="rounded-2xl bg-white/10 px-4 py-3 backdrop-blur-sm">
+              <div className="text-sm text-slate-200">当前陪聊对话模型</div>
+              <div className="mt-1 text-lg font-semibold">{companionModel}</div>
+            </div>
+            <div className="rounded-2xl bg-white/10 px-4 py-3 backdrop-blur-sm">
+              <div className="text-sm text-slate-200">当前周报模型</div>
+              <div className="mt-1 text-lg font-semibold">{reportModel}</div>
+            </div>
           </div>
         </Space>
       </div>
@@ -112,10 +131,10 @@ export default function AdminAiSettingsPage() {
         type="info"
         showIcon
         message="使用说明"
-        description="语音转写固定使用 Groq Whisper。若自定义模型的三项（API Key + Base URL + 模型名）均填写，对话将优先使用自定义模型而非 Groq。"
+        description="智能陪聊的语音转写固定使用 Groq Whisper。若自定义模型的三项（API Key + Base URL + 模型名）均填写，对话将优先使用自定义模型而非 Groq。智能周报固定使用自定义模型"
       />
 
-      <Card className="!rounded-3xl !shadow-[0_10px_40px_rgba(15,23,42,.08)]" title={<Space><RobotOutlined />Groq 与自定义模型配置</Space>}>
+      <Card className="!rounded-3xl !shadow-[0_10px_40px_rgba(15,23,42,.08)]" title={<Space><RobotOutlined />模型与服务配置</Space>}>
         <Form
           form={form}
           layout="vertical"
@@ -129,6 +148,9 @@ export default function AdminAiSettingsPage() {
             ttsVoice: 'zh-CN-XiaoxiaoNeural',
             ttsRate: '+0%',
             ttsVolume: '+0%',
+            reportApiKey: '',
+            reportApiBaseUrl: 'https://api.deepseek.com',
+            reportModelName: 'deepseek-chat',
           }}
         >
           <div className="grid gap-4 md:grid-cols-2">
@@ -144,10 +166,10 @@ export default function AdminAiSettingsPage() {
           </div>
 
           <Divider plain>
-            <Tag color="purple">自定义对话模型（可选，支持 OpenAI 兼容接口）</Tag>
+            <Tag color="purple">陪聊自定义对话模型（可选，支持 OpenAI 兼容接口）</Tag>
           </Divider>
           <Typography.Paragraph type="secondary" className="!mb-4 !text-xs">
-            填写以下三项后，对话将优先使用自定义模型。适用于 DeepSeek、豆包、GPT、通义千问等。
+            填写以下三项后，陪聊对话将优先使用自定义模型。适用于 DeepSeek、豆包、GPT、通义千问等。
           </Typography.Paragraph>
 
           <div className="grid gap-4 md:grid-cols-3">
@@ -212,11 +234,30 @@ export default function AdminAiSettingsPage() {
             <Input.TextArea autoSize={{ minRows: 5, maxRows: 10 }} placeholder="请输入老人端陪聊助手的系统提示词" />
           </Form.Item>
 
+          <Divider plain>
+            <Tag color="orange">周报自定义模型</Tag>
+          </Divider>
+          <Typography.Paragraph type="secondary" className="!mb-4 !text-xs">
+            周报功能独立使用此模型。三项均需填写，未配置时老人端将提示等待管理员配置。
+          </Typography.Paragraph>
+
+          <div className="grid gap-4 md:grid-cols-3">
+            <Form.Item label="周报 API Key" name="reportApiKey">
+              <Input.Password placeholder="sk-xxx" autoComplete="off" />
+            </Form.Item>
+            <Form.Item label="接口地址 (Base URL)" name="reportApiBaseUrl">
+              <Input placeholder="https://api.deepseek.com" />
+            </Form.Item>
+            <Form.Item label="模型名称" name="reportModelName">
+              <Input placeholder="deepseek-chat" />
+            </Form.Item>
+          </div>
+
           <div className="flex items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3">
             <div>
               <div className="text-sm font-medium text-slate-700">服务状态</div>
               <div className="text-xs text-slate-500">
-                Groq: {hasGroqApiKey ? '已配置' : '未配置'} · 自定义模型: {hasChatApiKey ? '已配置' : '未配置'} · 保存后立即生效
+                Groq: {hasGroqApiKey ? '已配置' : '未配置'} · 自定义模型: {hasChatApiKey ? '已配置' : '未配置'} · 周报模型: {hasReportApiKey ? '已配置' : '未配置'} · 保存后立即生效
               </div>
             </div>
             <Switch checked={hasGroqApiKey || hasChatApiKey} disabled />

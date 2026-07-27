@@ -8,8 +8,9 @@ import {
   SendOutlined,
   SyncOutlined,
   TeamOutlined,
+  RightOutlined,
 } from '@ant-design/icons'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { useSession } from '@/features/auth/useSession'
 import {
@@ -22,6 +23,10 @@ import {
   type ConversationSummary,
   type ConversationThread,
 } from '@/services/adapters/conversation-adapter'
+import {
+  fetchLiveNotices,
+  type LiveNotice,
+} from '@/services/adapters/live-notice-adapter'
 
 const quickMessages = ['我已看到', '我已出发', '我已到达', '请保持电话畅通']
 
@@ -32,6 +37,11 @@ function shortTime(value?: string | null) {
   if (match) return match[1]
   if (text.includes(' ')) return text.split(' ').slice(-1)[0]?.slice(0, 5) || text
   return text.slice(0, 16)
+}
+
+function noticeDateTime(value?: string | null) {
+  if (!value) return '时间待同步'
+  return String(value).replace('T', ' ').slice(0, 16)
 }
 
 function avatarTone(type?: string, upgraded?: boolean) {
@@ -48,8 +58,10 @@ function avatarLabel(item: ConversationSummary) {
 export default function ConversationPage() {
   const { session } = useSession()
   const { message } = App.useApp()
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
+  const [healthNotices, setHealthNotices] = useState<LiveNotice[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(() => {
     const raw = searchParams.get('id') || searchParams.get('conversationId')
     const parsed = Number(raw || 0)
@@ -106,6 +118,20 @@ export default function ConversationPage() {
     }
   }
 
+  const loadHealthNotices = async () => {
+    if (!session || !['elder', 'family'].includes(session.role)) {
+      setHealthNotices([])
+      return
+    }
+    try {
+      const notices = await fetchLiveNotices(session.userId)
+      setHealthNotices(notices.filter((item) => item.notice_key.includes('health')))
+    } catch {
+      // System notifications are supplementary; a transient failure must not
+      // block the user's normal service conversations.
+    }
+  }
+
   const loadThread = async (conversationId = selectedId) => {
     if (!session || !conversationId) {
       setThread(null)
@@ -119,15 +145,19 @@ export default function ConversationPage() {
     }
   }
 
-  useEffect(() => { void loadConversations().catch(() => {}) }, [session?.userId])
+  useEffect(() => {
+    void loadConversations().catch(() => {})
+    void loadHealthNotices().catch(() => {})
+  }, [session?.userId, session?.role])
   useEffect(() => { void loadThread().catch(() => {}) }, [selectedId, session?.userId])
   useEffect(() => {
     const timer = window.setInterval(() => {
       void loadConversations().catch(() => {})
+      void loadHealthNotices().catch(() => {})
       if (selectedId) void loadThread(selectedId).catch(() => {})
     }, 4000)
     return () => window.clearInterval(timer)
-  }, [selectedId, session?.userId])
+  }, [selectedId, session?.userId, session?.role])
 
   useEffect(() => {
     const node = scrollerRef.current
@@ -188,6 +218,7 @@ export default function ConversationPage() {
     () => conversations.reduce((sum, item) => sum + Number(item.unread_count || 0), 0),
     [conversations],
   )
+  const totalUnreadCount = unreadCount + healthNotices.length
 
   if (selected) {
     const title = thread?.title || selected.title || (selected.conversation_type === 'sos' ? '紧急求助' : selected.service_type || '服务沟通')
@@ -396,10 +427,10 @@ export default function ConversationPage() {
       <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
         <div>
           <h1 className="text-[18px] font-semibold text-slate-900">消息</h1>
-          <p className="text-xs text-slate-400">服务沟通与 SOS 协同，结束后可删除</p>
+          <p className="text-xs text-slate-400">健康通知、服务沟通与 SOS 协同</p>
         </div>
         <div className="flex items-center gap-2">
-          {unreadCount > 0 ? <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[11px] font-medium text-white">{unreadCount} 未读</span> : null}
+          {totalUnreadCount > 0 ? <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[11px] font-medium text-white">{totalUnreadCount} 条提醒</span> : null}
           <Button
             type="text"
             size="small"
@@ -413,7 +444,10 @@ export default function ConversationPage() {
           <button
             type="button"
             className="flex h-8 w-8 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100"
-            onClick={() => void loadConversations()}
+            onClick={() => {
+              void loadConversations()
+              void loadHealthNotices()
+            }}
             aria-label="刷新"
           >
             <SyncOutlined />
@@ -421,8 +455,38 @@ export default function ConversationPage() {
         </div>
       </div>
 
+      {healthNotices.length ? (
+        <section className="border-b border-amber-100 bg-amber-50 px-4 py-3">
+          <div className="space-y-2">
+            {healthNotices.map((item) => (
+              <button
+                type="button"
+                key={item.notice_key}
+                className="group flex w-full items-center gap-3 rounded-lg border border-amber-200/80 bg-amber-50 px-3.5 py-3 text-left transition-colors hover:bg-amber-100/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-amber-300"
+                onClick={() => navigate(session?.role === 'family' ? '/family/health' : '/elder/checkin')}
+              >
+                <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" aria-hidden="true" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[14px] font-medium text-slate-900">{item.title}</div>
+                  <div className="mt-0.5 text-[13px] leading-5 text-slate-600">{item.body}</div>
+                  <div className="mt-1 text-[12px] text-slate-400">
+                    {noticeDateTime(item.created_at)} · 系统健康提醒
+                  </div>
+                </div>
+                <RightOutlined className="shrink-0 text-[12px] text-slate-300 transition-colors group-hover:text-amber-500" />
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       {conversations.length === 0 ? (
-        <div className="py-20"><Empty description="暂无会话" image={Empty.PRESENTED_IMAGE_SIMPLE} /></div>
+        <div className="py-14">
+          <Empty
+            description={healthNotices.length ? '暂无服务会话' : '暂无消息'}
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+          />
+        </div>
       ) : (
         <div
           className="conversation-list-scroll divide-y divide-slate-100 overflow-y-auto"
@@ -435,7 +499,7 @@ export default function ConversationPage() {
               <button
                 key={item.conversation_id}
                 type="button"
-                className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition hover:bg-slate-50 active:bg-slate-100"
+                className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition hover:bg-slate-50 active:bg-slate-100 focus:outline-none focus-visible:bg-slate-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-200"
                 onClick={() => openConversation(item.conversation_id)}
               >
                 <div className={`relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-[15px] font-semibold text-white shadow-sm ${avatarTone(item.conversation_type, upgraded)}`}>
