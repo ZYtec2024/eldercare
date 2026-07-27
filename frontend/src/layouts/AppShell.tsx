@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  BellOutlined,
   HomeOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
@@ -7,7 +8,7 @@ import {
   QuestionCircleOutlined,
   UserOutlined,
 } from '@ant-design/icons'
-import { App, Avatar, Button, Layout, Menu, Space, Typography } from 'antd'
+import { App, Avatar, Badge, Breadcrumb, Button, Layout, Menu, Space, Tooltip, Typography } from 'antd'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 
 import { useSession } from '@/features/auth/useSession'
@@ -25,7 +26,7 @@ import {
 import { roleLabels } from '@/types/domain'
 import { fetchAdminUsers } from '@/services/adapters/admin-adapter'
 
-const { Header, Sider, Content } = Layout
+const { Header, Sider, Content, Footer } = Layout
 
 function ElderLogo({ className }: { className?: string }) {
   return (
@@ -160,31 +161,36 @@ export function AppShell() {
         collapsed={collapsed}
         onCollapse={setCollapsed}
         trigger={null}
-        className="!bg-blue-900 shadow-lg"
+        className="!bg-gradient-to-b !from-slate-900 !via-blue-950 !to-slate-900 shadow-xl"
+        style={{ backgroundImage: 'radial-gradient(ellipse at 50% 0%, rgba(37,99,235,.12) 0%, transparent 60%)' }}
       >
-        <div className="px-5 py-5 border-b border-blue-800">
-          {!collapsed && (
+        <div className={`px-5 py-5 border-b border-white/10 ${collapsed ? 'flex justify-center' : ''}`}>
+          {collapsed ? (
+            <div className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center">
+              <ElderLogo className="w-5 h-5 text-white" />
+            </div>
+          ) : (
             <>
               <div className="flex items-center gap-3 mb-3">
-                <div className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center shadow-lg shadow-blue-500/30">
                   <ElderLogo className="w-5 h-5 text-white" />
                 </div>
                 <div>
                   <Typography.Text className="!text-white !text-base !font-semibold block leading-tight">
                     智慧伴老
                   </Typography.Text>
-                  <Typography.Text className="!text-blue-300 !text-xs">
+                  <Typography.Text className="!text-blue-300/80 !text-xs">
                     社区照护平台
                   </Typography.Text>
                 </div>
               </div>
-              <div className="flex items-center gap-2 mt-3 px-1">
-                <Avatar size={28} className="bg-blue-600" icon={<UserOutlined />} />
+              <div className="flex items-center gap-2 mt-3 px-1 py-2 rounded-xl bg-white/5">
+                <Avatar size={30} className="bg-blue-600 flex-shrink-0" icon={<UserOutlined />} />
                 <div className="min-w-0">
                   <Typography.Text className="!text-blue-100 !text-sm block truncate">
                     {session.displayName}
                   </Typography.Text>
-                  <Typography.Text className="!text-blue-400 !text-xs">
+                  <Typography.Text className="!text-blue-400/80 !text-xs">
                     {session.isRoot ? '系统管理员' : roleLabels[session.role]}
                   </Typography.Text>
                 </div>
@@ -196,7 +202,7 @@ export function AppShell() {
           theme="dark"
           mode="inline"
           selectedKeys={selectedKeys}
-          className="!bg-blue-900 !border-none mt-2 [&_.ant-menu-item]:!text-base [&_.ant-menu-item]:!h-12 [&_.ant-menu-item]:!leading-[48px] [&_.anticon]:!text-lg"
+          className="!bg-transparent !border-none mt-2 [&_.ant-menu-item]:!text-base [&_.ant-menu-item]:!h-12 [&_.ant-menu-item]:!leading-[48px] [&_.ant-menu-item]:!rounded-xl [&_.ant-menu-item]:!mx-2 [&_.ant-menu-item-selected]:!bg-blue-600/40 [&_.ant-menu-item]:!transition-colors [&_.anticon]:!text-lg"
           items={navigationItems.map((item) => ({
             key: item.key,
             icon: item.icon,
@@ -206,57 +212,81 @@ export function AppShell() {
         />
       </Sider>
       <Layout>
-        <Header className="!bg-white !px-4 md:!px-6 !h-16 flex items-center justify-between border-b border-gray-200 shadow-sm">
-          <div className="flex items-center gap-3">
+        <Header className="!bg-white !px-4 md:!px-6 !h-16 flex items-center justify-between border-b border-slate-100 shadow-[0_1px_3px_rgba(0,0,0,.04)]">
+          <div className="flex items-center gap-4 min-w-0">
             <Button
               type="text"
               icon={collapsed ? <MenuUnfoldOutlined className="!text-xl" /> : <MenuFoldOutlined className="!text-xl" />}
               onClick={() => setCollapsed(!collapsed)}
-              className="lg:hidden !text-xl"
+              className="lg:hidden !text-slate-500 !flex-shrink-0"
             />
-            <Typography.Text className="font-semibold text-lg text-gray-800">
+            <Breadcrumb
+              className="hidden sm:block"
+              items={activeRoute
+                ? [{ title: <HomeOutlined /> }, { title: <span className="text-slate-500">{activeRoute.title}</span> }]
+                : [{ title: <HomeOutlined /> }, { title: '智慧伴老' }]
+              }
+            />
+            <Typography.Text className="font-semibold text-lg text-slate-800 sm:hidden truncate">
               {activeRoute?.title ?? '智慧伴老'}
             </Typography.Text>
           </div>
-          <Space size={12}>
+          <Space size={4} className="flex-shrink-0">
+            <Tooltip title="通知">
+              <Badge count={0} size="small">
+                <Button
+                  type="text"
+                  icon={<BellOutlined className="!text-xl" />}
+                  className="!w-10 !h-10 flex items-center justify-center !text-slate-500 hover:!bg-slate-100"
+                />
+              </Badge>
+            </Tooltip>
             {!session.isRoot && (
+              <Tooltip title="新手引导">
+                <Button
+                  type="text"
+                  icon={<QuestionCircleOutlined className="!text-xl" />}
+                  className="!w-10 !h-10 flex items-center justify-center !text-slate-500 hover:!bg-slate-100"
+                  onClick={() => setOnboardingOpen(true)}
+                />
+              </Tooltip>
+            )}
+            <Tooltip title="首页">
               <Button
                 type="text"
-                icon={<QuestionCircleOutlined className="!text-2xl" />}
-                className="!w-10 !h-10 flex items-center justify-center"
-                title="新手引导"
-                onClick={() => setOnboardingOpen(true)}
+                icon={<HomeOutlined className="!text-xl" />}
+                className="!w-10 !h-10 flex items-center justify-center !text-slate-500 hover:!bg-slate-100"
+                onClick={() => navigate(getDefaultRoute(session.role))}
               />
-            )}
-            <Button
-              type="text"
-              icon={<HomeOutlined className="!text-2xl" />}
-              className="!w-10 !h-10 flex items-center justify-center"
-              onClick={() => navigate(getDefaultRoute(session.role))}
-            />
-            <Button
-              type="text"
-              icon={<UserOutlined className="!text-2xl" />}
-              className="!w-10 !h-10 flex items-center justify-center"
-              onClick={() => navigate('/profile')}
-            />
-            <Button
-              type="text"
-              icon={<LogoutOutlined className="!text-2xl" />}
-              className="!w-10 !h-10 flex items-center justify-center"
-              onClick={() => {
-                logout()
-                navigate('/')
-              }}
-            />
+            </Tooltip>
+            <Tooltip title="个人中心">
+              <Button
+                type="text"
+                icon={<UserOutlined className="!text-xl" />}
+                className="!w-10 !h-10 flex items-center justify-center !text-slate-500 hover:!bg-slate-100"
+                onClick={() => navigate('/profile')}
+              />
+            </Tooltip>
+            <div className="w-px h-6 bg-slate-200 mx-1" />
+            <Tooltip title="退出登录">
+              <Button
+                type="text"
+                icon={<LogoutOutlined className="!text-xl" />}
+                className="!w-10 !h-10 flex items-center justify-center !text-slate-400 hover:!bg-red-50 hover:!text-red-500"
+                onClick={() => { logout(); navigate('/') }}
+              />
+            </Tooltip>
           </Space>
         </Header>
         <Content className={`p-4 md:p-6 ${session.role === 'elder' ? 'elder-mode' : ''}`}>
           <LiveNoticeHost />
-          <div className="max-w-6xl mx-auto">
+          <div className="max-w-6xl mx-auto page-fade-in">
             <Outlet />
           </div>
         </Content>
+        <Footer className="!bg-transparent !py-4 text-center text-xs text-slate-400 border-t border-slate-100">
+          智慧伴老 · 社区照护平台 &copy; {new Date().getFullYear()} — 纯公益项目
+        </Footer>
       </Layout>
       <OnboardingGuide
         open={onboardingOpen}
