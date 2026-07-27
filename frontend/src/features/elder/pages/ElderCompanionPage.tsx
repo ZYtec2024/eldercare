@@ -20,6 +20,7 @@ import {
   fetchCompanionHistory,
   saveCompanionMessage,
   clearCompanionHistory,
+  deleteLastCompanionMessages,
   type CompanionHistoryItem,
 } from '@/services/adapters/ai-adapter'
 
@@ -156,22 +157,23 @@ export default function ElderCompanionPage() {
 
   const handleEditConfirm = (msgId: number) => {
     const text = editDraft.trim()
-    if (!text) return
+    if (!text || !session) return
     setEditingId(null)
     setEditDraft('')
     retractExchange(msgId)
+    deleteLastCompanionMessages(session.userId, 2).catch(() => {})
     void submitMessage(text)
   }
 
   const handleRegenerate = (assistantMsgId: number) => {
+    if (!session) return
     setMessages((current) => {
       const idx = current.findIndex((m) => m.id === assistantMsgId)
       if (idx === -1 || current[idx].role !== 'assistant') return current
       const prev = current[idx - 1]
       if (!prev || prev.role !== 'user') return current
-      // Remove the assistant reply; submitMessage will append new exchange
+      deleteLastCompanionMessages(session.userId, 2).catch(() => {})
       const removed = current.filter((m) => m.id !== assistantMsgId)
-      // Fire the resubmit after state update
       setTimeout(() => { void submitMessage(prev.content) }, 0)
       return removed
     })
