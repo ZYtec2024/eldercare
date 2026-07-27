@@ -9,7 +9,13 @@ import {
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 
-const features = [
+import { useSession } from '@/features/auth/useSession'
+import {
+  orderHomeFeatures,
+  type HomeFeatureItem,
+} from '@/features/shared/order-home-features'
+
+const features: HomeFeatureItem[] = [
   {
     icon: <DeploymentUnitOutlined className="text-5xl text-cyan-600" />,
     title: '实时调度指挥台',
@@ -63,6 +69,10 @@ const features = [
 
 export default function AdminHomePage() {
   const navigate = useNavigate()
+  const { session } = useSession()
+  const orderedFeatures = orderHomeFeatures('admin', features, {
+    isRoot: Boolean(session?.isRoot),
+  })
 
   return (
     <div className="space-y-8">
@@ -78,7 +88,7 @@ export default function AdminHomePage() {
 
       {/* Feature Cards */}
       <div className="space-y-5">
-        {features.map((f) => (
+        {orderedFeatures.map((f) => (
           <Card
             key={f.path}
             hoverable

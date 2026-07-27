@@ -93,32 +93,45 @@ function normalizeHealthTrend(
   const records = payload
     .filter((item) => item && typeof item === 'object')
     .map((item) => item as Record<string, unknown>)
+  const systolicSeries = records.map((item) => Number(pickHealthField(item, 'blood_pressure_sys', 'bloodPressureSys') ?? 0))
+  const bloodOxygenSeries = records.map((item) => {
+    const value = pickHealthField(item, 'blood_oxygen', 'bloodOxygen')
+    return value === undefined ? null : Number(value)
+  })
+  const temperatureSeries = records.map((item) => {
+    const value = pickHealthField(item, 'temperature', 'temperature')
+    return value === undefined ? null : Number(value)
+  })
+  const hasHighBloodPressure = systolicSeries.some((value) => value > 140)
+  const hasLowBloodOxygen = bloodOxygenSeries.some((value) => value !== null && value < 95)
+  const hasFever = temperatureSeries.some((value) => value !== null && value >= 37.3)
+  const abnormalLabels = [
+    hasHighBloodPressure ? '收缩压偏高' : '',
+    hasLowBloodOxygen ? '血氧偏低' : '',
+    hasFever ? '体温偏高' : '',
+  ].filter(Boolean)
 
   return {
     elderId,
     dateRange: records.map((item) => String(pickHealthField(item, 'record_date', 'recordDate') ?? '')),
-    systolicSeries: records.map((item) => Number(pickHealthField(item, 'blood_pressure_sys', 'bloodPressureSys') ?? 0)),
+    systolicSeries,
     diastolicSeries: records.map((item) => Number(pickHealthField(item, 'blood_pressure_dia', 'bloodPressureDia') ?? 0)),
     heartRateSeries: records.map((item) => Number(pickHealthField(item, 'heart_rate', 'heartRate') ?? 0)),
-    bloodOxygenSeries: records.map((item) => {
-      const value = pickHealthField(item, 'blood_oxygen', 'bloodOxygen')
-      return value === undefined ? null : Number(value)
-    }),
+    bloodOxygenSeries,
     bloodSugarSeries: records.map((item) => {
       const value = pickHealthField(item, 'blood_sugar', 'bloodSugar')
       return value === undefined ? null : Number(value)
     }),
-    temperatureSeries: records.map((item) => {
-      const value = pickHealthField(item, 'temperature', 'temperature')
-      return value === undefined ? null : Number(value)
-    }),
+    temperatureSeries,
     weightSeries: records.map((item) => {
       const value = pickHealthField(item, 'weight', 'weight')
       return value === undefined ? null : Number(value)
     }),
-    abnormalFlag: false,
-    annotationText: records.length
-      ? '近 7 天健康记录'
+    abnormalFlag: abnormalLabels.length > 0,
+    annotationText: abnormalLabels.length
+      ? `近 7 天发现${abnormalLabels.join('、')}，请及时关注。`
+      : records.length
+        ? '近 7 天健康指标整体平稳。'
       : '暂无健康记录，请先完成健康打卡。',
   }
 }

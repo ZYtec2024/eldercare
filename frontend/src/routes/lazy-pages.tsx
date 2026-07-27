@@ -9,6 +9,7 @@ export const ProfilePage = lazy(() => import('@/features/profile/pages/ProfilePa
 export const ConversationPage = lazy(() => import('@/features/conversation/pages/ConversationPage'))
 
 export const FamilyDashboardPage = lazy(() => import('@/features/family/pages/FamilyDashboardPage'))
+export const FamilyHealthPage = lazy(() => import('@/features/family/pages/FamilyHealthPage'))
 export const BindElderPage = lazy(() => import('@/features/family/pages/BindElderPage'))
 export const ElderDetailPage = lazy(() => import('@/features/family/pages/ElderDetailPage'))
 export const NewServiceRequestPage = lazy(() => import('@/features/family/pages/NewServiceRequestPage'))
