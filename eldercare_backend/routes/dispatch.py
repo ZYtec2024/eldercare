@@ -389,6 +389,16 @@ def ensure_dispatch_schema() -> None:
             _add_column_if_missing(cursor, "emergency_incidents", "service_lat", "NUMERIC(10,6)")
             _add_column_if_missing(cursor, "emergency_incidents", "location_mode", "VARCHAR(16)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_emergency_incident ON alerts(emergency_incident_id)")
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS health_notice_reads (
+                    user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    alert_id INT NOT NULL REFERENCES alerts(alert_id) ON DELETE CASCADE,
+                    read_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    deleted_at TIMESTAMP NULL,
+                    PRIMARY KEY (user_id, alert_id)
+                )
+            """)
+            _add_column_if_missing(cursor, "health_notice_reads", "deleted_at", "TIMESTAMP NULL")
             # These tables are referenced by the legacy-data cleanup below, so
             # create them first when upgrading an existing pre-dispatch volume.
             cursor.execute("""
@@ -4934,7 +4944,12 @@ def overview():
         conn.close()
 
 
-def _build_live_notices(cursor: Any, user_id: int) -> list[dict[str, Any]]:
+def _build_live_notices(
+    cursor: Any,
+    user_id: int,
+    *,
+    include_read_health: bool = False,
+) -> list[dict[str, Any]]:
     """Role-aware in-app notices for elder / family / volunteer / admin."""
     cursor.execute("SELECT role, real_name FROM users WHERE user_id = %s", (user_id,))
     account = cursor.fetchone()
@@ -4951,6 +4966,8 @@ def _build_live_notices(cursor: Any, user_id: int) -> list[dict[str, Any]]:
         level: str = "warning",
         action_path: str | None = None,
         notification_id: int | None = None,
+        alert_id: int | None = None,
+        is_read: bool = False,
         created_at: Any = None,
     ) -> None:
         created_text = created_at
@@ -4963,6 +4980,8 @@ def _build_live_notices(cursor: Any, user_id: int) -> list[dict[str, Any]]:
             "level": level,
             "action_path": action_path,
             "notification_id": notification_id,
+            "alert_id": alert_id,
+            "is_read": is_read,
             "created_at": str(created_text or ""),
         })
 
@@ -5007,16 +5026,20 @@ def _build_live_notices(cursor: Any, user_id: int) -> list[dict[str, Any]]:
         # Yellow health-warning toasts for the elder themselves.
         cursor.execute(
             """
-            SELECT a.alert_id, a.description, a.created_at
+            SELECT a.alert_id, a.description, a.created_at, hnr.read_at
             FROM alerts a
             JOIN elders e ON e.elder_id = a.elder_id
+            LEFT JOIN health_notice_reads hnr
+              ON hnr.alert_id = a.alert_id AND hnr.user_id = %s
             WHERE e.user_id = %s
               AND a.alert_type = 'health_warning'
               AND COALESCE(a.is_handled, FALSE) = FALSE
+              AND hnr.deleted_at IS NULL
+              AND (%s = TRUE OR hnr.read_at IS NULL)
             ORDER BY a.alert_id DESC
             LIMIT 5
             """,
-            (user_id,),
+            (user_id, user_id, bool(include_read_health)),
         )
         for row in cursor.fetchall():
             # No notification_id: closing toast must not mark the alert handled.
@@ -5026,6 +5049,8 @@ def _build_live_notices(cursor: Any, user_id: int) -> list[dict[str, Any]]:
                 body=str(row.get("description") or "今日健康指标异常，请留意身体状况"),
                 level="warning",
                 action_path="/conversations?notice=health",
+                alert_id=int(row["alert_id"]),
+                is_read=row.get("read_at") is not None,
                 created_at=row.get("created_at"),
             )
 
@@ -5066,17 +5091,22 @@ def _build_live_notices(cursor: Any, user_id: int) -> list[dict[str, Any]]:
             )
         cursor.execute(
             """
-            SELECT a.alert_id, a.description, a.created_at, e.name AS elder_name
+            SELECT a.alert_id, a.description, a.created_at, e.name AS elder_name,
+                   hnr.read_at
             FROM alerts a
             JOIN elders e ON e.elder_id = a.elder_id
             JOIN user_elder_relation uer ON uer.elder_id = a.elder_id
+            LEFT JOIN health_notice_reads hnr
+              ON hnr.alert_id = a.alert_id AND hnr.user_id = %s
             WHERE uer.family_user_id = %s
               AND a.alert_type = 'health_warning'
               AND COALESCE(a.is_handled, FALSE) = FALSE
+              AND hnr.deleted_at IS NULL
+              AND (%s = TRUE OR hnr.read_at IS NULL)
             ORDER BY a.alert_id DESC
             LIMIT 8
             """,
-            (user_id,),
+            (user_id, user_id, bool(include_read_health)),
         )
         for row in cursor.fetchall():
             # No notification_id: family must click「确认已知晓」on alerts page.
@@ -5086,6 +5116,8 @@ def _build_live_notices(cursor: Any, user_id: int) -> list[dict[str, Any]]:
                 body=str(row.get("description") or "长辈健康打卡出现异常指标"),
                 level="warning",
                 action_path="/conversations?notice=health",
+                alert_id=int(row["alert_id"]),
+                is_read=row.get("read_at") is not None,
                 created_at=row.get("created_at"),
             )
 
@@ -5284,6 +5316,9 @@ def _build_live_notices(cursor: Any, user_id: int) -> list[dict[str, Any]]:
 @dispatch_bp.route("/live-notices", methods=["GET"])
 def live_notices():
     user_id = request.args.get("user_id", type=int)
+    include_read_health = str(request.args.get("include_read_health") or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
     if not user_id:
         return jsonify({"code": 400, "message": "缺少用户编号"}), 400
     conn = get_db_connection()
@@ -5291,7 +5326,11 @@ def live_notices():
         return jsonify({"code": 500, "message": "数据库连接失败"}), 500
     try:
         with conn.cursor() as cursor:
-            payload = _build_live_notices(cursor, int(user_id))
+            payload = _build_live_notices(
+                cursor,
+                int(user_id),
+                include_read_health=include_read_health,
+            )
             conn.commit()
             return jsonify({"code": 200, "message": "ok", "data": {"notices": payload}})
     except Exception as exc:
@@ -5306,6 +5345,8 @@ def dismiss_live_notice():
     data = request.get_json() or {}
     user_id = data.get("user_id")
     notification_id = data.get("notification_id")
+    alert_id = data.get("alert_id")
+    delete_health_notice = bool(data.get("delete_health_notice"))
     if not user_id:
         return jsonify({"code": 400, "message": "缺少用户编号"}), 400
     conn = get_db_connection()
@@ -5322,6 +5363,53 @@ def dismiss_live_notice():
                        WHERE notification_id = %s AND recipient_user_id = %s""",
                     (int(notification_id), int(user_id)),
                 )
+            if alert_id:
+                cursor.execute(
+                    """INSERT INTO health_notice_reads (user_id, alert_id, read_at)
+                       SELECT %s, a.alert_id, CURRENT_TIMESTAMP
+                       FROM alerts a
+                       WHERE a.alert_id = %s
+                         AND a.alert_type = 'health_warning'
+                         AND (
+                             EXISTS (
+                                 SELECT 1 FROM elders e
+                                 WHERE e.elder_id = a.elder_id AND e.user_id = %s
+                             )
+                             OR EXISTS (
+                                 SELECT 1 FROM user_elder_relation uer
+                                 WHERE uer.elder_id = a.elder_id AND uer.family_user_id = %s
+                             )
+                         )
+                         AND NOT EXISTS (
+                             SELECT 1 FROM health_notice_reads hnr
+                             WHERE hnr.user_id = %s AND hnr.alert_id = a.alert_id
+                         )""",
+                    (int(user_id), int(alert_id), int(user_id), int(user_id), int(user_id)),
+                )
+                if delete_health_notice:
+                    cursor.execute(
+                        """UPDATE health_notice_reads hnr
+                           SET deleted_at = COALESCE(hnr.deleted_at, CURRENT_TIMESTAMP)
+                           WHERE hnr.user_id = %s
+                             AND hnr.alert_id = %s
+                             AND EXISTS (
+                                 SELECT 1
+                                 FROM alerts a
+                                 WHERE a.alert_id = hnr.alert_id
+                                   AND a.alert_type = 'health_warning'
+                                   AND (
+                                       EXISTS (
+                                           SELECT 1 FROM elders e
+                                           WHERE e.elder_id = a.elder_id AND e.user_id = %s
+                                       )
+                                       OR EXISTS (
+                                           SELECT 1 FROM user_elder_relation uer
+                                           WHERE uer.elder_id = a.elder_id AND uer.family_user_id = %s
+                                       )
+                                   )
+                             )""",
+                        (int(user_id), int(alert_id), int(user_id), int(user_id)),
+                    )
             conn.commit()
             return jsonify({"code": 200, "message": "已关闭提醒"})
     except Exception as exc:

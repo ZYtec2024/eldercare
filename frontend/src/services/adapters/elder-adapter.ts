@@ -17,9 +17,31 @@ function pickRecordField(row: Record<string, unknown>, snake: string, camel: str
   return value === undefined || value === null || value === '' ? undefined : value
 }
 
+function normalizeTodayRecord(
+  row?: HealthRecordApiRow | Record<string, unknown> | null,
+): HealthTrendSnapshot['todayRecord'] {
+  if (!row) return null
+  const source = row as Record<string, unknown>
+  const numberValue = (snake: string, camel: string) => {
+    const value = pickRecordField(source, snake, camel)
+    return value === undefined ? undefined : Number(value)
+  }
+  return {
+    recordDate: String(pickRecordField(source, 'record_date', 'recordDate') ?? ''),
+    bloodPressureSys: numberValue('blood_pressure_sys', 'bloodPressureSys'),
+    bloodPressureDia: numberValue('blood_pressure_dia', 'bloodPressureDia'),
+    heartRate: numberValue('heart_rate', 'heartRate'),
+    bloodOxygen: numberValue('blood_oxygen', 'bloodOxygen'),
+    bloodSugar: numberValue('blood_sugar', 'bloodSugar'),
+    temperature: numberValue('temperature', 'temperature'),
+    weight: numberValue('weight', 'weight'),
+  }
+}
+
 function normalizeElderHealthTrend(
   elderId: number,
   records: Array<HealthRecordApiRow | Record<string, unknown>>,
+  todayRecord?: HealthRecordApiRow | Record<string, unknown> | null,
 ): HealthTrendSnapshot {
   const rows = records.map((item) => item as Record<string, unknown>)
   return {
@@ -48,6 +70,7 @@ function normalizeElderHealthTrend(
     annotationText: rows.length
       ? '近 7 天健康记录'
       : '暂无健康记录，请先完成健康打卡。',
+    todayRecord: normalizeTodayRecord(todayRecord),
   }
 }
 
@@ -121,6 +144,7 @@ export async function fetchElderHealthTrend(userId: number): Promise<HealthTrend
   const response = await http.get<ApiEnvelope<{
     elder_id?: number
     records?: HealthRecordApiRow[]
+    today_record?: HealthRecordApiRow | null
   } | HealthRecordApiRow[]>>('/elder/health/chart', {
     params: { user_id: userId },
   })
@@ -130,7 +154,7 @@ export async function fetchElderHealthTrend(userId: number): Promise<HealthTrend
   }
   const elderId = Number(payload?.elder_id ?? userId)
   const records = Array.isArray(payload?.records) ? payload.records : []
-  return normalizeElderHealthTrend(elderId, records)
+  return normalizeElderHealthTrend(elderId, records, payload?.today_record)
 }
 
 export async function triggerElderSos(userId = 201) {

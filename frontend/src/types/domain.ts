@@ -96,6 +96,16 @@ export interface HealthTrendSnapshot {
   weightSeries?: Array<number | null>
   abnormalFlag: boolean
   annotationText: string
+  todayRecord?: {
+    recordDate?: string
+    bloodPressureSys?: number
+    bloodPressureDia?: number
+    heartRate?: number
+    bloodOxygen?: number
+    bloodSugar?: number
+    temperature?: number
+    weight?: number
+  } | null
 }
 
 export interface ServiceRequestDraft {

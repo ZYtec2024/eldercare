@@ -179,10 +179,30 @@ def health_chart():
                 return jsonify({"code": 404, "message": "找不到老人档案，请确认已用老人角色完成注册"}), 404
             elder_id = int(elder["elder_id"])
             ordered = fetch_health_trend_rows(cursor, elder_id, limit_days=7)
+            cursor.execute(
+                """SELECT record_date, blood_pressure_sys, blood_pressure_dia,
+                          heart_rate, blood_oxygen, blood_sugar, temperature, weight
+                   FROM health_records
+                   WHERE elder_id = %s AND record_date = CURRENT_DATE
+                   ORDER BY record_id DESC
+                   LIMIT 1""",
+                (elder_id,),
+            )
+            today_record = cursor.fetchone()
+            if today_record:
+                today_record = dict(today_record)
+                record_date = today_record.get("record_date")
+                if isinstance(record_date, datetime.date):
+                    today_record["record_date"] = record_date.strftime("%Y-%m-%d")
             return jsonify({
                 "code": 200,
                 "message": "获取健康数据成功",
-                "data": {"elder_id": elder_id, "user_id": int(user_id), "records": ordered},
+                "data": {
+                    "elder_id": elder_id,
+                    "user_id": int(user_id),
+                    "records": ordered,
+                    "today_record": today_record,
+                },
             })
     finally:
         conn.close()

@@ -24,6 +24,7 @@ import {
   type ConversationThread,
 } from '@/services/adapters/conversation-adapter'
 import {
+  dismissLiveNotice,
   fetchLiveNotices,
   type LiveNotice,
 } from '@/services/adapters/live-notice-adapter'
@@ -124,7 +125,7 @@ export default function ConversationPage() {
       return
     }
     try {
-      const notices = await fetchLiveNotices(session.userId)
+      const notices = await fetchLiveNotices(session.userId, true)
       setHealthNotices(notices.filter((item) => item.notice_key.includes('health')))
     } catch {
       // System notifications are supplementary; a transient failure must not
@@ -195,15 +196,27 @@ export default function ConversationPage() {
   }
 
   const clearUnread = async () => {
-    if (!session || unreadCount <= 0) return
+    if (!session || totalUnreadCount <= 0) return
     setMarkingAllRead(true)
     try {
       message.success((await markAllConversationsRead(session.userId)).message || '已全部标为已读')
-      await loadConversations()
+      await Promise.all([loadConversations(), loadHealthNotices()])
     } catch (error: any) {
       message.error(error?.message || '清除未读失败')
     } finally {
       setMarkingAllRead(false)
+    }
+  }
+
+  const deleteHealthNotice = async (item: LiveNotice) => {
+    if (!session || !item.alert_id) return
+    setHealthNotices((current) => current.filter((notice) => notice.notice_key !== item.notice_key))
+    try {
+      await dismissLiveNotice(session.userId, null, item.alert_id, true)
+      message.success('健康提醒已删除')
+    } catch (error: any) {
+      message.error(error?.message || '删除健康提醒失败')
+      await loadHealthNotices()
     }
   }
 
@@ -218,7 +231,11 @@ export default function ConversationPage() {
     () => conversations.reduce((sum, item) => sum + Number(item.unread_count || 0), 0),
     [conversations],
   )
-  const totalUnreadCount = unreadCount + healthNotices.length
+  const unreadHealthCount = useMemo(
+    () => healthNotices.filter((item) => !item.is_read).length,
+    [healthNotices],
+  )
+  const totalUnreadCount = unreadCount + unreadHealthCount
 
   if (selected) {
     const title = thread?.title || selected.title || (selected.conversation_type === 'sos' ? '紧急求助' : selected.service_type || '服务沟通')
@@ -436,7 +453,7 @@ export default function ConversationPage() {
             size="small"
             icon={<CheckCircleOutlined />}
             loading={markingAllRead}
-            disabled={unreadCount <= 0}
+            disabled={totalUnreadCount <= 0}
             onClick={() => void clearUnread()}
           >
             一键已读
@@ -459,22 +476,47 @@ export default function ConversationPage() {
         <section className="border-b border-amber-100 bg-amber-50 px-4 py-3">
           <div className="space-y-2">
             {healthNotices.map((item) => (
-              <button
-                type="button"
+              <div
                 key={item.notice_key}
-                className="group flex w-full items-center gap-3 rounded-lg border border-amber-200/80 bg-amber-50 px-3.5 py-3 text-left transition-colors hover:bg-amber-100/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-amber-300"
-                onClick={() => navigate(session?.role === 'family' ? '/family/health' : '/elder/checkin')}
+                className="flex w-full items-center rounded-lg border !border-blue-200 !bg-amber-50 transition-colors hover:!bg-amber-100/70"
               >
-                <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" aria-hidden="true" />
-                <div className="min-w-0 flex-1">
-                  <div className="text-[14px] font-medium text-slate-900">{item.title}</div>
-                  <div className="mt-0.5 text-[13px] leading-5 text-slate-600">{item.body}</div>
-                  <div className="mt-1 text-[12px] text-slate-400">
-                    {noticeDateTime(item.created_at)} · 系统健康提醒
+                <button
+                  type="button"
+                  className="group flex min-w-0 flex-1 items-center gap-3 !border-0 !bg-transparent px-3.5 py-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-200"
+                  onClick={() => {
+                    setHealthNotices((current) => current.map((notice) => (
+                      notice.notice_key === item.notice_key ? { ...notice, is_read: true } : notice
+                    )))
+                    if (session && item.alert_id && !item.is_read) {
+                      void dismissLiveNotice(session.userId, null, item.alert_id).catch(() => {})
+                    }
+                    navigate(session?.role === 'family' ? '/family/health' : '/elder/checkin')
+                  }}
+                >
+                  <span
+                    className={`h-2 w-2 shrink-0 rounded-full ${item.is_read ? 'bg-slate-300' : 'bg-amber-500'}`}
+                    aria-hidden="true"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[14px] font-medium text-slate-900">{item.title}</div>
+                    <div className="mt-0.5 text-[13px] leading-5 text-slate-600">{item.body}</div>
+                    <div className="mt-1 text-[12px] text-slate-400">
+                      {noticeDateTime(item.created_at)} · 系统健康提醒{item.is_read ? ' · 已读' : ''}
+                    </div>
                   </div>
-                </div>
-                <RightOutlined className="shrink-0 text-[12px] text-slate-300 transition-colors group-hover:text-amber-500" />
-              </button>
+                  <RightOutlined className="shrink-0 text-[12px] text-slate-300 transition-colors group-hover:text-amber-500" />
+                </button>
+                <Button
+                  type="text"
+                  size="small"
+                  danger
+                  icon={<DeleteOutlined />}
+                  className="!mr-2 !bg-transparent hover:!bg-amber-200/60"
+                  onClick={() => void deleteHealthNotice(item)}
+                >
+                  删除
+                </Button>
+              </div>
             ))}
           </div>
         </section>

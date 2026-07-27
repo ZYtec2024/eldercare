@@ -28,6 +28,7 @@ DROP TABLE IF EXISTS volunteer_award_requests CASCADE;
 DROP TABLE IF EXISTS volunteer_hour_reviews CASCADE;
 DROP TABLE IF EXISTS volunteer_likes CASCADE;
 DROP TABLE IF EXISTS reviews CASCADE;
+DROP TABLE IF EXISTS health_notice_reads CASCADE;
 DROP TABLE IF EXISTS alerts CASCADE;
 DROP TABLE IF EXISTS health_records CASCADE;
 DROP TABLE IF EXISTS orders CASCADE;
@@ -157,6 +158,15 @@ CREATE TABLE alerts (
     emergency_incident_id INT DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (elder_id) REFERENCES elders(elder_id) ON DELETE CASCADE
+);
+
+-- 健康异常提醒按用户记录已读状态，避免一个人已读后影响其他家属。
+CREATE TABLE health_notice_reads (
+    user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    alert_id INT NOT NULL REFERENCES alerts(alert_id) ON DELETE CASCADE,
+    read_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL,
+    PRIMARY KEY (user_id, alert_id)
 );
 
 -- 9. 志愿者点赞表

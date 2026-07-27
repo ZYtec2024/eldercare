@@ -818,22 +818,26 @@ def get_family_alerts():
             # Health check-in warnings for bound elders (yellow in UI).
             cursor.execute(
                 """
-                SELECT a.alert_id, a.description, a.is_handled, a.created_at, e.name AS elder_name
+                SELECT a.alert_id, a.description, a.is_handled, a.created_at, e.name AS elder_name,
+                       hnr.read_at AS health_read_at
                 FROM alerts a
                 JOIN elders e ON e.elder_id = a.elder_id
                 JOIN user_elder_relation uer ON uer.elder_id = a.elder_id
+                LEFT JOIN health_notice_reads hnr
+                  ON hnr.alert_id = a.alert_id AND hnr.user_id = %s
                 WHERE uer.family_user_id = %s
                   AND a.alert_type = 'health_warning'
                 ORDER BY a.alert_id DESC
                 LIMIT 30
                 """,
-                (family_user_id,),
+                (family_user_id, family_user_id),
             )
             for item in cursor.fetchall():
                 created = item.get('created_at')
                 if isinstance(created, datetime.datetime):
                     created = format_datetime(created)
                 handled = bool(item.get('is_handled'))
+                read = handled or item.get('health_read_at') is not None
                 rows.append({
                     'notification_id': int(item['alert_id']),
                     'alert_id': int(item['alert_id']),
@@ -844,7 +848,7 @@ def get_family_alerts():
                     'status': 'resolved' if handled else 'reported',
                     'created_at': created,
                     'conversation_id': None,
-                    'unread': not handled,
+                    'unread': not read,
                 })
             rows.sort(key=lambda item: str(item.get('created_at') or ''), reverse=True)
             return jsonify({"code": 200, "message": "ok", "data": rows[:50]})
@@ -866,6 +870,20 @@ def ack_family_alert():
     try:
         with conn.cursor() as cursor:
             if category == 'health_warning':
+                cursor.execute(
+                    """INSERT INTO health_notice_reads (user_id, alert_id, read_at)
+                       SELECT %s, a.alert_id, CURRENT_TIMESTAMP
+                       FROM alerts a
+                       JOIN user_elder_relation uer ON uer.elder_id = a.elder_id
+                       WHERE a.alert_id = %s
+                         AND a.alert_type = 'health_warning'
+                         AND uer.family_user_id = %s
+                         AND NOT EXISTS (
+                             SELECT 1 FROM health_notice_reads hnr
+                             WHERE hnr.user_id = %s AND hnr.alert_id = a.alert_id
+                         )""",
+                    (int(family_user_id), int(notification_id), int(family_user_id), int(family_user_id)),
+                )
                 cursor.execute(
                     """UPDATE alerts a
                        SET is_handled = TRUE

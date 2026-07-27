@@ -12,9 +12,11 @@ export default function ElderCheckinPage() {
   const navigate = useNavigate()
   const { session } = useSession()
   const { message } = App.useApp()
+  const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const [trend, setTrend] = useState<HealthTrendSnapshot | null>(null)
   const [trendLoading, setTrendLoading] = useState(false)
+  const [hasTodayRecord, setHasTodayRecord] = useState(false)
 
   const loadTrend = async () => {
     if (!session?.userId) return
@@ -24,6 +26,21 @@ export default function ElderCheckinPage() {
       const snapshot = await fetchElderHealthTrend(session.userId)
       const hasPoints = snapshot.dateRange.some((d) => Boolean(String(d || '').trim()))
       setTrend(hasPoints ? snapshot : null)
+      if (snapshot.todayRecord) {
+        form.setFieldsValue({
+          bloodPressureSys: snapshot.todayRecord.bloodPressureSys,
+          bloodPressureDia: snapshot.todayRecord.bloodPressureDia,
+          heartRate: snapshot.todayRecord.heartRate,
+          bloodOxygen: snapshot.todayRecord.bloodOxygen,
+          bloodSugar: snapshot.todayRecord.bloodSugar,
+          temperature: snapshot.todayRecord.temperature,
+          weight: snapshot.todayRecord.weight,
+        })
+        setHasTodayRecord(true)
+      } else {
+        form.resetFields()
+        setHasTodayRecord(false)
+      }
     } catch (err: any) {
       message.error(err?.message || '健康趋势加载失败')
       setTrend(null)
@@ -34,6 +51,25 @@ export default function ElderCheckinPage() {
 
   useEffect(() => {
     void loadTrend()
+  }, [session?.userId])
+
+  useEffect(() => {
+    const shanghaiDate = () => new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date())
+    let activeDate = shanghaiDate()
+    const timer = window.setInterval(() => {
+      const currentDate = shanghaiDate()
+      if (currentDate === activeDate) return
+      activeDate = currentDate
+      form.resetFields()
+      setHasTodayRecord(false)
+      void loadTrend()
+    }, 60_000)
+    return () => window.clearInterval(timer)
   }, [session?.userId])
 
   const onFinish = async (values: any) => {
@@ -80,7 +116,12 @@ export default function ElderCheckinPage() {
       </div>
 
       <Card className="!rounded-2xl">
-        <Form layout="vertical" onFinish={onFinish} size="large">
+        {hasTodayRecord ? (
+          <div className="mb-4 rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-700">
+            已载入今天最近一次打卡数据，可直接修改后再次提交；明天将自动清空。
+          </div>
+        ) : null}
+        <Form form={form} layout="vertical" onFinish={onFinish} size="large">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6">
             {fields.map((f) => (
               <Form.Item key={f.name} name={f.name} label={f.label}>

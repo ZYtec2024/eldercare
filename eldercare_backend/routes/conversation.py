@@ -420,19 +420,58 @@ def mark_all_conversations_read():
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute('SELECT 1 FROM users WHERE user_id = %s', (user_id,))
-            if not cursor.fetchone():
+            cursor.execute('SELECT role FROM users WHERE user_id = %s', (user_id,))
+            account = cursor.fetchone()
+            if not account:
                 return jsonify({'code': 404, 'message': '用户不存在'}), 404
             cursor.execute(
                 'UPDATE conversation_members SET last_read_at = CURRENT_TIMESTAMP WHERE user_id = %s',
                 (int(user_id),),
             )
-            updated = cursor.rowcount
+            updated_conversations = cursor.rowcount
+            updated_health = 0
+            role = str(account.get('role') or '')
+            if role == 'elder':
+                cursor.execute(
+                    """INSERT INTO health_notice_reads (user_id, alert_id, read_at)
+                       SELECT %s, a.alert_id, CURRENT_TIMESTAMP
+                       FROM alerts a
+                       JOIN elders e ON e.elder_id = a.elder_id
+                       WHERE e.user_id = %s
+                         AND a.alert_type = 'health_warning'
+                         AND COALESCE(a.is_handled, FALSE) = FALSE
+                         AND NOT EXISTS (
+                             SELECT 1 FROM health_notice_reads hnr
+                             WHERE hnr.user_id = %s AND hnr.alert_id = a.alert_id
+                         )""",
+                    (int(user_id), int(user_id), int(user_id)),
+                )
+                updated_health = cursor.rowcount
+            elif role == 'family':
+                cursor.execute(
+                    """INSERT INTO health_notice_reads (user_id, alert_id, read_at)
+                       SELECT %s, a.alert_id, CURRENT_TIMESTAMP
+                       FROM alerts a
+                       JOIN user_elder_relation uer ON uer.elder_id = a.elder_id
+                       WHERE uer.family_user_id = %s
+                         AND a.alert_type = 'health_warning'
+                         AND COALESCE(a.is_handled, FALSE) = FALSE
+                         AND NOT EXISTS (
+                             SELECT 1 FROM health_notice_reads hnr
+                             WHERE hnr.user_id = %s AND hnr.alert_id = a.alert_id
+                         )""",
+                    (int(user_id), int(user_id), int(user_id)),
+                )
+                updated_health = cursor.rowcount
             conn.commit()
             return jsonify({
                 'code': 200,
-                'message': '会话消息已全部标为已读',
-                'data': {'updated': updated},
+                'message': '会话和健康提醒已全部标为已读',
+                'data': {
+                    'updated': updated_conversations + updated_health,
+                    'updated_conversations': updated_conversations,
+                    'updated_health': updated_health,
+                },
             })
     finally:
         conn.close()
