@@ -42,7 +42,7 @@
 
 ### 数据库
 - **openGauss / PostgreSQL 兼容模式**，Docker 运行时由 `db` 服务提供，后端默认连接 `omm` 库
-- 30 张核心表（含 `ai_service_settings` AI 配置表） + 2 个视图 + 1 个触发器
+- 33 张核心表（含 `ai_service_settings` AI 配置表、`companion_chat_history` 聊天历史表、`weekly_reports` 周报表） + 2 个视图 + 1 个触发器
 
 ---
 
@@ -225,13 +225,16 @@ pending ──> accepted ──> in_progress ──> completed
 - **AI 对话**：`POST /api/elder/companion/chat` → Groq `llama-3.1-8b-instant`，自动注入老人画像（年龄、住址、病史、**家属填写的性格简介**）
 - **朗读回复**：`POST /api/elder/companion/tts` → Microsoft Edge TTS（`zh-CN-XiaoxiaoNeural` 女声），无需 API Key、完全免费
 - **自动朗读开关**：老人可在界面上打开/关闭自动朗读
+- **聊天历史持久化**：对话自动保存到 `companion_chat_history` 表，支持清空、编辑已发消息、重新生成 AI 回复
 
 **AI 配置由总管理员在"智能陪聊配置"页面集中管理**（路径：`/admin/ai-settings`），可修改：
 - Groq API Key、对话模型、转写模型
+- 自定义模型（DeepSeek / 豆包 / GPT 等 OpenAI 兼容接口）
 - TTS 语音角色、语速、音量
 - 系统提示词（用于控制 AI 助手的语气和知识范围）
 
 配置保存在 `ai_service_settings` 表中，修改后立即生效，无需重启。
+> 出于安全考虑，GitHub 仓库中的初始 SQL 不含 API Key，首次启动后需由管理员在后台配置。
 
 ---
 
@@ -241,8 +244,10 @@ pending ──> accepted ──> in_progress ──> completed
 - **防刷赞**：数据库 `UNIQUE KEY` 约束，同一用户不可重复点赞
 - **字段自动转换**：后端 `after_request` 钩子自动将响应 JSON 的 snake_case 转为前端友好的 camelCase
 - **懒加载路由**：按角色拆分 bundle，减少首屏加载体积
-- **演示数据完备**：`init_demo_data.sql` 包含 72 个用户、35 条健康记录、14 个订单、12 条点赞等
+- **演示数据完备**：`init_demo_data.sql` 包含 72 个用户、37 位老人、35 条健康记录、14 个订单等
 - **老人性格简介**：家属绑定时可填写简介（选填，200 字内），志愿者接单时可见，便于个性化服务；老人本人不可见
+- **聊天历史持久化**：陪聊对话自动落库，切页或刷新不丢失，支持编辑已发消息和重新生成回复
+- **Docker 时区统一**：所有容器均配置 `TZ=Asia/Shanghai` (UTC+8)，确保时间戳与业务一致
 
 ---
 
@@ -270,6 +275,10 @@ Base URL: `http://localhost:5000/api`
 | AI | `POST /elder/companion/chat` | 智能陪聊对话（Groq LLM） |
 | AI | `POST /elder/companion/transcribe` | 语音转文字（Groq Whisper） |
 | AI | `POST /elder/companion/tts` | 文字转语音（Edge TTS，返回 MP3） |
+| AI | `GET /elder/companion/history` | 获取陪聊历史记录（最近60条） |
+| AI | `POST /elder/companion/history` | 保存单条陪聊消息 |
+| AI | `DELETE /elder/companion/history` | 清空该老人全部陪聊记录 |
+| AI | `DELETE /elder/companion/history/last` | 删除最后N条记录（编辑/重生成用） |
 
 > 完整 API 文档见 `eldercare_backend/jieko.md`。
 
