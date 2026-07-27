@@ -139,3 +139,18 @@ export async function synthesizeCompanionSpeech(text: string, userId?: number) {
 
   return new Blob([response.data], { type: contentType || 'audio/mpeg' })
 }
+
+export async function fetchCompanionHistory(userId: number): Promise<CompanionHistoryItem[]> {
+  const response = await http.get<ApiEnvelope<{ history: CompanionHistoryItem[] }>>('/elder/companion/history', {
+    params: { user_id: userId },
+  })
+  return response.data.data.history ?? []
+}
+
+export async function saveCompanionMessage(userId: number, role: 'user' | 'assistant', content: string) {
+  await http.post('/elder/companion/history', {
+    user_id: userId,
+    role,
+    content,
+  })
+}

@@ -66,6 +66,23 @@ def _ensure_ai_schema(cursor) -> None:
         )
         """
     )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS companion_chat_history (
+            message_id SERIAL PRIMARY KEY,
+            user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+            role VARCHAR(16) NOT NULL CHECK (role IN ('user', 'assistant')),
+            content TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_companion_chat_user
+        ON companion_chat_history(user_id, created_at)
+        """
+    )
 
 
 def _default_settings() -> dict[str, str]:
@@ -519,5 +536,62 @@ def elder_companion_tts():
         )
     except Exception as exc:
         return jsonify({"code": 502, "message": str(exc) if str(exc) else '语音合成服务暂时不可用'}), 502
+    finally:
+        conn.close()
+
+
+@ai_bp.route('/elder/companion/history', methods=['GET'])
+def companion_history():
+    """Load recent chat history for the elder."""
+    user_id = request.args.get('user_id')
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"code": 500, "message": "数据库连接失败"}), 500
+    try:
+        with conn.cursor() as cursor:
+            _, error = _require_elder(cursor, user_id)
+            if error:
+                return error
+            _ensure_ai_schema(cursor)
+            cursor.execute(
+                """
+                SELECT role, content FROM companion_chat_history
+                WHERE user_id = %s
+                ORDER BY created_at ASC
+                LIMIT 60
+                """,
+                (int(user_id),),
+            )
+            rows = cursor.fetchall()
+            history = [{"role": row['role'], "content": row['content']} for row in rows]
+        return jsonify({"code": 200, "message": "获取历史成功", "data": {"history": history}})
+    finally:
+        conn.close()
+
+
+@ai_bp.route('/elder/companion/history', methods=['POST'])
+def save_companion_message():
+    """Save a single chat message (user or assistant)."""
+    data = request.get_json(silent=True) or {}
+    user_id = data.get('user_id')
+    role = str(data.get('role') or '').strip()
+    content = str(data.get('content') or '').strip()
+    if role not in ('user', 'assistant') or not content:
+        return jsonify({"code": 400, "message": "参数无效"}), 400
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"code": 500, "message": "数据库连接失败"}), 500
+    try:
+        with conn.cursor() as cursor:
+            _, error = _require_elder(cursor, user_id)
+            if error:
+                return error
+            _ensure_ai_schema(cursor)
+            cursor.execute(
+                "INSERT INTO companion_chat_history (user_id, role, content) VALUES (%s, %s, %s)",
+                (int(user_id), role, content[:2000]),
+            )
+            conn.commit()
+        return jsonify({"code": 200, "message": "保存成功"})
     finally:
         conn.close()

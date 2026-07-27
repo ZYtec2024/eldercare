@@ -37,6 +37,7 @@ DROP TABLE IF EXISTS volunteers_profile CASCADE;
 DROP TABLE IF EXISTS elders CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 DROP TABLE IF EXISTS ai_service_settings CASCADE;
+DROP TABLE IF EXISTS companion_chat_history CASCADE;
 DROP TABLE IF EXISTS weekly_reports CASCADE;
 
 -- 1. 用户总表
@@ -213,6 +214,15 @@ CREATE TABLE ai_service_settings (
     config_value TEXT NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE companion_chat_history (
+    message_id SERIAL PRIMARY KEY,
+    user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    role VARCHAR(16) NOT NULL CHECK (role IN ('user', 'assistant')),
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_companion_chat_user ON companion_chat_history(user_id, created_at);
 
 CREATE TABLE weekly_reports (
     report_id SERIAL PRIMARY KEY,

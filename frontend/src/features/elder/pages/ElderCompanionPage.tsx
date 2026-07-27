@@ -15,6 +15,8 @@ import {
   sendCompanionChat,
   synthesizeCompanionSpeech,
   transcribeCompanionAudio,
+  fetchCompanionHistory,
+  saveCompanionMessage,
   type CompanionHistoryItem,
 } from '@/services/adapters/ai-adapter'
 
@@ -46,6 +48,23 @@ export default function ElderCompanionPage() {
     }
     streamRef.current?.getTracks().forEach((track) => track.stop())
   }, [])
+
+  useEffect(() => {
+    if (!session) return
+    fetchCompanionHistory(session.userId)
+      .then((history) => {
+        if (history.length > 0) {
+          const restored: CompanionMessage[] = history.map((item, index) => ({
+            id: index + 2,
+            role: item.role,
+            content: item.content,
+          }))
+          setMessages([{ id: 1, role: 'assistant', content: introMessage }, ...restored])
+          nextIdRef.current = restored.length + 2
+        }
+      })
+      .catch(() => {})
+  }, [session?.userId])
 
   const appendMessage = (role: CompanionMessage['role'], content: string) => {
     const nextMessage: CompanionMessage = {
@@ -98,6 +117,8 @@ export default function ElderCompanionPage() {
         message: trimmed,
         history: previousMessages,
       })
+      saveCompanionMessage(session.userId, 'user', trimmed).catch(() => {})
+      saveCompanionMessage(session.userId, 'assistant', reply.reply).catch(() => {})
       const assistant = appendMessage('assistant', reply.reply)
       if (autoSpeak) {
         void speakText(assistant.content)

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  BellOutlined,
   HomeOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
@@ -8,7 +7,7 @@ import {
   QuestionCircleOutlined,
   UserOutlined,
 } from '@ant-design/icons'
-import { App, Avatar, Badge, Breadcrumb, Button, Layout, Menu, Space, Tooltip, Typography } from 'antd'
+import { App, Avatar, Breadcrumb, Button, Layout, Menu, Space, Tooltip, Typography } from 'antd'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 
 import { useSession } from '@/features/auth/useSession'
@@ -232,15 +231,6 @@ export function AppShell() {
             </Typography.Text>
           </div>
           <Space size={4} className="flex-shrink-0">
-            <Tooltip title="通知">
-              <Badge count={0} size="small">
-                <Button
-                  type="text"
-                  icon={<BellOutlined className="!text-xl" />}
-                  className="!w-10 !h-10 flex items-center justify-center !text-slate-500 hover:!bg-slate-100"
-                />
-              </Badge>
-            </Tooltip>
             {!session.isRoot && (
               <Tooltip title="新手引导">
                 <Button
