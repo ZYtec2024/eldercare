@@ -7,11 +7,11 @@
 ## 角色与核心功能
 
 | 角色 | 核心功能 |
-|------|----------|
-| **老人** | 每日健康打卡、一键 SOS 求助、查看服务记录、评价志愿者 |
-| **家属** | 绑定长辈、健康趋势图表、发布公益服务需求、确认服务时长 |
-| **志愿者** | 任务大厅抢单、服务执行、个人成就、荣誉排行榜 |
-| **管理员** | 用户管理、志愿者审核、告警处理、时长审计、每周结算、数据看板 |
+|:----:|----------|
+| **老人** | 每日健康打卡、一键 SOS 求助、查看服务记录、评价志愿者、智能陪聊（语音转文字 + AI 对话 + 朗读回复） |
+| **家属** | 绑定长辈、填写老人性格简介、健康趋势图表、发布公益服务需求、确认服务时长 |
+| **志愿者** | 任务大厅抢单、查看老人简介、服务执行、个人成就、荣誉排行榜 |
+| **管理员** | 用户管理、志愿者审核、告警处理、时长审计、每周结算、数据看板、AI 陪聊配置（Groq + Edge TTS） |
 
 ---
 
@@ -24,6 +24,8 @@
 | Flask | 3.0 | Web 框架 |
 | Flask-CORS | 4.0 | 跨域支持 |
 | psycopg2 | 2.9 | PostgreSQL 数据库驱动 |
+| requests | 2.34 | HTTP 客户端（Groq API 调用） |
+| edge-tts | 7.2 | Microsoft Edge TTS 语音合成（免费，无需 API Key） |
 | Werkzeug | 3.0 | WSGI 工具链 |
 
 ### 前端
@@ -40,7 +42,7 @@
 
 ### 数据库
 - **openGauss / PostgreSQL 兼容模式**，Docker 运行时由 `db` 服务提供，后端默认连接 `omm` 库
-- 11 张核心表 + 2 个视图 + 1 个触发器
+- 30 张核心表（含 `ai_service_settings` AI 配置表） + 2 个视图 + 1 个触发器
 
 ---
 
@@ -65,7 +67,10 @@ eldercare/
 │       ├── family.py                 # 绑定/健康趋势/服务订单
 │       ├── volunteer.py              # 任务大厅/抢单/排行榜
 │       ├── admin.py                  # 用户管理/看板/结算
-│       └── public.py                 # 公开任务大厅
+│       ├── public.py                 # 公开任务大厅
+│       ├── conversation.py           # 服务沟通与 SOS 协同会话
+│       ├── dispatch.py               # 智能调度引擎（A* 路径/疲劳度/候选评分）
+│       └── ai.py                     # 智能陪聊（Groq 语音转写+对话 / Edge TTS 朗读）
 │
 └── frontend/                         # React + Vite 前端
     ├── Dockerfile                    # 前端容器镜像（多阶段构建）
@@ -208,6 +213,26 @@ pending ──> accepted ──> in_progress ──> completed
 
 管理员触发结算 → TOP3 志愿者自动获得荣誉奖章 → 全站 `weekly_hours` 清零。
 
+### 智能陪聊（AI Companion）
+
+老人端提供语音交互式智能陪聊，流程如下：
+
+```
+老人说话 → 浏览器录音(WebM) → Groq Whisper 转文字 → Groq LLM 生成回复 → Edge TTS 朗读 MP3
+```
+
+- **语音转文字**：浏览器 `MediaRecorder` 录音 → `POST /api/elder/companion/transcribe` → Groq `whisper-large-v3`
+- **AI 对话**：`POST /api/elder/companion/chat` → Groq `llama-3.1-8b-instant`，自动注入老人画像（年龄、住址、病史、**家属填写的性格简介**）
+- **朗读回复**：`POST /api/elder/companion/tts` → Microsoft Edge TTS（`zh-CN-XiaoxiaoNeural` 女声），无需 API Key、完全免费
+- **自动朗读开关**：老人可在界面上打开/关闭自动朗读
+
+**AI 配置由总管理员在"智能陪聊配置"页面集中管理**（路径：`/admin/ai-settings`），可修改：
+- Groq API Key、对话模型、转写模型
+- TTS 语音角色、语速、音量
+- 系统提示词（用于控制 AI 助手的语气和知识范围）
+
+配置保存在 `ai_service_settings` 表中，修改后立即生效，无需重启。
+
 ---
 
 ## 设计亮点
@@ -216,7 +241,8 @@ pending ──> accepted ──> in_progress ──> completed
 - **防刷赞**：数据库 `UNIQUE KEY` 约束，同一用户不可重复点赞
 - **字段自动转换**：后端 `after_request` 钩子自动将响应 JSON 的 snake_case 转为前端友好的 camelCase
 - **懒加载路由**：按角色拆分 bundle，减少首屏加载体积
-- **演示数据完备**：`init_demo_data.sql` 包含 16 个用户、35 条健康记录、14 个订单、12 条点赞等
+- **演示数据完备**：`init_demo_data.sql` 包含 72 个用户、35 条健康记录、14 个订单、12 条点赞等
+- **老人性格简介**：家属绑定时可填写简介（选填，200 字内），志愿者接单时可见，便于个性化服务；老人本人不可见
 
 ---
 
@@ -234,10 +260,16 @@ Base URL: `http://localhost:5000/api`
 | Elder | `POST /elder/sos` | SOS 求助 |
 | Family | `GET /family/elder-health-chart/:id` | 近7天健康趋势 |
 | Family | `POST /family/orders/publish` | 发布服务需求 |
+| Family | `PUT /family/elders/:id/bio` | 更新老人性格简介 |
 | Volunteer | `POST /volunteer/orders/grab` | 抢单 |
 | Volunteer | `GET /volunteer/leaderboard` | 荣誉排行榜 |
 | Admin | `GET /admin/dashboard/stats` | 大屏统计 |
 | Admin | `POST /admin/weekly-settlement` | 每周结算 |
+| AI | `GET /admin/ai-config` | 获取 AI 陪聊配置（总管理员） |
+| AI | `PUT /admin/ai-config` | 更新 AI 陪聊配置（总管理员） |
+| AI | `POST /elder/companion/chat` | 智能陪聊对话（Groq LLM） |
+| AI | `POST /elder/companion/transcribe` | 语音转文字（Groq Whisper） |
+| AI | `POST /elder/companion/tts` | 文字转语音（Edge TTS，返回 MP3） |
 
 > 完整 API 文档见 `eldercare_backend/jieko.md`。
 

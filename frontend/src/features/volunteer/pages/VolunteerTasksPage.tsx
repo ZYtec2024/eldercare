@@ -73,6 +73,7 @@ export default function VolunteerTasksPage() {
                     <div className="text-sm text-gray-600 space-y-1">
                       <div><TeamOutlined className="mr-1" />服务对象：{task.elder_name}</div>
                       <div><EnvironmentOutlined className="mr-1" />{task.address || '服务地址待确认'}</div>
+                      {task.personality_bio && <div className="text-xs text-gray-500">📝 {task.personality_bio}</div>}
                       {task.route?.eta_minutes != null && <div><ClockCircleOutlined className="mr-1" />预计到达：约 {task.route.eta_minutes} 分钟</div>}
                     </div>
                   </div>

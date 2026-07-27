@@ -5,7 +5,7 @@ Covers:
 2) unopened standing district is rejected
 3) volunteer match/grab uses current point region
 4) location update does not rewrite in-flight service snapshot
-5) map focus key changes when coordinates change
+5) map focus key ignores polling coordinate changes so manual zoom is preserved
 
 Run:
   python eldercare_backend/tests/test_location_region_sync.py
@@ -48,29 +48,40 @@ def _fail(name: str, detail: str) -> None:
 
 
 def test_region_helpers() -> None:
-    from routes.dispatch import REGION_CATALOG, _region_for_point, _volunteer_current_region
+    from routes.dispatch import (
+        REGION_CATALOG,
+        _region_for_point,
+        _sos_service_region,
+        _volunteer_current_region,
+    )
 
     assert _region_for_point(*BAOSHAN_POINT) == BAOSHAN, _region_for_point(*BAOSHAN_POINT)
     assert _volunteer_current_region(*PUDONG_POINT) == PUDONG
     assert _region_for_point(*UNOPENED_POINT) is None
     assert BAOSHAN in REGION_CATALOG and PUDONG in REGION_CATALOG
+    assert _sos_service_region(
+        {"region_adcode": PUDONG},
+        {"region_adcode": BAOSHAN},
+    ) == PUDONG
+    assert _sos_service_region(
+        {"region_adcode": BAOSHAN},
+        {"region_adcode": BAOSHAN},
+        {"region_adcode": PUDONG},
+    ) == PUDONG
     _ok("region helpers: baoshan/pudong/unopened")
+    _ok("SOS desk follows incident/order service region before signup region")
 
 
-def test_map_focus_key_includes_coords() -> None:
-    """Mirror DispatchMap focusKey composition (coords must affect the key)."""
+def test_map_focus_key_ignores_polling_coords() -> None:
+    """Mirror DispatchMap focusKey composition (IDs change it, GPS polling does not)."""
 
     def focus_key(elders: list[dict[str, Any]], volunteers: list[dict[str, Any]], orders: list[dict[str, Any]]) -> str:
         return "|".join(
             [
                 "310113",
-                *[f"e{item['elder_id']}:{item['lng']:.5f},{item['lat']:.5f}" for item in elders],
-                *[f"v{item['volunteer_id']}:{item['lng']:.5f},{item['lat']:.5f}" for item in volunteers],
-                *[
-                    f"o{item['order_id']}:{float(item['lng']):.5f},{float(item['lat']):.5f}"
-                    for item in orders
-                    if item.get("lng") is not None and item.get("lat") is not None
-                ],
+                *[f"e{item['elder_id']}" for item in elders],
+                *[f"v{item['volunteer_id']}" for item in volunteers],
+                *[f"o{item['order_id']}" for item in orders],
             ]
         )
 
@@ -84,9 +95,16 @@ def test_map_focus_key_includes_coords() -> None:
         [],
         [],
     )
-    if before == after:
-        _fail("map focus key", "coordinate change did not alter focusKey")
-    _ok("map focus key changes when live coords change")
+    if before != after:
+        _fail("map focus key", "GPS polling changed focusKey and would reset manual zoom")
+    changed_cast = focus_key(
+        [{"elder_id": 2, "lng": PUDONG_POINT[0], "lat": PUDONG_POINT[1]}],
+        [],
+        [],
+    )
+    if changed_cast == before:
+        _fail("map focus key", "visible elder change did not alter focusKey")
+    _ok("map focus key preserves manual zoom during live GPS polling")
 
 
 def test_create_order_live_sets_region_and_snapshot(app_client: Any) -> None:
@@ -445,7 +463,7 @@ def main() -> int:
 
     print("[unit]")
     test_region_helpers()
-    test_map_focus_key_includes_coords()
+    test_map_focus_key_ignores_polling_coords()
 
     print("\n[flask + db]")
     # Ensure DB env points at docker-published openGauss when run from host.

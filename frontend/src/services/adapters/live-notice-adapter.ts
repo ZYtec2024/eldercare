@@ -7,6 +7,7 @@ export type LiveNotice = {
   level: 'error' | 'warning' | 'success' | 'info' | string
   action_path?: string | null
   notification_id?: number | null
+  created_at?: string | null
 }
 
 export async function fetchLiveNotices(userId: number) {

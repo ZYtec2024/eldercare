@@ -8,6 +8,7 @@ import {
   HomeOutlined,
   LinkOutlined,
   MedicineBoxOutlined,
+  MessageOutlined,
   TeamOutlined,
   TrophyOutlined,
   UserOutlined,
@@ -18,6 +19,7 @@ import {
   AdminAlertsPage,
   AdminDispatchBoardPage,
   AdminRegionsPage,
+  AdminAiSettingsPage,
   AdminDashboardPage,
   AdminHomePage,
   AdminHourReviewsPage,
@@ -30,9 +32,12 @@ import {
   ElderDispatchPage,
   ElderDetailPage,
   ElderServicesPage,
+  ElderCompanionPage,
   ElderSosPage,
+  ElderWeeklyReportPage,
   FamilyAlertsPage,
   FamilyDashboardPage,
+  FamilyHealthPage,
   FamilyLiveTrackingPage,
   FamilyOrdersPage,
   NewServiceRequestPage,
@@ -65,6 +70,7 @@ const iconMap: Record<string, ReactNode> = {
   emergency: <ExclamationCircleOutlined />,
   user: <UserOutlined />,
   connect: <LinkOutlined />,
+  chat: <MessageOutlined />,
   service: <MedicineBoxOutlined />,
   honor: <TrophyOutlined />,
 }
@@ -197,6 +203,18 @@ export const appRoutes: AppRouteDefinition[] = [
     element: ElderDetailPage,
   },
   {
+    key: 'family-health',
+    path: '/family/health',
+    roles: ['family'],
+    title: '长辈健康',
+    description: '查看绑定长辈的每日健康指标和近 7 天变化趋势',
+    showInNavigation: true,
+    navigationOrder: 15,
+    isHomeAction: true,
+    navigation: { label: '长辈健康', description: '', iconKey: 'heart' },
+    element: FamilyHealthPage,
+  },
+  {
     key: 'family-bind-elder',
     path: '/family/bind-elder',
     roles: ['family'],
@@ -314,6 +332,29 @@ export const appRoutes: AppRouteDefinition[] = [
     isHomeAction: true,
     navigation: { label: '请人帮忙', description: '', iconKey: 'service' },
     element: ElderDispatchPage,
+  },
+  {
+    key: 'elder-companion',
+    path: '/elder/companion',
+    roles: ['elder'],
+    title: '智能陪聊',
+    description: '智能助手陪您聊天，语音转文字、朗读回复',
+    showInNavigation: true,
+    navigationOrder: 27,
+    navigation: { label: '智能陪聊', description: '', iconKey: 'chat' },
+    element: ElderCompanionPage,
+  },
+  {
+    key: 'elder-weekly-report',
+    path: '/elder/weekly-report',
+    roles: ['elder'],
+    title: '智能周报',
+    description: 'AI 根据近7天健康和服务数据自动生成周报',
+    showInNavigation: true,
+    navigationOrder: 25,
+    isHomeAction: true,
+    navigation: { label: '智能周报', description: '', iconKey: 'document' },
+    element: ElderWeeklyReportPage,
   },
   // ── Volunteer ──
   {
@@ -440,6 +481,17 @@ export const appRoutes: AppRouteDefinition[] = [
     element: AdminRegionsPage,
   },
   {
+    key: 'admin-ai-settings',
+    path: '/admin/ai-settings',
+    roles: ['admin'],
+    title: 'AI模型配置',
+    description: 'Groq、自定义模型与 Edge TTS 参数配置',
+    showInNavigation: true,
+    navigationOrder: 17,
+    navigation: { label: 'AI模型配置', description: '', iconKey: 'chat' },
+    element: AdminAiSettingsPage,
+  },
+  {
     key: 'admin-dashboard',
     path: '/admin/dashboard',
     roles: ['admin'],
@@ -504,6 +556,9 @@ export function getNavigationForRole(role: Role, options?: { isRoot?: boolean })
       }
       // District admins must not manage official region polygons.
       if (route.key === 'admin-regions' && !options?.isRoot) {
+        return false
+      }
+      if (route.key === 'admin-ai-settings' && !options?.isRoot) {
         return false
       }
       if (route.key === 'admin-donations' && !options?.isRoot) {

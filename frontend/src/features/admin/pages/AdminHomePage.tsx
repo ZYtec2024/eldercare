@@ -5,10 +5,17 @@ import {
   TeamOutlined,
   AlertOutlined,
   TrophyOutlined,
+  RobotOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 
-const features = [
+import { useSession } from '@/features/auth/useSession'
+import {
+  orderHomeFeatures,
+  type HomeFeatureItem,
+} from '@/features/shared/order-home-features'
+
+const features: HomeFeatureItem[] = [
   {
     icon: <DeploymentUnitOutlined className="text-5xl text-cyan-600" />,
     title: '实时调度指挥台',
@@ -45,6 +52,13 @@ const features = [
     color: 'border-amber-200 bg-amber-50/50',
   },
   {
+    icon: <RobotOutlined className="text-5xl text-sky-600" />,
+    title: '智能陪聊配置',
+    desc: '管理老人端智能陪聊的 Groq 大模型、语音转写 API 和 Edge TTS 朗读参数。',
+    path: '/admin/ai-settings',
+    color: 'border-sky-200 bg-sky-50/50',
+  },
+  {
     icon: <DashboardOutlined className="text-5xl text-blue-600" />,
     title: '任务大厅',
     desc: '查看平台公开的公益服务任务，了解各项任务的发布、接单和完成情况，便于统一管理。',
@@ -55,6 +69,10 @@ const features = [
 
 export default function AdminHomePage() {
   const navigate = useNavigate()
+  const { session } = useSession()
+  const orderedFeatures = orderHomeFeatures('admin', features, {
+    isRoot: Boolean(session?.isRoot),
+  })
 
   return (
     <div className="space-y-8">
@@ -70,7 +88,7 @@ export default function AdminHomePage() {
 
       {/* Feature Cards */}
       <div className="space-y-5">
-        {features.map((f) => (
+        {orderedFeatures.map((f) => (
           <Card
             key={f.path}
             hoverable

@@ -35,6 +35,8 @@ DROP TABLE IF EXISTS user_elder_relation CASCADE;
 DROP TABLE IF EXISTS volunteers_profile CASCADE;
 DROP TABLE IF EXISTS elders CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
+DROP TABLE IF EXISTS ai_service_settings CASCADE;
+DROP TABLE IF EXISTS weekly_reports CASCADE;
 
 -- 1. 用户总表
 CREATE TABLE users (
@@ -60,6 +62,9 @@ CREATE TABLE elders (
     region_adcode VARCHAR(12) NOT NULL DEFAULT '310113',
     medical_history TEXT,
     alert_sys_threshold INT DEFAULT 140,
+    personality_bio TEXT DEFAULT NULL,
+    bio_updated_by INT DEFAULT NULL,
+    bio_updated_at TIMESTAMP DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE SET NULL
 );
@@ -191,6 +196,23 @@ CREATE TABLE volunteer_award_requests (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     reviewed_at TIMESTAMP NULL,
     FOREIGN KEY (volunteer_id) REFERENCES users(user_id) ON DELETE CASCADE
+);
+
+CREATE TABLE ai_service_settings (
+    config_key VARCHAR(64) PRIMARY KEY,
+    config_value TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE weekly_reports (
+    report_id SERIAL PRIMARY KEY,
+    elder_id INT NOT NULL,
+    week_start DATE NOT NULL,
+    week_end DATE NOT NULL,
+    template_name VARCHAR(100),
+    content TEXT NOT NULL,
+    generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (elder_id) REFERENCES elders(elder_id) ON DELETE CASCADE
 );
 
 -- 12. 爱心捐赠沙盘记录（仅模拟支付，不接入真实资金渠道）
@@ -534,6 +556,11 @@ INSERT INTO elders (user_id, name, age, gender, address, medical_history, alert_
 (9,  '陈阿姨', 70, '女', '上海市宝山区国权北路828弄139号1号楼104室', '轻度认知障碍，偶有健忘，身体状况总体良好', 140),
 (10, '刘爷爷', 85, '男', '上海市宝山区盘古路528号1号楼201室', '帕金森病早期，行动不便需要助行器，听力下降', 140);
 
+-- 示例：为前 3 位老人补充性格简介（由家属填写）
+UPDATE elders SET personality_bio = '性格开朗健谈，喜欢下象棋和聊时事新闻。听力略有下降，说话需要稍微大声一些。', bio_updated_by = 2, bio_updated_at = NOW() WHERE elder_id = 1;
+UPDATE elders SET personality_bio = '文静内向，喜欢听戏曲和养花。对陌生人比较警惕，需要耐心沟通建立信任。', bio_updated_by = 2, bio_updated_at = NOW() WHERE elder_id = 2;
+UPDATE elders SET personality_bio = '幽默风趣，曾是工程师，喜欢聊科技话题。行动不便但思维清晰，自尊心强。', bio_updated_by = 3, bio_updated_at = NOW() WHERE elder_id = 3;
+
 -- ====== 宝山区调度沙盘老人档案 (elder_id=6~25) ======
 INSERT INTO elders
     (user_id, name, age, gender, address, medical_history, alert_sys_threshold, region_adcode)
@@ -625,6 +652,15 @@ INSERT INTO user_elder_relation (family_user_id, elder_id, relation_type) VALUES
 -- ====== 核心运行时状态（保证只执行 init SQL 也能直接使用） ======
 INSERT INTO dispatch_system_state (state_key, state_value) VALUES
 ('traffic_version', '1');
+
+INSERT INTO ai_service_settings (config_key, config_value) VALUES
+('groq_api_key', ''),
+('groq_chat_model', 'llama-3.1-8b-instant'),
+('groq_transcribe_model', 'whisper-large-v3'),
+('tts_voice', 'zh-CN-XiaoxiaoNeural'),
+('tts_rate', '+0%'),
+('tts_volume', '+0%'),
+('companion_system_prompt', '你是智慧伴老平台的智能陪聊助手。请用亲切、耐心、简洁的中文与老人交流。优先关心情绪、健康和安全，不要输出夸张或不现实的承诺。如果涉及紧急医疗风险，请明确提醒老人立即联系家属、志愿者或拨打当地急救电话。');
 
 INSERT INTO administrative_regions
     (adcode, name, city_name, province_name, region_level, bounds_json, polygon_json, center_lng, center_lat)
@@ -995,7 +1031,7 @@ FOR EACH ROW EXECUTE PROCEDURE fn_health_alert();
 
 -- ============================================================
 -- 数据概览：
--- 16个用户 | 5位老人 | 6条绑定关系 | 35条健康记录
+-- 72个用户 | 37位老人 | 18条绑定关系 | 35条健康记录
 -- 14个订单 | 6条评价 | 5条报警 | 12条点赞
 -- 6条时长审核 | 3条荣誉申请
 -- 2个视图 | 1个触发器

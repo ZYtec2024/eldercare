@@ -13,6 +13,8 @@ def bind_elder():
     family_user_id = data.get('family_user_id')
     elder_phone = data.get('elder_phone') 
     relation = data.get('relation_type', '亲属')
+    # 性格简介（选填，截断到 200 字）
+    personality_bio = (data.get('personality_bio') or '').strip()[:200]
 
     if not all([family_user_id, elder_phone]):
         return jsonify({"code": 400, "message": "参数不完整"}), 400
@@ -52,6 +54,15 @@ def bind_elder():
                 VALUES (%s, %s, %s)
             """
             cursor.execute(sql_bind, (family_user_id, elder_id, relation))
+
+            # 3. 如果家属填写了性格简介，写入 elders 表
+            if personality_bio:
+                cursor.execute("""
+                    UPDATE elders
+                    SET personality_bio = %s, bio_updated_by = %s, bio_updated_at = NOW()
+                    WHERE elder_id = %s
+                """, (personality_bio, family_user_id, elder_id))
+
             conn.commit()
 
             return jsonify({"code": 200, "message": "绑定长辈成功！"})
@@ -168,6 +179,41 @@ def unbind_elder():
     finally:
         conn.close()
 
+# 1.3 更新老人性格简介（家属可编辑）
+@family_bp.route('/elders/<int:elder_id>/bio', methods=['PUT'])
+def update_elder_bio(elder_id: int):
+    data = request.get_json() or {}
+    family_user_id = data.get('family_user_id')
+    # 截断到 200 字
+    personality_bio = (data.get('personality_bio') or '').strip()[:200]
+
+    if not family_user_id:
+        return jsonify({"code": 400, "message": "缺少家属ID"}), 400
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 鉴权：确认该家属确实绑定了该老人
+            cursor.execute(
+                "SELECT 1 FROM user_elder_relation WHERE family_user_id = %s AND elder_id = %s",
+                (family_user_id, elder_id),
+            )
+            if not cursor.fetchone():
+                return jsonify({"code": 403, "message": "您未绑定该长辈，无权修改简介"}), 403
+
+            cursor.execute("""
+                UPDATE elders
+                SET personality_bio = %s, bio_updated_by = %s, bio_updated_at = NOW()
+                WHERE elder_id = %s
+            """, (personality_bio, family_user_id, elder_id))
+            conn.commit()
+            return jsonify({"code": 200, "message": "老人简介已更新"})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"code": 500, "message": f"更新简介失败: {str(e)}"}), 500
+    finally:
+        conn.close()
+
 # 2. 获取已绑定的长辈列表 (复杂 JOIN 查询)
 @family_bp.route('/elders', methods=['GET'])
 def get_bound_elders():
@@ -182,6 +228,7 @@ def get_bound_elders():
             sql = """
                 SELECT
                     e.elder_id, e.name, e.age, e.gender, e.address, e.medical_history,
+                    e.personality_bio, e.bio_updated_by, e.bio_updated_at,
                     uer.relation_type,
                     ea.full_address AS default_address,
                     ea.lng AS default_lng,

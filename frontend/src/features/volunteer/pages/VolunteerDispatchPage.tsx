@@ -557,6 +557,9 @@ export default function VolunteerDispatchPage() {
                     <b>老人说明：</b>{task.notes}
                   </div>
                 ) : null}
+                {task.personality_bio ? (
+                  <div className="text-xs text-gray-500">📝 {task.personality_bio}</div>
+                ) : null}
                 <div className="rounded-xl bg-slate-50 p-2 text-sm">
                   <EnvironmentOutlined className="mr-1" />
                   服务点：{task.address || '老人固定住址'}
@@ -592,6 +595,9 @@ export default function VolunteerDispatchPage() {
                   <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
                     <b>老人说明：</b>{task.notes}
                   </div>
+                ) : null}
+                {task.personality_bio ? (
+                  <div className="text-xs text-gray-500">📝 {task.personality_bio}</div>
                 ) : null}
                 <div className="rounded-xl bg-slate-50 p-2 text-sm"><EnvironmentOutlined className="mr-1" />服务点：{task.address || '老人固定住址'} · 接单后解锁精确坐标</div>
                 <div className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800"><SafetyCertificateOutlined className="mr-2" />技能验证：{task.required_skill_labels.join('、')} <b>已精准匹配</b></div>

@@ -19,7 +19,9 @@ from routes.volunteer import volunteer_bp
 from routes.admin import admin_bp
 from routes.public import public_bp
 from routes.conversation import conversation_bp
+from routes.ai import ai_bp
 from routes.dispatch import dispatch_bp, ensure_dispatch_schema, run_dispatch_clock_tick
+from routes.report import report_bp
 from db import get_db_connection
 
 app = Flask(__name__)
@@ -35,7 +37,9 @@ app.register_blueprint(admin_bp, url_prefix='/api/admin')
 app.register_blueprint(public_bp, url_prefix='/api/public')
 app.register_blueprint(profile_bp, url_prefix='/api/profile')
 app.register_blueprint(conversation_bp, url_prefix='/api/conversations')
+app.register_blueprint(ai_bp, url_prefix='/api')
 app.register_blueprint(dispatch_bp, url_prefix='/api/dispatch')
+app.register_blueprint(report_bp, url_prefix='/api/elder')
 
 
 def init_db():
@@ -64,6 +68,28 @@ def init_db():
                     conn.rollback()
             else:
                 print("✓ address列已存在，数据库初始化完成")
+
+            # 检查elders表是否有personality_bio列
+            cursor.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name='elders' AND column_name='personality_bio'
+            """)
+            if not cursor.fetchone():
+                print("📝 检测到elders表缺少personality_bio列，正在添加...")
+                try:
+                    cursor.execute("""
+                        ALTER TABLE elders
+                        ADD COLUMN personality_bio TEXT DEFAULT NULL,
+                        ADD COLUMN bio_updated_by INT DEFAULT NULL,
+                        ADD COLUMN bio_updated_at TIMESTAMP DEFAULT NULL
+                    """)
+                    conn.commit()
+                    print("✓ personality_bio列已成功添加到elders表")
+                except Exception as e:
+                    print(f"⚠️ 添加personality_bio列时出错（可能已存在）: {e}")
+                    conn.rollback()
+            else:
+                print("✓ personality_bio列已存在")
 
             cursor.execute(
                 """
@@ -95,6 +121,15 @@ def init_db():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     reviewed_at TIMESTAMP NULL,
                     FOREIGN KEY (volunteer_id) REFERENCES users(user_id) ON DELETE CASCADE
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_service_settings (
+                    config_key VARCHAR(64) PRIMARY KEY,
+                    config_value TEXT NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )

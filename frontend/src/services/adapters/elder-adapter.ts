@@ -220,3 +220,51 @@ export async function submitServiceReview(payload: {
   })
   return response.data
 }
+
+export type WeeklyReportEligibility = {
+  eligible: boolean
+  daysWithData: number
+  weekStart: string
+  weekEnd: string
+}
+
+export async function fetchWeeklyReportEligibility(userId: number) {
+  const response = await http.get<ApiEnvelope<WeeklyReportEligibility>>(
+    '/elder/weekly-report/eligibility',
+    { params: { user_id: userId } },
+  )
+  return response.data
+}
+
+export type WeeklyReport = {
+  reportId: number
+  content: string
+  weekStart: string
+  weekEnd: string
+  templateName: string
+  generatedAt: string
+}
+
+export async function generateWeeklyReport(userId: number) {
+  const response = await http.post<ApiEnvelope<WeeklyReport>>(
+    '/elder/weekly-report',
+    { user_id: userId },
+  )
+  return response.data
+}
+
+export async function fetchWeeklyReportHistory(userId: number) {
+  const response = await http.get<ApiEnvelope<{ items: WeeklyReport[]; total: number }>>(
+    '/elder/weekly-report/history',
+    { params: { user_id: userId } },
+  )
+  return response.data
+}
+
+export async function deleteWeeklyReport(reportId: number, userId: number) {
+  const response = await http.delete<ApiEnvelope<null>>(
+    `/elder/weekly-report/${reportId}`,
+    { params: { user_id: userId } },
+  )
+  return response.data
+}

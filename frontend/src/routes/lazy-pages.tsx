@@ -9,6 +9,7 @@ export const ProfilePage = lazy(() => import('@/features/profile/pages/ProfilePa
 export const ConversationPage = lazy(() => import('@/features/conversation/pages/ConversationPage'))
 
 export const FamilyDashboardPage = lazy(() => import('@/features/family/pages/FamilyDashboardPage'))
+export const FamilyHealthPage = lazy(() => import('@/features/family/pages/FamilyHealthPage'))
 export const BindElderPage = lazy(() => import('@/features/family/pages/BindElderPage'))
 export const ElderDetailPage = lazy(() => import('@/features/family/pages/ElderDetailPage'))
 export const NewServiceRequestPage = lazy(() => import('@/features/family/pages/NewServiceRequestPage'))
@@ -21,6 +22,8 @@ export const ElderCheckinPage = lazy(() => import('@/features/elder/pages/ElderC
 export const ElderServicesPage = lazy(() => import('@/features/elder/pages/ElderServicesPage'))
 export const ElderSosPage = lazy(() => import('@/features/elder/pages/ElderSosPage'))
 export const ElderDispatchPage = lazy(() => import('@/features/elder/pages/ElderDispatchPage'))
+export const ElderCompanionPage = lazy(() => import('@/features/elder/pages/ElderCompanionPage'))
+export const ElderWeeklyReportPage = lazy(() => import('@/features/elder/pages/ElderWeeklyReportPage'))
 
 export const VolunteerTasksPage = lazy(() => import('@/features/volunteer/pages/VolunteerTasksPage'))
 export const VolunteerTaskDetailPage = lazy(() => import('@/features/volunteer/pages/VolunteerTaskDetailPage'))
@@ -37,6 +40,7 @@ export const AdminAlertsPage = lazy(() => import('@/features/admin/pages/AdminAl
 export const AdminHomePage = lazy(() => import('@/features/admin/pages/AdminHomePage'))
 export const AdminDispatchBoardPage = lazy(() => import('@/features/admin/pages/AdminDispatchBoardPage'))
 export const AdminRegionsPage = lazy(() => import('@/features/admin/pages/AdminRegionsPage'))
+export const AdminAiSettingsPage = lazy(() => import('@/features/admin/pages/AdminAiSettingsPage'))
 
 export const HealthKnowledgePage = lazy(() => import('@/features/home/pages/HealthKnowledgePage'))
 

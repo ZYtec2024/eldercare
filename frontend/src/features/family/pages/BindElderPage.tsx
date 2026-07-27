@@ -54,7 +54,7 @@ export default function BindElderPage() {
 
   useEffect(loadElders, [session])
 
-  const onFinish = async (values: { elderPhone: string; relationType: string }) => {
+  const onFinish = async (values: { elderPhone: string; relationType: string; personalityBio?: string }) => {
     if (!session) return
     setLoading(true)
     try {
@@ -62,6 +62,7 @@ export default function BindElderPage() {
         familyUserId: session.userId,
         elderPhone: values.elderPhone,
         relationType: values.relationType,
+        personalityBio: values.personalityBio,
       })
       message.success('绑定成功！')
       loadElders()
@@ -137,6 +138,14 @@ export default function BindElderPage() {
             </Form.Item>
             <Form.Item name="relationType" label="关系" rules={[{ required: true, message: '请选择关系' }]}>
               <Select placeholder="请选择" options={relationOptions} />
+            </Form.Item>
+            <Form.Item name="personalityBio" label="老人性格简介（选填，200字内）">
+              <Input.TextArea
+                rows={3}
+                maxLength={200}
+                showCount
+                placeholder="简单介绍老人的性格、喜好、习惯等，便于志愿者提供更贴心的服务"
+              />
             </Form.Item>
             <div className="flex gap-3">
               <Button type="primary" htmlType="submit" loading={loading}>确认绑定</Button>

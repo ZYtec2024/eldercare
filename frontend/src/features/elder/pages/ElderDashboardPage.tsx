@@ -6,14 +6,20 @@ import {
   MedicineBoxOutlined,
   AlertOutlined,
   MessageOutlined,
+  SoundOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 
 import { useSession } from '@/features/auth/useSession'
+import {
+  orderHomeFeatures,
+  type HomeFeatureItem,
+} from '@/features/shared/order-home-features'
 import { fetchPendingServices } from '@/services/adapters/elder-adapter'
 import type { PendingService } from '@/types/domain'
 
-const features = [
+const features: HomeFeatureItem[] = [
   {
     icon: <HeartOutlined className="text-5xl text-blue-600" />,
     title: '健康打卡',
@@ -42,12 +48,27 @@ const features = [
     path: '/conversations',
     color: 'border-emerald-200 bg-emerald-50/50',
   },
+  {
+    icon: <SoundOutlined className="text-5xl text-teal-600" />,
+    title: '智能陪聊',
+    desc: '按一下录音键就能和助手聊天，还可以把回复读给您听。',
+    path: '/elder/companion',
+    color: 'border-teal-200 bg-teal-50/50',
+  },
+  {
+    icon: <FileTextOutlined className="text-5xl text-violet-600" />,
+    title: '智能周报',
+    desc: 'AI 自动帮您总结近7天的健康变化和服务情况。',
+    path: '/elder/weekly-report',
+    color: 'border-violet-200 bg-violet-50/50',
+  },
 ]
 
 export default function ElderDashboardPage() {
   const navigate = useNavigate()
   const { session } = useSession()
   const [proxyOrders, setProxyOrders] = useState<PendingService[]>([])
+  const orderedFeatures = orderHomeFeatures('elder', features)
 
   useEffect(() => {
     if (!session) return
@@ -105,7 +126,7 @@ export default function ElderDashboardPage() {
       ) : null}
 
       <div className="space-y-4">
-        {features.map((f) => (
+        {orderedFeatures.map((f) => (
           <Card
             key={f.path}
             hoverable

@@ -186,14 +186,34 @@
 {
   "family_user_id": 2,
   "elder_phone": "13800000000",
-  "relation_type": "父子"
+  "relation_type": "父子",
+  "personality_bio": "性格开朗，喜欢下棋和聊天，听力略差需大声说话（选填，200字内）"
 }
 ```
+
+> `personality_bio` 选填，绑定时可同时写入老人性格简介，志愿者接单时可见。
 
 ### 6.2 获取绑定老人列表
 - 方法：`GET`
 - 路径：`/family/elders`
 - Query：`family_user_id`（必填）
+- 返回字段包含 `personality_bio`、`bio_updated_by`、`bio_updated_at`
+
+### 6.2.1 更新老人性格简介
+- 方法：`PUT`
+- 路径：`/family/elders/<elder_id>/bio`
+- Body：
+
+```json
+{
+  "family_user_id": 2,
+  "personality_bio": "性格开朗，喜欢下棋和聊天，听力略差需大声说话"
+}
+```
+
+- 鉴权：仅绑定了该老人的家属可修改，未绑定返回 `403`
+- 截断：超过 200 字自动截断
+- 简介对所有绑定该老人的家属共享，志愿者接单时可见
 
 ### 6.3 获取老人健康趋势（图表）
 - 方法：`GET`

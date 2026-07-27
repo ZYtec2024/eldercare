@@ -9,8 +9,12 @@ import {
 import { useNavigate } from 'react-router-dom'
 
 import { useSession } from '@/features/auth/useSession'
+import {
+  orderHomeFeatures,
+  type HomeFeatureItem,
+} from '@/features/shared/order-home-features'
 
-const features = [
+const features: HomeFeatureItem[] = [
   {
     icon: <DashboardOutlined className="text-5xl text-violet-600" />,
     title: '实时守护',
@@ -22,7 +26,7 @@ const features = [
     icon: <EyeOutlined className="text-5xl text-blue-600" />,
     title: '查看长辈健康',
     desc: '实时查看已绑定长辈的健康打卡数据、健康趋势图表和风险等级，及时了解长辈的身体状况变化。',
-    path: '/family/dashboard',
+    path: '/family/health',
     color: 'border-blue-200 bg-blue-50/50',
   },
   {
@@ -58,6 +62,7 @@ const features = [
 export default function FamilyDashboardPage() {
   const navigate = useNavigate()
   const { session } = useSession()
+  const orderedFeatures = orderHomeFeatures('family', features)
 
   return (
     <div className="space-y-8">
@@ -73,7 +78,7 @@ export default function FamilyDashboardPage() {
 
       {/* Feature Cards */}
       <div className="space-y-5">
-        {features.map((f) => (
+        {orderedFeatures.map((f) => (
           <Card
             key={f.path}
             hoverable
