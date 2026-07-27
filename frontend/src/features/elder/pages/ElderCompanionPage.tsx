@@ -39,6 +39,7 @@ export default function ElderCompanionPage() {
   const nextIdRef = useRef(2)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const currentUrlRef = useRef<string | null>(null)
+  const historyLoadedRef = useRef<number | null>(null)
 
   const canRecord = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
 
@@ -51,6 +52,10 @@ export default function ElderCompanionPage() {
 
   useEffect(() => {
     if (!session) return
+    if (historyLoadedRef.current === session.userId) return
+    historyLoadedRef.current = session.userId
+    setMessages([{ id: 1, role: 'assistant', content: introMessage }])
+    nextIdRef.current = 2
     fetchCompanionHistory(session.userId)
       .then((history) => {
         if (history.length > 0) {
@@ -117,8 +122,10 @@ export default function ElderCompanionPage() {
         message: trimmed,
         history: previousMessages,
       })
-      saveCompanionMessage(session.userId, 'user', trimmed).catch(() => {})
-      saveCompanionMessage(session.userId, 'assistant', reply.reply).catch(() => {})
+      await Promise.all([
+        saveCompanionMessage(session.userId, 'user', trimmed),
+        saveCompanionMessage(session.userId, 'assistant', reply.reply),
+      ])
       const assistant = appendMessage('assistant', reply.reply)
       if (autoSpeak) {
         void speakText(assistant.content)
