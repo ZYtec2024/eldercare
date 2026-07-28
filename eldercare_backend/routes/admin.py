@@ -1,7 +1,7 @@
 # routes/admin.py
 from flask import Blueprint, request, jsonify
 from db import get_db_connection
-from utils import format_datetime, format_wall_datetime, split_awards_text, merge_awards_text, get_pagination_params, shanghai_now
+from utils import format_datetime, format_wall_datetime, split_awards_text, merge_awards_text, get_pagination_params, beijing_now
 import datetime
 
 admin_bp = Blueprint('admin', __name__)
@@ -816,7 +816,7 @@ def weekly_settlement():
             awarded_count = 0
             if top_volunteers:
                 # 动态生成本周的荣誉称号字符串
-                today_str = shanghai_now().strftime('%Y年%m月%d日')
+                today_str = beijing_now().strftime('%Y年%m月%d日')
                 award_title = f"【{today_str}结算】社区服务之星★"
 
                 # 第二步：给 TOP 3 颁奖。

@@ -231,6 +231,7 @@ CREATE TABLE weekly_reports (
     week_end DATE NOT NULL,
     template_name VARCHAR(100),
     content TEXT NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'saved',
     generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (elder_id) REFERENCES elders(elder_id) ON DELETE CASCADE
 );

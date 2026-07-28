@@ -250,6 +250,7 @@ export type WeeklyReportEligibility = {
   daysWithData: number
   weekStart: string
   weekEnd: string
+  draft?: WeeklyReport | null
 }
 
 export async function fetchWeeklyReportEligibility(userId: number) {
@@ -289,6 +290,13 @@ export async function deleteWeeklyReport(reportId: number, userId: number) {
   const response = await http.delete<ApiEnvelope<null>>(
     `/elder/weekly-report/${reportId}`,
     { params: { user_id: userId } },
+  )
+  return response.data
+}
+
+export async function saveWeeklyReport(reportId: number) {
+  const response = await http.put<ApiEnvelope<null>>(
+    `/elder/weekly-report/${reportId}/save`,
   )
   return response.data
 }

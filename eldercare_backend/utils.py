@@ -58,11 +58,11 @@ def get_validated_data(data, required_fields):
 
 
 # ========== 日期格式化 ==========
-_SHANGHAI = datetime.timezone(datetime.timedelta(hours=8))
+_BEIJING = datetime.timezone(datetime.timedelta(hours=8))
 
 
-def _as_shanghai(value):
-    """Treat naive system timestamps as UTC, then convert to Asia/Shanghai.
+def _as_beijing(value):
+    """Treat naive system timestamps as UTC, then convert to Asia/Beijing (UTC+8).
 
     openGauss in this stack runs with TimeZone=UTC, so CURRENT_TIMESTAMP written
     into TIMESTAMP columns stores UTC wall-clock digits without tzinfo. User-entered
@@ -74,13 +74,13 @@ def _as_shanghai(value):
         aware = value.replace(tzinfo=datetime.timezone.utc)
     else:
         aware = value.astimezone(datetime.timezone.utc)
-    return aware.astimezone(_SHANGHAI)
+    return aware.astimezone(_BEIJING)
 
 
 def format_datetime(value, fmt='%Y-%m-%d %H:%M:%S'):
     """Format system timestamps (created_at / alerts) for the UI in Asia/Shanghai."""
     if isinstance(value, datetime.datetime):
-        return _as_shanghai(value).strftime(fmt)
+        return _as_beijing(value).strftime(fmt)
     return value
 
 
@@ -88,7 +88,7 @@ def format_wall_datetime(value, fmt='%Y-%m-%d %H:%M:%S'):
     """Format a business wall-clock timestamp without applying UTC offset."""
     if isinstance(value, datetime.datetime):
         if value.tzinfo is not None:
-            value = value.astimezone(_SHANGHAI).replace(tzinfo=None)
+            value = value.astimezone(_BEIJING).replace(tzinfo=None)
         return value.strftime(fmt)
     return value
 
@@ -96,15 +96,15 @@ def format_wall_datetime(value, fmt='%Y-%m-%d %H:%M:%S'):
 def format_date(value):
     """格式化日期"""
     if isinstance(value, datetime.datetime):
-        return _as_shanghai(value).strftime('%Y-%m-%d')
+        return _as_beijing(value).strftime('%Y-%m-%d')
     if isinstance(value, datetime.date):
         return value.strftime('%Y-%m-%d')
     return value
 
 
-def shanghai_now():
+def beijing_now():
     """Current wall-clock in Asia/Shanghai (tz-aware)."""
-    return datetime.datetime.now(datetime.timezone.utc).astimezone(_SHANGHAI)
+    return datetime.datetime.now(datetime.timezone.utc).astimezone(_BEIJING)
 
 
 # ========== 文本处理 ==========

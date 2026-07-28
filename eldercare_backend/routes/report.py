@@ -3,6 +3,7 @@ from collections import Counter
 
 from flask import Blueprint, jsonify, request
 from db import get_db_connection
+from utils import format_datetime, beijing_now
 from skills.weekly_report import load_random_template
 
 report_bp = Blueprint('report', __name__)
@@ -18,9 +19,20 @@ def _ensure_weekly_reports_schema(cursor):
             week_end DATE NOT NULL,
             template_name VARCHAR(100),
             content TEXT NOT NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'saved',
             generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (elder_id) REFERENCES elders(elder_id) ON DELETE CASCADE
         )
+        """
+    )
+    cursor.execute(
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='weekly_reports' AND column_name='status') THEN
+                ALTER TABLE weekly_reports ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'saved';
+            END IF;
+        END $$;
         """
     )
 
@@ -345,6 +357,31 @@ def check_weekly_report_eligibility():
             elder_id = int(elder['elder_id'])
             days_count = _check_eligibility(cursor, elder_id)
             monday, sunday = _week_bounds()
+
+            draft = None
+            cursor.execute(
+                """
+                SELECT report_id, week_start, week_end, template_name, content, generated_at
+                FROM weekly_reports
+                WHERE elder_id = %s AND status = 'draft'
+                ORDER BY generated_at DESC LIMIT 1
+                """,
+                (elder_id,),
+            )
+            draft_row = cursor.fetchone()
+            if draft_row:
+                dws = draft_row['week_start']
+                dwe = draft_row['week_end']
+                dga = draft_row['generated_at']
+                draft = {
+                    'reportId': int(draft_row['report_id']),
+                    'weekStart': dws.strftime('%Y-%m-%d') if isinstance(dws, datetime.date) else str(dws),
+                    'weekEnd': dwe.strftime('%Y-%m-%d') if isinstance(dwe, datetime.date) else str(dwe),
+                    'templateName': str(draft_row.get('template_name') or ''),
+                    'content': str(draft_row.get('content') or ''),
+                    'generatedAt': format_datetime(dga) if isinstance(dga, datetime.datetime) else str(dga),
+                }
+
             return jsonify({
                 'code': 200,
                 'message': '查询成功',
@@ -353,6 +390,7 @@ def check_weekly_report_eligibility():
                     'daysWithData': days_count,
                     'weekStart': monday.strftime('%Y-%m-%d'),
                     'weekEnd': sunday.strftime('%Y-%m-%d'),
+                    'draft': draft,
                 },
             })
     finally:
@@ -434,8 +472,8 @@ def generate_weekly_report():
             _trim_reports(cursor, elder_id, max_count=10)
             cursor.execute(
                 """
-                INSERT INTO weekly_reports (elder_id, week_start, week_end, template_name, content)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO weekly_reports (elder_id, week_start, week_end, template_name, content, status)
+                VALUES (%s, %s, %s, %s, %s, 'draft')
                 RETURNING report_id
                 """,
                 (elder_id, monday, sunday, template_name, report_content),
@@ -452,7 +490,7 @@ def generate_weekly_report():
                     'weekStart': monday.strftime('%Y-%m-%d'),
                     'weekEnd': sunday.strftime('%Y-%m-%d'),
                     'templateName': template_name,
-                    'generatedAt': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'generatedAt': shanghai_now().strftime('%Y-%m-%d %H:%M:%S'),
                 },
             })
     except Exception as exc:
@@ -484,7 +522,7 @@ def get_weekly_report_history():
                 SELECT report_id, week_start, week_end, template_name,
                        content, generated_at
                 FROM weekly_reports
-                WHERE elder_id = %s
+                WHERE elder_id = %s AND status = 'saved'
                 ORDER BY generated_at DESC
                 LIMIT 10
                 """,
@@ -505,7 +543,7 @@ def get_weekly_report_history():
                     'weekEnd': str(week_end) if week_end else '',
                     'templateName': str(row.get('template_name') or ''),
                     'content': str(row.get('content') or ''),
-                    'generatedAt': generated_at.strftime('%Y-%m-%d %H:%M:%S') if isinstance(generated_at, datetime.datetime) else str(generated_at),
+                    'generatedAt': format_datetime(generated_at) if isinstance(generated_at, datetime.datetime) else str(generated_at),
                 })
             return jsonify({
                 'code': 200,
@@ -515,6 +553,26 @@ def get_weekly_report_history():
                     'total': len(items),
                 },
             })
+    finally:
+        conn.close()
+
+
+@report_bp.route('/weekly-report/<int:report_id>/save', methods=['PUT'])
+def save_weekly_report(report_id):
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'code': 500, 'message': '数据库连接失败'}), 500
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE weekly_reports SET status = 'saved' WHERE report_id = %s",
+                (report_id,),
+            )
+            conn.commit()
+            return jsonify({'code': 200, 'message': '已保存'})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({'code': 500, 'message': f'保存失败: {exc}'}), 500
     finally:
         conn.close()
 

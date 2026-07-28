@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Button, Card, Collapse, Empty, Popconfirm, Spin, Tag, Typography } from 'antd'
 import {
   FileTextOutlined,
@@ -7,6 +7,7 @@ import {
   CheckCircleOutlined,
   ExclamationCircleOutlined,
   DeleteOutlined,
+  SaveOutlined,
 } from '@ant-design/icons'
 
 import { useSession } from '@/features/auth/useSession'
@@ -15,6 +16,7 @@ import {
   fetchWeeklyReportEligibility,
   fetchWeeklyReportHistory,
   deleteWeeklyReport,
+  saveWeeklyReport,
 } from '@/services/adapters/elder-adapter'
 import type { WeeklyReport, WeeklyReportEligibility } from '@/services/adapters/elder-adapter'
 
@@ -71,12 +73,49 @@ export default function ElderWeeklyReportPage() {
 
   const [history, setHistory] = useState<WeeklyReport[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const currentReportRef = useRef<WeeklyReport | null>(null)
+  const generatingRef = useRef(false)
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    currentReportRef.current = currentReport
+  }, [currentReport])
+
+  useEffect(() => {
+    generatingRef.current = generating
+  }, [generating])
+
+  useEffect(() => {
+    return () => {
+      if (currentReportRef.current && !saved) {
+        const id = currentReportRef.current.reportId
+        if (id) {
+          navigator.sendBeacon(`/api/elder/weekly-report/${id}/save`, '{}')
+        }
+      }
+    }
+  }, [saved])
 
   const loadEligibility = useCallback(() => {
     if (!userId) return
     setEligibilityLoading(true)
     fetchWeeklyReportEligibility(userId)
-      .then((res) => setEligibility(res.data))
+      .then((res) => {
+        setEligibility(res.data)
+        if (res.data.draft) {
+          setCurrentReport(res.data.draft)
+          setSaved(false)
+          setGenerating(false)
+          sessionStorage.removeItem('weeklyReportGenerating')
+          if (pollTimerRef.current) {
+            clearInterval(pollTimerRef.current)
+            pollTimerRef.current = null
+          }
+        } else if (sessionStorage.getItem('weeklyReportGenerating') === '1') {
+          setGenerating(true)
+        }
+      })
       .catch(() => setEligibility(null))
       .finally(() => setEligibilityLoading(false))
   }, [userId])
@@ -93,12 +132,27 @@ export default function ElderWeeklyReportPage() {
   useEffect(() => {
     loadEligibility()
     loadHistory()
+
+    if (sessionStorage.getItem('weeklyReportGenerating') === '1') {
+      setGenerating(true)
+      pollTimerRef.current = setInterval(() => {
+        loadEligibility()
+      }, 3000)
+    }
+
+    return () => {
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current)
+      }
+    }
   }, [loadEligibility, loadHistory])
 
   const handleGenerate = async () => {
     if (!userId || generating) return
     setError(null)
     setGenerating(true)
+    setSaved(false)
+    sessionStorage.setItem('weeklyReportGenerating', '1')
     try {
       const res = await generateWeeklyReport(userId)
       setCurrentReport(res.data)
@@ -108,6 +162,7 @@ export default function ElderWeeklyReportPage() {
       setError(err?.message ?? '生成失败，请稍后重试')
     } finally {
       setGenerating(false)
+      sessionStorage.removeItem('weeklyReportGenerating')
     }
   }
 
@@ -115,6 +170,8 @@ export default function ElderWeeklyReportPage() {
     if (!userId || !currentReport || generating) return
     setError(null)
     setGenerating(true)
+    setSaved(false)
+    sessionStorage.setItem('weeklyReportGenerating', '1')
     try {
       if (currentReport.reportId) {
         await deleteWeeklyReport(currentReport.reportId, userId)
@@ -127,6 +184,19 @@ export default function ElderWeeklyReportPage() {
       setError(err?.message ?? '重新生成失败，请稍后重试')
     } finally {
       setGenerating(false)
+      sessionStorage.removeItem('weeklyReportGenerating')
+    }
+  }
+
+  const handleSave = async () => {
+    if (!currentReport?.reportId || saved) return
+    try {
+      await saveWeeklyReport(currentReport.reportId)
+      setSaved(true)
+      setCurrentReport(null)
+      loadHistory()
+    } catch (err: any) {
+      setError(err?.message ?? '保存失败')
     }
   }
 
@@ -174,12 +244,32 @@ export default function ElderWeeklyReportPage() {
       )}
 
       <Card className="!rounded-2xl">
-        {eligibilityLoading ? (
+        {eligibilityLoading && !generating ? (
           <div className="text-center py-8">
             <Spin size="large" />
             <Typography.Paragraph className="!mt-4 !text-gray-500">
               正在检查健康数据...
             </Typography.Paragraph>
+          </div>
+        ) : generating ? (
+          <div className="text-center py-6">
+            <Spin size="large" className="mb-4" />
+            <Typography.Title level={3} className="!mb-2">
+              周报生成中，请耐心等待
+            </Typography.Title>
+            <Typography.Paragraph className="!text-gray-500 !mb-6">
+              AI 正在分析您的健康数据和服务记录...
+            </Typography.Paragraph>
+            <Button
+              type="primary"
+              size="large"
+              icon={<FileTextOutlined />}
+              loading
+              disabled
+              className="!h-12 !px-8 !text-lg !font-semibold !rounded-xl"
+            >
+              正在生成...
+            </Button>
           </div>
         ) : eligible ? (
           <div className="text-center py-6">
@@ -235,6 +325,17 @@ export default function ElderWeeklyReportPage() {
               <span className="text-lg">本次周报</span>
               <div className="flex items-center gap-3">
                 <Tag color="purple">{currentReport.templateName}</Tag>
+                {!saved && (
+                  <Button
+                    icon={<SaveOutlined />}
+                    onClick={handleSave}
+                    type="primary"
+                    ghost
+                    size="small"
+                  >
+                    保存到历史
+                  </Button>
+                )}
                 <Button
                   icon={<ReloadOutlined />}
                   onClick={handleRegenerate}
