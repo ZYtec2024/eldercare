@@ -1,3 +1,6 @@
+-- ⚠️ 此文件已过期 (V4.0 旧版 schema)
+-- 当前完整建表 + 演示数据请使用 init_demo_data.sql
+-- 此文件仅作为历史参考保留
 -- 智慧伴老平台 V4.0 openGauss版
 
 CREATE TABLE users (
