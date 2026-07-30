@@ -12,6 +12,7 @@ import { useSession } from '@/features/auth/useSession'
 import { cancelElderDispatchOrder, completeElderDispatchOrder, createDispatchOrder, fetchDispatchTracking, redispatchDispatchOrder, requestAdminForDispatchOrder } from '@/services/adapters/dispatch-adapter'
 import { resolveBrowserLocation, type ResolvedLiveLocation } from '@/services/adapters/profile-adapter'
 import { captureBrowserLocation, formatAccuracyHint, type BrowserGeoFix } from '@/utils/browser-geolocation'
+import { proxyActorName, proxyOrderAlertTitle, proxyOrderTag } from '@/features/elder/proxy-order-labels'
 
 const stateLabel: Record<string, string> = {
   matching: '正在找人', waiting_response: '等待志愿者答应', accepted: '志愿者正在赶来', serving: '志愿者正在帮忙',
@@ -253,9 +254,9 @@ export default function ElderDispatchPage() {
       <Alert
         showIcon
         type="warning"
-        message="家属已为您代下服务单"
+        message={proxyOrderAlertTitle(proxyOrders.map((order) => order.proxy_creator_role))}
         description={proxyOrders.slice(0, 3).map((order) => (
-          `${order.proxy_family_name || '家属'} · ${order.service_type} · ${order.address || '已选地址'}`
+          `${proxyActorName(order.proxy_creator_name, order.proxy_creator_role)} · ${order.service_type} · ${order.address || '已选地址'}`
         )).join('；') + '。可在下方查看进度，也可取消。'}
       />
     ) : null}
@@ -362,13 +363,13 @@ export default function ElderDispatchPage() {
           <Card
             key={order.order_id}
             className="!rounded-2xl"
-            title={<Space><Tag color={order.urgency === 'sos' ? 'red' : 'blue'}>{order.urgency === 'sos' ? '紧急' : '普通'}</Tag>{order.proxy_created_by ? <Tag color="gold">家属代下</Tag> : null}<span>{order.service_type}</span></Space>}
+            title={<Space><Tag color={order.urgency === 'sos' ? 'red' : 'blue'}>{order.urgency === 'sos' ? '紧急' : '普通'}</Tag>{order.proxy_created_by ? <Tag color="gold">{proxyOrderTag(order.proxy_creator_role)}</Tag> : null}<span>{order.service_type}</span></Space>}
             extra={<Tag color={order.status === 'accepted' || order.status === 'in_progress' ? 'green' : 'orange'}>{stateLabel[order.dispatch_state] || order.dispatch_state}</Tag>}
           >
             <div className="space-y-2 text-base text-slate-600">
               {order.proxy_created_by ? (
                 <div className="rounded-xl bg-amber-50 p-3 text-amber-900">
-                  {order.proxy_family_name || '家属'}已为您代下此单
+                  {proxyActorName(order.proxy_creator_name, order.proxy_creator_role)}已为您代下此单
                 </div>
               ) : null}
               <div>地点：{order.address || '家里地址'}</div>

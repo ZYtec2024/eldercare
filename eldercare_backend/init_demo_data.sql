@@ -474,100 +474,100 @@ CREATE TABLE volunteer_return_routes (
 --   区域管理员：admin_pudong、admin_chaoyang / Admin@2026
 --   其余宝山、浦东、朝阳演示家属、老人、志愿者：对应 username / pass123
 -- 全部 72 个初始账户均在本文件中声明；后端种子函数只为旧数据卷补缺。
--- 密码字段目前沿用项目现有的明文演示机制，生产部署前应改为安全哈希。
+-- 初始化文件仅保存带随机盐的 scrypt 哈希；注释中的密码仅用于本地演示登录。
 
 -- ====== 总管理员 (user_id=1；登录账号 admin / admin123) ======
 INSERT INTO users (username, password_hash, role, real_name, phone, email) VALUES
-('admin', 'admin123', 'admin', '系统管理员', '13000000001', 'admin@eldercare.com');
+('admin', 'scrypt:32768:8:1$KcjCrYz0VJMVyYAd$0cd68d91411ce30ebd3b4952d54e970b4407ee2041d59ae87c40ac11388bf48c70e024f8ebffec862f524d1964fe953e050f354a3710183dc17ab057c85e0a17', 'admin', '系统管理员', '13000000001', 'admin@eldercare.com');
 
 -- ====== 家属 (user_id=2~5) ======
 INSERT INTO users (username, password_hash, role, real_name, phone, email) VALUES
-('zhangsan', 'pass123', 'family', '张三', '13800138001', 'zhangsan@qq.com'),
-('lisi_family', 'pass123', 'family', '李思', '13800138002', 'lisi@qq.com'),
-('wangwu_family', 'pass123', 'family', '王五', '13800138003', 'wangwu@163.com'),
-('zhaoliu_family', 'pass123', 'family', '赵六', '13800138004', 'zhaoliu@gmail.com');
+('zhangsan', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'family', '张三', '13800138001', 'zhangsan@qq.com'),
+('lisi_family', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'family', '李思', '13800138002', 'lisi@qq.com'),
+('wangwu_family', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'family', '王五', '13800138003', 'wangwu@163.com'),
+('zhaoliu_family', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'family', '赵六', '13800138004', 'zhaoliu@gmail.com');
 
 -- ====== 老人 (user_id=6~10) ======
 INSERT INTO users (username, password_hash, role, real_name, phone, email) VALUES
-('elder_zhang', 'pass123', 'elder', '张大爷', '13900001001', 'zhangdaye@qq.com'),
-('elder_li', 'pass123', 'elder', '李奶奶', '13900001002', 'linainai@qq.com'),
-('elder_wang', 'pass123', 'elder', '王伯伯', '13900001003', 'wangbobo@qq.com'),
-('elder_chen', 'pass123', 'elder', '陈阿姨', '13900001004', 'chenayi@qq.com'),
-('elder_liu', 'pass123', 'elder', '刘爷爷', '13900001005', 'liuyeye@qq.com');
+('elder_zhang', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '张大爷', '13900001001', 'zhangdaye@qq.com'),
+('elder_li', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '李奶奶', '13900001002', 'linainai@qq.com'),
+('elder_wang', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '王伯伯', '13900001003', 'wangbobo@qq.com'),
+('elder_chen', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '陈阿姨', '13900001004', 'chenayi@qq.com'),
+('elder_liu', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '刘爷爷', '13900001005', 'liuyeye@qq.com');
 
 -- ====== 志愿者 (user_id=11~16) ======
 INSERT INTO users (username, password_hash, role, real_name, phone, email) VALUES
-('vol_wangjiaming', 'pass123', 'volunteer', '王佳明', '15000001001', 'wjm@volunteer.org'),
-('vol_lizhiqiang', 'pass123', 'volunteer', '李志强', '15000001002', 'lzq@volunteer.org'),
-('vol_chenxiaoyu', 'pass123', 'volunteer', '陈小宇', '15000001003', 'cxy@volunteer.org'),
-('vol_zhoumin', 'pass123', 'volunteer', '周敏', '15000001004', 'zm@volunteer.org'),
-('vol_sunhao', 'pass123', 'volunteer', '孙浩', '15000001005', 'sh@volunteer.org'),
-('vol_huangxin', 'pass123', 'volunteer', '黄鑫', '15000001006', 'hx@volunteer.org');
+('vol_wangjiaming', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'volunteer', '王佳明', '15000001001', 'wjm@volunteer.org'),
+('vol_lizhiqiang', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'volunteer', '李志强', '15000001002', 'lzq@volunteer.org'),
+('vol_chenxiaoyu', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'volunteer', '陈小宇', '15000001003', 'cxy@volunteer.org'),
+('vol_zhoumin', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'volunteer', '周敏', '15000001004', 'zm@volunteer.org'),
+('vol_sunhao', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'volunteer', '孙浩', '15000001005', 'sh@volunteer.org'),
+('vol_huangxin', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'volunteer', '黄鑫', '15000001006', 'hx@volunteer.org');
 
 -- ====== 宝山区调度沙盘补充账户 (user_id=17~38) ======
 INSERT INTO users (username, password_hash, role, real_name, phone, email) VALUES
-('sim_vol_07', 'pass123', 'volunteer', '调度志愿者07', '13990000107', 'sim_vol_07@dispatch.demo'),
-('sim_vol_08', 'pass123', 'volunteer', '调度志愿者08', '13990000108', 'sim_vol_08@dispatch.demo'),
-('sim_elder_06', 'pass123', 'elder', '宝山长者06', '13990000306', 'sim_elder_06@dispatch.demo'),
-('sim_elder_07', 'pass123', 'elder', '宝山长者07', '13990000307', 'sim_elder_07@dispatch.demo'),
-('sim_elder_08', 'pass123', 'elder', '宝山长者08', '13990000308', 'sim_elder_08@dispatch.demo'),
-('sim_elder_09', 'pass123', 'elder', '宝山长者09', '13990000309', 'sim_elder_09@dispatch.demo'),
-('sim_elder_10', 'pass123', 'elder', '宝山长者10', '13990000310', 'sim_elder_10@dispatch.demo'),
-('sim_elder_11', 'pass123', 'elder', '宝山长者11', '13990000311', 'sim_elder_11@dispatch.demo'),
-('sim_elder_12', 'pass123', 'elder', '宝山长者12', '13990000312', 'sim_elder_12@dispatch.demo'),
-('sim_elder_13', 'pass123', 'elder', '宝山长者13', '13990000313', 'sim_elder_13@dispatch.demo'),
-('sim_elder_14', 'pass123', 'elder', '宝山长者14', '13990000314', 'sim_elder_14@dispatch.demo'),
-('sim_elder_15', 'pass123', 'elder', '宝山长者15', '13990000315', 'sim_elder_15@dispatch.demo'),
-('sim_elder_16', 'pass123', 'elder', '宝山长者16', '13990000316', 'sim_elder_16@dispatch.demo'),
-('sim_elder_17', 'pass123', 'elder', '宝山长者17', '13990000317', 'sim_elder_17@dispatch.demo'),
-('sim_elder_18', 'pass123', 'elder', '宝山长者18', '13990000318', 'sim_elder_18@dispatch.demo'),
-('sim_elder_19', 'pass123', 'elder', '宝山长者19', '13990000319', 'sim_elder_19@dispatch.demo'),
-('sim_elder_20', 'pass123', 'elder', '宝山长者20', '13990000320', 'sim_elder_20@dispatch.demo'),
-('sim_elder_21', 'pass123', 'elder', '宝山长者21', '13990000321', 'sim_elder_21@dispatch.demo'),
-('sim_elder_22', 'pass123', 'elder', '宝山长者22', '13990000322', 'sim_elder_22@dispatch.demo'),
-('sim_elder_23', 'pass123', 'elder', '宝山长者23', '13990000323', 'sim_elder_23@dispatch.demo'),
-('sim_elder_24', 'pass123', 'elder', '宝山长者24', '13990000324', 'sim_elder_24@dispatch.demo'),
-('sim_elder_25', 'pass123', 'elder', '宝山长者25', '13990000325', 'sim_elder_25@dispatch.demo');
+('sim_vol_07', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'volunteer', '调度志愿者07', '13990000107', 'sim_vol_07@dispatch.demo'),
+('sim_vol_08', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'volunteer', '调度志愿者08', '13990000108', 'sim_vol_08@dispatch.demo'),
+('sim_elder_06', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者06', '13990000306', 'sim_elder_06@dispatch.demo'),
+('sim_elder_07', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者07', '13990000307', 'sim_elder_07@dispatch.demo'),
+('sim_elder_08', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者08', '13990000308', 'sim_elder_08@dispatch.demo'),
+('sim_elder_09', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者09', '13990000309', 'sim_elder_09@dispatch.demo'),
+('sim_elder_10', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者10', '13990000310', 'sim_elder_10@dispatch.demo'),
+('sim_elder_11', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者11', '13990000311', 'sim_elder_11@dispatch.demo'),
+('sim_elder_12', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者12', '13990000312', 'sim_elder_12@dispatch.demo'),
+('sim_elder_13', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者13', '13990000313', 'sim_elder_13@dispatch.demo'),
+('sim_elder_14', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者14', '13990000314', 'sim_elder_14@dispatch.demo'),
+('sim_elder_15', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者15', '13990000315', 'sim_elder_15@dispatch.demo'),
+('sim_elder_16', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者16', '13990000316', 'sim_elder_16@dispatch.demo'),
+('sim_elder_17', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者17', '13990000317', 'sim_elder_17@dispatch.demo'),
+('sim_elder_18', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者18', '13990000318', 'sim_elder_18@dispatch.demo'),
+('sim_elder_19', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者19', '13990000319', 'sim_elder_19@dispatch.demo'),
+('sim_elder_20', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者20', '13990000320', 'sim_elder_20@dispatch.demo'),
+('sim_elder_21', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者21', '13990000321', 'sim_elder_21@dispatch.demo'),
+('sim_elder_22', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者22', '13990000322', 'sim_elder_22@dispatch.demo'),
+('sim_elder_23', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者23', '13990000323', 'sim_elder_23@dispatch.demo'),
+('sim_elder_24', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者24', '13990000324', 'sim_elder_24@dispatch.demo'),
+('sim_elder_25', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '宝山长者25', '13990000325', 'sim_elder_25@dispatch.demo');
 
 -- ====== 浦东新区演示账户 (user_id=39~55) ======
 INSERT INTO users (username, password_hash, role, real_name, phone, email) VALUES
-('admin_pudong', 'Admin@2026', 'admin', '浦东新区管理员', '13990000115', 'admin_pudong@dispatch.demo'),
-('demo_310115_vol_1', 'pass123', 'volunteer', '浦东志愿者李晨', '13990000116', 'demo_310115_vol_1@dispatch.demo'),
-('demo_310115_vol_2', 'pass123', 'volunteer', '浦东志愿者王宁', '13990000117', 'demo_310115_vol_2@dispatch.demo'),
-('demo_310115_vol_3', 'pass123', 'volunteer', '浦东志愿者陈悦', '13990000118', 'demo_310115_vol_3@dispatch.demo'),
-('demo_310115_vol_4', 'pass123', 'volunteer', '浦东志愿者赵峰', '13990000119', 'demo_310115_vol_4@dispatch.demo'),
-('demo_310115_elder_1', 'pass123', 'elder', '浦东张阿姨', '13990000216', 'demo_310115_elder_1@dispatch.demo'),
-('demo_310115_family_1', 'pass123', 'family', '浦东张阿姨家属', '13990000316', 'demo_310115_family_1@dispatch.demo'),
-('demo_310115_elder_2', 'pass123', 'elder', '浦东陈伯伯', '13990000217', 'demo_310115_elder_2@dispatch.demo'),
-('demo_310115_family_2', 'pass123', 'family', '浦东陈伯伯家属', '13990000317', 'demo_310115_family_2@dispatch.demo'),
-('demo_310115_elder_3', 'pass123', 'elder', '浦东李奶奶', '13990000218', 'demo_310115_elder_3@dispatch.demo'),
-('demo_310115_family_3', 'pass123', 'family', '浦东李奶奶家属', '13990000318', 'demo_310115_family_3@dispatch.demo'),
-('demo_310115_elder_4', 'pass123', 'elder', '浦东王大爷', '13990000219', 'demo_310115_elder_4@dispatch.demo'),
-('demo_310115_family_4', 'pass123', 'family', '浦东王大爷家属', '13990000319', 'demo_310115_family_4@dispatch.demo'),
-('demo_310115_elder_5', 'pass123', 'elder', '浦东周阿姨', '13990000220', 'demo_310115_elder_5@dispatch.demo'),
-('demo_310115_family_5', 'pass123', 'family', '浦东周阿姨家属', '13990000320', 'demo_310115_family_5@dispatch.demo'),
-('demo_310115_elder_6', 'pass123', 'elder', '浦东孙爷爷', '13990000221', 'demo_310115_elder_6@dispatch.demo'),
-('demo_310115_family_6', 'pass123', 'family', '浦东孙爷爷家属', '13990000321', 'demo_310115_family_6@dispatch.demo');
+('admin_pudong', 'scrypt:32768:8:1$FulRygLoFejJRQei$38c7e15312bda8cfc9897d1b5c5f4a467b7c74e8d9c33f2a1e0f5da8e38ae74b43dd8377aea2579da4d70ad1ca55fd50592dcad6d2aae76ce3687d372902fa1e', 'admin', '浦东新区管理员', '13990000115', 'admin_pudong@dispatch.demo'),
+('demo_310115_vol_1', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'volunteer', '浦东志愿者李晨', '13990000116', 'demo_310115_vol_1@dispatch.demo'),
+('demo_310115_vol_2', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'volunteer', '浦东志愿者王宁', '13990000117', 'demo_310115_vol_2@dispatch.demo'),
+('demo_310115_vol_3', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'volunteer', '浦东志愿者陈悦', '13990000118', 'demo_310115_vol_3@dispatch.demo'),
+('demo_310115_vol_4', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'volunteer', '浦东志愿者赵峰', '13990000119', 'demo_310115_vol_4@dispatch.demo'),
+('demo_310115_elder_1', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '浦东张阿姨', '13990000216', 'demo_310115_elder_1@dispatch.demo'),
+('demo_310115_family_1', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'family', '浦东张阿姨家属', '13990000316', 'demo_310115_family_1@dispatch.demo'),
+('demo_310115_elder_2', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '浦东陈伯伯', '13990000217', 'demo_310115_elder_2@dispatch.demo'),
+('demo_310115_family_2', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'family', '浦东陈伯伯家属', '13990000317', 'demo_310115_family_2@dispatch.demo'),
+('demo_310115_elder_3', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '浦东李奶奶', '13990000218', 'demo_310115_elder_3@dispatch.demo'),
+('demo_310115_family_3', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'family', '浦东李奶奶家属', '13990000318', 'demo_310115_family_3@dispatch.demo'),
+('demo_310115_elder_4', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '浦东王大爷', '13990000219', 'demo_310115_elder_4@dispatch.demo'),
+('demo_310115_family_4', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'family', '浦东王大爷家属', '13990000319', 'demo_310115_family_4@dispatch.demo'),
+('demo_310115_elder_5', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '浦东周阿姨', '13990000220', 'demo_310115_elder_5@dispatch.demo'),
+('demo_310115_family_5', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'family', '浦东周阿姨家属', '13990000320', 'demo_310115_family_5@dispatch.demo'),
+('demo_310115_elder_6', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '浦东孙爷爷', '13990000221', 'demo_310115_elder_6@dispatch.demo'),
+('demo_310115_family_6', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'family', '浦东孙爷爷家属', '13990000321', 'demo_310115_family_6@dispatch.demo');
 
 -- ====== 北京市朝阳区演示账户 (user_id=56~72) ======
 INSERT INTO users (username, password_hash, role, real_name, phone, email) VALUES
-('admin_chaoyang', 'Admin@2026', 'admin', '朝阳区管理员', '13990000105', 'admin_chaoyang@dispatch.demo'),
-('demo_110105_vol_1', 'pass123', 'volunteer', '朝阳志愿者刘洋', '13990000106', 'demo_110105_vol_1@dispatch.demo'),
-('demo_110105_vol_2', 'pass123', 'volunteer', '朝阳志愿者周倩', '13990000107', 'demo_110105_vol_2@dispatch.demo'),
-('demo_110105_vol_3', 'pass123', 'volunteer', '朝阳志愿者马强', '13990000108', 'demo_110105_vol_3@dispatch.demo'),
-('demo_110105_vol_4', 'pass123', 'volunteer', '朝阳志愿者何静', '13990000109', 'demo_110105_vol_4@dispatch.demo'),
-('demo_110105_elder_1', 'pass123', 'elder', '朝阳赵阿姨', '13990000206', 'demo_110105_elder_1@dispatch.demo'),
-('demo_110105_family_1', 'pass123', 'family', '朝阳赵阿姨家属', '13990000306', 'demo_110105_family_1@dispatch.demo'),
-('demo_110105_elder_2', 'pass123', 'elder', '朝阳刘伯伯', '13990000207', 'demo_110105_elder_2@dispatch.demo'),
-('demo_110105_family_2', 'pass123', 'family', '朝阳刘伯伯家属', '13990000307', 'demo_110105_family_2@dispatch.demo'),
-('demo_110105_elder_3', 'pass123', 'elder', '朝阳孙奶奶', '13990000208', 'demo_110105_elder_3@dispatch.demo'),
-('demo_110105_family_3', 'pass123', 'family', '朝阳孙奶奶家属', '13990000308', 'demo_110105_family_3@dispatch.demo'),
-('demo_110105_elder_4', 'pass123', 'elder', '朝阳吴大爷', '13990000209', 'demo_110105_elder_4@dispatch.demo'),
-('demo_110105_family_4', 'pass123', 'family', '朝阳吴大爷家属', '13990000309', 'demo_110105_family_4@dispatch.demo'),
-('demo_110105_elder_5', 'pass123', 'elder', '朝阳钱阿姨', '13990000210', 'demo_110105_elder_5@dispatch.demo'),
-('demo_110105_family_5', 'pass123', 'family', '朝阳钱阿姨家属', '13990000310', 'demo_110105_family_5@dispatch.demo'),
-('demo_110105_elder_6', 'pass123', 'elder', '朝阳冯爷爷', '13990000211', 'demo_110105_elder_6@dispatch.demo'),
-('demo_110105_family_6', 'pass123', 'family', '朝阳冯爷爷家属', '13990000311', 'demo_110105_family_6@dispatch.demo');
+('admin_chaoyang', 'scrypt:32768:8:1$FulRygLoFejJRQei$38c7e15312bda8cfc9897d1b5c5f4a467b7c74e8d9c33f2a1e0f5da8e38ae74b43dd8377aea2579da4d70ad1ca55fd50592dcad6d2aae76ce3687d372902fa1e', 'admin', '朝阳区管理员', '13990000105', 'admin_chaoyang@dispatch.demo'),
+('demo_110105_vol_1', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'volunteer', '朝阳志愿者刘洋', '13990000106', 'demo_110105_vol_1@dispatch.demo'),
+('demo_110105_vol_2', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'volunteer', '朝阳志愿者周倩', '13990000107', 'demo_110105_vol_2@dispatch.demo'),
+('demo_110105_vol_3', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'volunteer', '朝阳志愿者马强', '13990000108', 'demo_110105_vol_3@dispatch.demo'),
+('demo_110105_vol_4', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'volunteer', '朝阳志愿者何静', '13990000109', 'demo_110105_vol_4@dispatch.demo'),
+('demo_110105_elder_1', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '朝阳赵阿姨', '13990000206', 'demo_110105_elder_1@dispatch.demo'),
+('demo_110105_family_1', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'family', '朝阳赵阿姨家属', '13990000306', 'demo_110105_family_1@dispatch.demo'),
+('demo_110105_elder_2', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '朝阳刘伯伯', '13990000207', 'demo_110105_elder_2@dispatch.demo'),
+('demo_110105_family_2', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'family', '朝阳刘伯伯家属', '13990000307', 'demo_110105_family_2@dispatch.demo'),
+('demo_110105_elder_3', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '朝阳孙奶奶', '13990000208', 'demo_110105_elder_3@dispatch.demo'),
+('demo_110105_family_3', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'family', '朝阳孙奶奶家属', '13990000308', 'demo_110105_family_3@dispatch.demo'),
+('demo_110105_elder_4', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '朝阳吴大爷', '13990000209', 'demo_110105_elder_4@dispatch.demo'),
+('demo_110105_family_4', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'family', '朝阳吴大爷家属', '13990000309', 'demo_110105_family_4@dispatch.demo'),
+('demo_110105_elder_5', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '朝阳钱阿姨', '13990000210', 'demo_110105_elder_5@dispatch.demo'),
+('demo_110105_family_5', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'family', '朝阳钱阿姨家属', '13990000310', 'demo_110105_family_5@dispatch.demo'),
+('demo_110105_elder_6', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'elder', '朝阳冯爷爷', '13990000211', 'demo_110105_elder_6@dispatch.demo'),
+('demo_110105_family_6', 'scrypt:32768:8:1$Z5ianuRFoBYp6lSh$b083e4b5881f8d9cc3cb333303cff9425be271133673ccd6b270e2a980ebffcbcc2e9425465b196d13e77913bae8c25a0df77f2c49d25b7878763bbdd964079d', 'family', '朝阳冯爷爷家属', '13990000311', 'demo_110105_family_6@dispatch.demo');
 
 -- ====== 老人档案 (elder_id=1~5) ======
 INSERT INTO elders (user_id, name, age, gender, address, medical_history, alert_sys_threshold) VALUES
@@ -578,7 +578,7 @@ INSERT INTO elders (user_id, name, age, gender, address, medical_history, alert_
 (10, '刘爷爷', 85, '男', '上海市宝山区盘古路528号1号楼201室', '帕金森病早期，行动不便需要助行器，听力下降', 140);
 
 -- 示例：为前 3 位老人补充性格简介（由家属填写）
-UPDATE elders SET personality_bio = '性格开朗健谈，喜欢下象棋和聊时事新闻。听力略有下降，说话需要稍微大声一些。', bio_updated_by = 2, bio_updated_at = NOW() WHERE elder_id = 1;
+UPDATE elders SET personality_bio = '张大爷以前是语文老师，喜欢京剧和下象棋，性格要强，平时喜欢别人叫他张老师。', bio_updated_by = 2, bio_updated_at = NOW() WHERE elder_id = 1;
 UPDATE elders SET personality_bio = '文静内向，喜欢听戏曲和养花。对陌生人比较警惕，需要耐心沟通建立信任。', bio_updated_by = 2, bio_updated_at = NOW() WHERE elder_id = 2;
 UPDATE elders SET personality_bio = '幽默风趣，曾是工程师，喜欢聊科技话题。行动不便但思维清晰，自尊心强。', bio_updated_by = 3, bio_updated_at = NOW() WHERE elder_id = 3;
 
@@ -787,12 +787,12 @@ INSERT INTO volunteer_location_state
      assigned_today, location_source, home_lng, home_lat, auto_accept_enabled,
      service_region_adcode)
 VALUES
-(11, 121.484000, 31.382000, 'idle', 12, 4.90, 0, 'simulated', 121.415977, 31.392852, FALSE, '310113'),
-(12, 121.466465, 31.396258, 'idle', 18, 4.80, 0, 'simulated', 121.426628, 31.362487, FALSE, '310113'),
+(11, 121.405500, 31.325500, 'idle', 12, 4.90, 0, 'simulated', 121.406500, 31.326500, FALSE, '310113'),
+(12, 121.411000, 31.326000, 'idle', 18, 4.80, 0, 'simulated', 121.412000, 31.327000, FALSE, '310113'),
 (13, 121.437512, 31.391284, 'idle', 10, 4.70, 0, 'simulated', 121.479596, 31.358443, FALSE, '310113'),
 (14, 121.436195, 31.373787, 'idle', 15, 4.75, 0, 'simulated', 121.503434, 31.386174, FALSE, '310113'),
 (15, 121.464290, 31.367368, 'idle', 8, 4.65, 0, 'simulated', 121.465988, 31.408275, FALSE, '310113'),
-(16, 121.500023, 31.392852, 'idle', 0, 4.50, 0, 'simulated', 121.402000, 31.382000, FALSE, '310113'),
+(16, 121.407500, 31.329000, 'idle', 0, 4.50, 0, 'simulated', 121.408500, 31.330000, FALSE, '310113'),
 (17, 121.453991, 31.408578, 'idle', 10, 4.81, 2, 'simulated', 121.438466, 31.349096, FALSE, '310113'),
 (18, 121.402000, 31.372993, 'idle', 19, 4.15, 3, 'simulated', 121.505281, 31.360575, FALSE, '310113'),
 -- Demo volunteers default auto_accept OFF; they must toggle it in the volunteer UI.

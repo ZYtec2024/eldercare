@@ -3,8 +3,9 @@ import json
 import os
 import threading
 import time
+from datetime import timedelta
 
-from flask import Flask, jsonify, request
+from flask import Flask, g, jsonify, request, session
 try:
     from flask_cors import CORS
 except ImportError:
@@ -22,11 +23,37 @@ from routes.conversation import conversation_bp
 from routes.ai import ai_bp
 from routes.dispatch import dispatch_bp, ensure_dispatch_schema, run_dispatch_clock_tick
 from routes.report import report_bp
+from auth_security import (
+    PORTAL_SESSION_HEADER,
+    migrate_legacy_password_hashes,
+    verify_portal_session_token,
+)
 from db import get_db_connection
 
 app = Flask(__name__)
-# 允许前端跨域请求
-CORS(app, supports_credentials=True)
+app.config.update(
+    SECRET_KEY=os.getenv("SECRET_KEY", "dev-only-change-before-production"),
+    SESSION_COOKIE_NAME="eldercare_session",
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true",
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+    SESSION_REFRESH_EACH_REQUEST=True,
+)
+if app.config["SECRET_KEY"] == "dev-only-change-before-production":
+    print("⚠️ 当前使用本地开发会话密钥；公网部署必须设置随机 SECRET_KEY")
+# The browser normally talks to /api through the same-origin Nginx proxy.
+# Explicit origins are retained only for local development or a separately
+# hosted front end; wildcard credentialed CORS is intentionally forbidden.
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://127.0.0.1:3000,http://localhost:3000",
+    ).split(",")
+    if origin.strip()
+]
+CORS(app, supports_credentials=True, origins=cors_origins)
 
 # 注册所有蓝图，并分配基础路由前缀
 app.register_blueprint(auth_bp, url_prefix='/api/auth')
@@ -40,6 +67,47 @@ app.register_blueprint(conversation_bp, url_prefix='/api/conversations')
 app.register_blueprint(ai_bp, url_prefix='/api')
 app.register_blueprint(dispatch_bp, url_prefix='/api/dispatch')
 app.register_blueprint(report_bp, url_prefix='/api/elder')
+
+
+_PUBLIC_API_PATHS = {
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/auth/session",
+    "/api/auth/register",
+    "/api/auth/forgot-password",
+    "/api/auth/regions/children",
+}
+
+
+@app.before_request
+def require_authenticated_api_session():
+    """Reject anonymous access to business APIs.
+
+    A signed tab-scoped header takes precedence over the shared HttpOnly cookie,
+    allowing different demo accounts to remain open in different tabs. Public
+    home, registration and password-recovery endpoints remain available.
+    Per-role and per-resource checks continue to live in their route handlers.
+    """
+    if request.method == "OPTIONS" or not request.path.startswith("/api/"):
+        return None
+    portal_token = str(request.headers.get(PORTAL_SESSION_HEADER) or "").strip()
+    if portal_token:
+        portal_identity = verify_portal_session_token(portal_token)
+        if not portal_identity:
+            if request.path != "/api/auth/login":
+                return jsonify({"code": 401, "message": "当前标签页登录状态已失效，请重新登录"}), 401
+        else:
+            # Browser cookies are shared by tabs. Restore the identity carried
+            # by this tab before any route-level authorization runs.
+            g.portal_session_identity = portal_identity
+            session.permanent = True
+            session["user_id"] = int(portal_identity["user_id"])
+            session["role"] = str(portal_identity["role"])
+    if request.path in _PUBLIC_API_PATHS or request.path.startswith("/api/public/"):
+        return None
+    if not session.get("user_id"):
+        return jsonify({"code": 401, "message": "登录状态已失效，请重新登录"}), 401
+    return None
 
 
 def init_db():
@@ -144,6 +212,9 @@ def init_db():
 with app.app_context():
     init_db()
     ensure_dispatch_schema()
+    migrated_passwords = migrate_legacy_password_hashes()
+    if migrated_passwords:
+        print(f"✓ 已将 {migrated_passwords} 个旧账号密码迁移为安全哈希")
 
 
 def _dispatch_location_clock() -> None:
@@ -233,6 +304,5 @@ def hello():
     })
 
 if __name__ == '__main__':
-    # 开启 debug=True，以后你修改任何 Python 代码，按 Ctrl+S 保存后，服务器会自动重启
-    debug = os.getenv('FLASK_DEBUG', 'true').lower() in ('1', 'true', 'yes')
+    debug = os.getenv('FLASK_DEBUG', 'false').lower() in ('1', 'true', 'yes')
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', '5000')), debug=debug)

@@ -3,5 +3,6 @@ PyMySQL==1.1.0
 psycopg2-binary==2.9.9
 Flask-CORS==4.0.0
 Werkzeug==3.0.1
+gunicorn>=22.0,<24.0
 requests>=2.32.0
 edge-tts>=7.2.0

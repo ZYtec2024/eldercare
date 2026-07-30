@@ -267,6 +267,7 @@ def simulate_donation():
                 (donor_name, contact or None, amount, payment_method, transaction_no, donor_message or None),
             )
             donation = cursor.fetchone()
+            donation['created_at'] = format_datetime(donation.get('created_at'))
             conn.commit()
             return jsonify({
                 "code": 200,

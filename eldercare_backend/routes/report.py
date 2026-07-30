@@ -351,6 +351,12 @@ def check_weekly_report_eligibility():
         return jsonify({'code': 500, 'message': '数据库连接失败'}), 500
     try:
         with conn.cursor() as cursor:
+            # Existing Docker data volumes may predate the weekly_reports table.
+            # The eligibility page reads drafts before the generation endpoint
+            # gets a chance to create the schema, so initialise it here too.
+            _ensure_weekly_reports_schema(cursor)
+            conn.commit()
+
             elder = _elder_profile_by_user_id(cursor, user_id)
             if not elder:
                 return jsonify({'code': 404, 'message': '找不到老人档案'}), 404
@@ -490,7 +496,7 @@ def generate_weekly_report():
                     'weekStart': monday.strftime('%Y-%m-%d'),
                     'weekEnd': sunday.strftime('%Y-%m-%d'),
                     'templateName': template_name,
-                    'generatedAt': shanghai_now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'generatedAt': beijing_now().strftime('%Y-%m-%d %H:%M:%S'),
                 },
             })
     except Exception as exc:

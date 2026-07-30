@@ -1,6 +1,7 @@
 # routes/family.py
 from flask import Blueprint, request, jsonify
 from db import get_db_connection
+from location_policy import find_unfinished_elder_order, location_change_block_message
 from utils import fetch_health_trend_rows, format_datetime, get_validated_data, get_pagination_params
 import datetime
 
@@ -416,6 +417,12 @@ def select_family_elder_address(elder_id: int):
         with conn.cursor() as cursor:
             if not _assert_family_elder_bound(cursor, int(family_user_id), elder_id):
                 return jsonify({"code": 403, "message": "您只能切换已绑定长辈的地址"}), 403
+            unfinished = find_unfinished_elder_order(cursor, elder_id)
+            if unfinished:
+                return jsonify({
+                    "code": 409,
+                    "message": location_change_block_message(unfinished),
+                }), 409
             cursor.execute(
                 """SELECT address_id, full_address, region_adcode, lng, lat
                    FROM elder_addresses WHERE address_id = %s AND elder_id = %s""",
@@ -588,7 +595,24 @@ def get_family_orders():
                         o.status,
                         u.real_name AS assigned_volunteer_name,
                         hr.review_status AS hour_review_status,
-                        hr.approved_hours AS hour_review_approved_hours
+                        hr.approved_hours AS hour_review_approved_hours,
+                        (
+                            SELECT MIN(start_event.created_at)
+                            FROM dispatch_events start_event
+                            WHERE start_event.order_id = o.order_id
+                              AND start_event.event_type = 'service_started'
+                        ) AS service_started_at,
+                        (
+                            SELECT MIN(end_event.created_at)
+                            FROM dispatch_events end_event
+                            WHERE end_event.order_id = o.order_id
+                              AND end_event.event_type IN (
+                                  'service_completed',
+                                  'elder_confirmed_completion',
+                                  'family_confirmed_completion',
+                                  'simulation_service_completed'
+                              )
+                        ) AS service_ended_at
                     FROM orders o
                     JOIN elders e ON o.elder_id = e.elder_id
                     LEFT JOIN users u ON o.volunteer_id = u.user_id
@@ -616,7 +640,24 @@ def get_family_orders():
                         o.status,
                         u.real_name AS assigned_volunteer_name,
                         hr.review_status AS hour_review_status,
-                        hr.approved_hours AS hour_review_approved_hours
+                        hr.approved_hours AS hour_review_approved_hours,
+                        (
+                            SELECT MIN(start_event.created_at)
+                            FROM dispatch_events start_event
+                            WHERE start_event.order_id = o.order_id
+                              AND start_event.event_type = 'service_started'
+                        ) AS service_started_at,
+                        (
+                            SELECT MIN(end_event.created_at)
+                            FROM dispatch_events end_event
+                            WHERE end_event.order_id = o.order_id
+                              AND end_event.event_type IN (
+                                  'service_completed',
+                                  'elder_confirmed_completion',
+                                  'family_confirmed_completion',
+                                  'simulation_service_completed'
+                              )
+                        ) AS service_ended_at
                     FROM orders o
                     JOIN elders e ON o.elder_id = e.elder_id
                     LEFT JOIN users u ON o.volunteer_id = u.user_id
@@ -634,6 +675,17 @@ def get_family_orders():
             for order in orders:
                 if isinstance(order.get('service_time'), datetime.datetime):
                     order['service_time'] = order['service_time'].strftime('%Y-%m-%d %H:%M:%S')
+                started_at = order.get('service_started_at')
+                ended_at = order.get('service_ended_at')
+                if isinstance(started_at, datetime.datetime) and isinstance(ended_at, datetime.datetime):
+                    duration_seconds = max(0.0, (ended_at - started_at).total_seconds())
+                    order['actual_duration_minutes'] = max(1, round(duration_seconds / 60))
+                    order['actual_duration_hours'] = max(0.01, round(duration_seconds / 3600, 2))
+                else:
+                    order['actual_duration_minutes'] = None
+                    order['actual_duration_hours'] = None
+                order['service_started_at'] = format_datetime(started_at)
+                order['service_ended_at'] = format_datetime(ended_at)
 
             return jsonify({"code": 200, "message": "获取订单列表成功", "data": orders})
     finally:

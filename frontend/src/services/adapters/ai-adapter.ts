@@ -90,6 +90,10 @@ export async function sendCompanionChat(payload: {
     user_id: payload.userId,
     message: payload.message,
     history: payload.history ?? [],
+  }, {
+    // AI providers can take longer than the shared 20-second API timeout.
+    // Axios uses 0 to mean that this request has no client-side time limit.
+    timeout: 0,
   })
   return response.data.data
 }
@@ -100,6 +104,7 @@ export async function transcribeCompanionAudio(userId: number, audio: Blob) {
   formData.append('audio', audio, 'companion.webm')
   const response = await http.post<ArrayBuffer>('/elder/companion/transcribe', formData, {
     responseType: 'arraybuffer',
+    timeout: 0,
     headers: {
       'Content-Type': 'multipart/form-data',
     },
@@ -123,6 +128,7 @@ export async function synthesizeCompanionSpeech(text: string, userId?: number) {
     text,
   }, {
     responseType: 'arraybuffer',
+    timeout: 0,
   })
 
   const contentType = String(response.headers?.['content-type'] || '')

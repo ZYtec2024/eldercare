@@ -1,9 +1,10 @@
 import { useEffect } from 'react'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
-import { Spin, Result, Button } from 'antd'
+import { Spin } from 'antd'
 
 import { useSession } from '@/features/auth/useSession'
 import type { Role } from '@/types/domain'
+import { getDefaultRoute } from '@/routes/role-defaults'
 
 interface ProtectedRouteProps {
   allowedRoles: Role[]
@@ -32,20 +33,7 @@ export function ProtectedRoute({ allowedRoles }: ProtectedRouteProps) {
   }
 
   if (!allowedRoles.includes(session.role)) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <Result
-          status="403"
-          title="无权访问"
-          subTitle="您没有权限访问此页面"
-          extra={
-            <Button type="primary" href="/">
-              返回首页
-            </Button>
-          }
-        />
-      </div>
-    )
+    return <Navigate to={getDefaultRoute(session.role)} replace />
   }
 
   return <Outlet />

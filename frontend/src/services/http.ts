@@ -1,5 +1,9 @@
 import axios from 'axios'
 
+import { getStoredSession } from '@/features/auth/session-store'
+
+export const SESSION_EXPIRED_EVENT = 'eldercare:session-expired'
+
 export interface ApiEnvelope<T> {
   code: number
   message: string
@@ -21,6 +25,15 @@ export class HttpRequestError extends Error {
 export const http = axios.create({
   baseURL: '/api',
   timeout: 20000,
+  withCredentials: true,
+})
+
+http.interceptors.request.use((config) => {
+  const portalToken = getStoredSession()?.portalToken
+  if (portalToken) {
+    config.headers.set('X-Portal-Session', portalToken)
+  }
+  return config
 })
 
 http.interceptors.response.use(
@@ -45,6 +58,9 @@ http.interceptors.response.use(
     return response
   },
   (error) => {
+    if (error.response?.status === 401 && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+    }
     const message =
       error.response?.data?.message ?? error.message ?? '请求失败，请稍后重试'
     return Promise.reject(

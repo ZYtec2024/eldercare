@@ -18,6 +18,7 @@ import {
 } from '@/features/shared/order-home-features'
 import { fetchPendingServices } from '@/services/adapters/elder-adapter'
 import type { PendingService } from '@/types/domain'
+import { proxyActorName, proxyOrderAlertTitle } from '@/features/elder/proxy-order-labels'
 
 const features: HomeFeatureItem[] = [
   {
@@ -75,7 +76,7 @@ export default function ElderDashboardPage() {
     const load = () => {
       fetchPendingServices(session.userId)
         .then((list) => {
-          setProxyOrders(list.filter((item) => item.isFamilyProxy && ['pending', 'accepted', 'in_progress'].includes(item.status)))
+          setProxyOrders(list.filter((item) => item.isProxy && ['pending', 'accepted', 'in_progress'].includes(item.status)))
         })
         .catch(() => {})
     }
@@ -109,12 +110,12 @@ export default function ElderDashboardPage() {
         <Alert
           showIcon
           type="warning"
-          message="家属已为您代下服务单"
+          message={proxyOrderAlertTitle(proxyOrders.map((item) => item.proxyCreatorRole))}
           description={(
             <div className="space-y-2">
               <div>
                 {proxyOrders.slice(0, 3).map((item) => (
-                  `${item.proxyFamilyName || '家属'} · ${item.serviceType}`
+                  `${proxyActorName(item.proxyCreatorName, item.proxyCreatorRole)} · ${item.serviceType}`
                 )).join('；')}
               </div>
               <Button size="small" type="link" className="!px-0" onClick={() => navigate('/elder/services')}>

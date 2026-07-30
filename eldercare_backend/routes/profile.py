@@ -1,6 +1,7 @@
 # routes/profile.py
 from flask import Blueprint, request, jsonify
 from db import get_db_connection
+from location_policy import find_unfinished_elder_order, location_change_block_message
 from utils import get_validated_data
 from region_service import canonicalize_active_adcode, geocode_address, reverse_geocode, search_address_pois
 
@@ -29,7 +30,8 @@ def get_profile_info():
             # 根据角色拉取额外的扩展信息
             if role == 'elder':
                 cursor.execute(
-                    """SELECT e.age, e.gender, e.address, e.medical_history, e.alert_sys_threshold,
+                    """SELECT e.age, e.gender, e.address, e.medical_history, e.personality_bio,
+                              e.alert_sys_threshold,
                               e.region_adcode,
                               COALESCE(ar.name, e.region_adcode) AS region_name
                        FROM elders e
@@ -261,6 +263,14 @@ def save_elder_address_for_elder(elder_id: int, data: dict, address_id=None):
                 # switched later through the dedicated address selector.
                 make_current = bool(current_address.get('is_current'))
 
+            if make_current:
+                unfinished = find_unfinished_elder_order(cursor, elder_id)
+                if unfinished:
+                    return jsonify({
+                        "code": 409,
+                        "message": location_change_block_message(unfinished),
+                    }), 409
+
             if address_id is None:
                 cursor.execute(
                     """SELECT address_id FROM elder_addresses
@@ -390,6 +400,12 @@ def select_elder_address():
             if not elder:
                 return jsonify({"code": 403, "message": "仅老人账号可管理地址"}), 403
             elder_id = int(elder['elder_id'])
+            unfinished = find_unfinished_elder_order(cursor, elder_id)
+            if unfinished:
+                return jsonify({
+                    "code": 409,
+                    "message": location_change_block_message(unfinished),
+                }), 409
             cursor.execute(
                 """SELECT address_id, full_address, region_adcode, lng, lat
                    FROM elder_addresses WHERE address_id = %s AND elder_id = %s""",
@@ -482,10 +498,17 @@ def update_profile():
             # 2. 角色特定表更新
             if role == 'elder':
                 medical_history = data.get('medical_history')
+                personality_bio = data.get('personality_bio')
                 sys_threshold = data.get('alert_sys_threshold')
                 if medical_history is not None:
                     sql_elder_history = "UPDATE elders SET medical_history = %s WHERE user_id = %s"
                     cursor.execute(sql_elder_history, (medical_history, user_id))
+
+                if personality_bio is not None:
+                    cursor.execute(
+                        "UPDATE elders SET personality_bio = %s WHERE user_id = %s",
+                        (str(personality_bio).strip()[:200] or None, user_id),
+                    )
 
                 if sys_threshold is not None:
                     sql_elder_threshold = "UPDATE elders SET alert_sys_threshold = %s WHERE user_id = %s"

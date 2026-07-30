@@ -1,15 +1,52 @@
 # routes/auth.py
 import json
 import math
+import os
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, session
 from db import get_db_connection
+from auth_security import (
+    PORTAL_SESSION_HEADER,
+    hash_password,
+    issue_portal_session_token,
+    validate_new_password,
+    verify_password,
+    verify_portal_session_token,
+)
 from utils import api_response, get_validated_data
 from region_service import fetch_district_children, geocode_address, is_active_region
 
 auth_bp = Blueprint('auth', __name__)
 
 _ALLOWED_REGISTER_ROLES = {'elder', 'volunteer', 'family', 'admin'}
+
+
+def _login_response_data(cursor, user):
+    review_status = 'none'
+    is_root = False
+    region_scopes: list[str] = []
+    if user['role'] == 'volunteer':
+        cursor.execute("SELECT audit_status FROM volunteers_profile WHERE user_id = %s", (user['user_id'],))
+        profile = cursor.fetchone()
+        if profile:
+            review_status = 'pending_review' if profile['audit_status'] == 'pending' else profile['audit_status']
+    if user['role'] == 'admin':
+        cursor.execute(
+            "SELECT region_adcode FROM admin_region_scope WHERE admin_user_id = %s",
+            (user['user_id'],),
+        )
+        region_scopes = [str(row['region_adcode']) for row in cursor.fetchall()]
+        is_root = '*' in region_scopes
+    return {
+        "user_id": user['user_id'],
+        "username": user['username'],
+        "role": user['role'],
+        "real_name": user['real_name'],
+        "email": user.get('email'),
+        "review_status": review_status,
+        "is_root": is_root,
+        "region_scopes": region_scopes,
+    }
 
 
 @auth_bp.route('/regions/children', methods=['GET'])
@@ -40,6 +77,9 @@ def register():
         return api_response({"code": 400, "message": "基础信息(含邮箱)填写不完整"}, 400)
     if role not in _ALLOWED_REGISTER_ROLES:
         return api_response({"code": 400, "message": "注册角色无效"}, 400)
+    password, password_error = validate_new_password(password)
+    if password_error:
+        return api_response({"code": 400, "message": password_error}, 400)
 
     if role == 'admin':
         if data.get('invite_code') != 'SHU2024ADMIN':
@@ -58,7 +98,7 @@ def register():
         if not is_active_region(region_adcode):
             return api_response({
                 "code": 400,
-                "message": "所选区县尚未开通服务，请选择已开通区域（如宝山区、浦东新区、朝阳区）",
+                "message": "所选区县尚未开通服务，请选择已开通区域或联系总管理员开通",
             }, 400)
         try:
             resolved_address = geocode_address(
@@ -84,6 +124,11 @@ def register():
         volunteer_region_adcode = str(data.get('region_adcode') or '').strip()
         if not volunteer_region_adcode:
             return api_response({"code": 400, "message": "志愿者必须选择服务区县"}, 400)
+        if not is_active_region(volunteer_region_adcode):
+            return api_response({
+                "code": 400,
+                "message": "所选区县尚未开通志愿服务，请选择已开通区域或联系总管理员开通",
+            }, 400)
         if not str(data.get('skills') or '').strip():
             return api_response({"code": 400, "message": "请填写技能、证书或服务经验说明"}, 400)
 
@@ -112,7 +157,7 @@ def register():
                 VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING user_id
             """
-            cursor.execute(sql_user, (username, password, role, real_name, phone, email))
+            cursor.execute(sql_user, (username, hash_password(password), role, real_name, phone, email))
             new_user_id = cursor.fetchone()['user_id']
 
             # 2. 角色分流插入
@@ -225,9 +270,11 @@ def register():
 # 2. 登录 (同步志愿者审核状态)
 @auth_bp.route('/login', methods=['POST'])
 def login():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     username = data.get('username')
     password = data.get('password')
+    if not username or not password:
+        return api_response({"code": 400, "message": "请输入账号和密码"}, 400)
 
     conn = get_db_connection()
     if conn is None:
@@ -235,46 +282,88 @@ def login():
 
     try:
         with conn.cursor() as cursor:
-            sql = "SELECT user_id, password_hash, role, real_name, email FROM users WHERE username = %s"
+            sql = "SELECT user_id, username, password_hash, role, real_name, email FROM users WHERE username = %s"
             cursor.execute(sql, (username,))
             user = cursor.fetchone()
 
-            if user and user['password_hash'] == password:
-                review_status = 'none'
-                is_root = False
-                region_scopes: list[str] = []
-                if user['role'] == 'volunteer':
-                    cursor.execute("SELECT audit_status FROM volunteers_profile WHERE user_id = %s", (user['user_id'],))
-                    profile = cursor.fetchone()
-                    if profile:
-                        review_status = 'pending_review' if profile['audit_status'] == 'pending' else profile['audit_status']
-                if user['role'] == 'admin':
+            if user and verify_password(user.get('password_hash'), password):
+                # Compatibility for an old volume that was not reached by the
+                # startup migration. Successful verification upgrades it now.
+                if not str(user.get('password_hash') or '').startswith(('scrypt:', 'pbkdf2:')):
                     cursor.execute(
-                        "SELECT region_adcode FROM admin_region_scope WHERE admin_user_id = %s",
-                        (user['user_id'],),
+                        "UPDATE users SET password_hash = %s WHERE user_id = %s",
+                        (hash_password(str(password)), user['user_id']),
                     )
-                    region_scopes = [str(row['region_adcode']) for row in cursor.fetchall()]
-                    is_root = '*' in region_scopes
-
+                    conn.commit()
+                session.clear()
+                session.permanent = True
+                session['user_id'] = int(user['user_id'])
+                session['role'] = str(user['role'])
+                response_data = _login_response_data(cursor, user)
+                response_data["portal_session_token"] = issue_portal_session_token(
+                    user['user_id'],
+                    user['role'],
+                )
                 return api_response({
                     "code": 200,
                     "message": "登录成功",
-                    "data": {
-                        "user_id": user['user_id'],
-                        "username": username,
-                        "role": user['role'],
-                        "real_name": user['real_name'],
-                        "email": user.get('email'),
-                        "review_status": review_status,
-                        "is_root": is_root,
-                        "region_scopes": region_scopes,
-                        "token": f"token-{user['user_id']}" 
-                    }
+                    "data": response_data,
                 }, 200)
             else:
                 return api_response({"code": 401, "message": "账号或密码错误"}, 401)
     finally:
         conn.close()
+
+
+@auth_bp.route('/session', methods=['GET'])
+def restore_login_session():
+    portal_token = str(request.headers.get(PORTAL_SESSION_HEADER) or '').strip()
+    portal_identity = verify_portal_session_token(portal_token) if portal_token else None
+    if portal_token and not portal_identity:
+        return api_response({"code": 401, "message": "当前标签页登录状态已失效"}, 401)
+    user_id = portal_identity['user_id'] if portal_identity else session.get('user_id')
+    if not user_id:
+        return api_response({"code": 401, "message": "登录状态已失效"}, 401)
+    conn = get_db_connection()
+    if conn is None:
+        return api_response({"code": 500, "message": "数据库连接失败"}, 500)
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT user_id, username, role, real_name, email
+                FROM users
+                WHERE user_id = %s
+                """,
+                (user_id,),
+            )
+            user = cursor.fetchone()
+            if not user:
+                session.clear()
+                return api_response({"code": 401, "message": "账号不存在或已被移除"}, 401)
+            response_data = _login_response_data(cursor, user)
+            if portal_token:
+                response_data["portal_session_token"] = portal_token
+            else:
+                # Upgrade a legacy cookie-only login to a tab-scoped session.
+                response_data["portal_session_token"] = issue_portal_session_token(
+                    user['user_id'],
+                    user['role'],
+                )
+            return api_response({
+                "code": 200,
+                "message": "登录状态有效",
+                "data": response_data,
+            }, 200)
+    finally:
+        conn.close()
+
+
+@auth_bp.route('/logout', methods=['POST'])
+def logout():
+    session.clear()
+    return api_response({"code": 200, "message": "已退出登录"}, 200)
+
 
 # 3. 修改密码（已登录用户）
 @auth_bp.route('/change-password', methods=['POST'])
@@ -285,8 +374,13 @@ def change_password():
     new_password = data.get('new_password')
     if not user_id or not old_password or not new_password:
         return api_response({"code": 400, "message": "请填写原密码和新密码"}, 400)
+    if int(user_id) != int(session.get('user_id') or 0):
+        return api_response({"code": 403, "message": "只能修改当前登录账号的密码"}, 403)
     if str(old_password) == str(new_password):
         return api_response({"code": 400, "message": "新密码不能与原密码相同"}, 400)
+    new_password, password_error = validate_new_password(new_password)
+    if password_error:
+        return api_response({"code": 400, "message": password_error}, 400)
 
     conn = get_db_connection()
     if conn is None:
@@ -300,11 +394,11 @@ def change_password():
             user = cursor.fetchone()
             if not user:
                 return api_response({"code": 404, "message": "用户不存在"}, 404)
-            if str(user.get('password_hash') or '') != str(old_password):
+            if not verify_password(user.get('password_hash'), old_password):
                 return api_response({"code": 401, "message": "原密码不正确"}, 401)
             cursor.execute(
                 "UPDATE users SET password_hash = %s WHERE user_id = %s",
-                (new_password, user_id),
+                (hash_password(new_password), user_id),
             )
             conn.commit()
             return api_response({"code": 200, "message": "密码修改成功"}, 200)
@@ -318,10 +412,21 @@ def change_password():
 # 4. 忘记密码
 @auth_bp.route('/forgot-password', methods=['POST'])
 def forgot_password():
-    data = request.get_json()
+    if os.getenv('ALLOW_DEMO_PASSWORD_RESET', 'true').lower() not in ('1', 'true', 'yes'):
+        return api_response({
+            "code": 503,
+            "message": "公网环境已关闭演示式密码重置，请联系管理员完成身份核验",
+        }, 503)
+    data = request.get_json(silent=True) or {}
     username = data.get('username')
     phone = data.get('phone')
+    email = data.get('email')
     new_password = data.get('new_password')
+    if not all([username, phone, email, new_password]):
+        return api_response({"code": 400, "message": "请填写用户名、手机号、邮箱和新密码"}, 400)
+    new_password, password_error = validate_new_password(new_password)
+    if password_error:
+        return api_response({"code": 400, "message": password_error}, 400)
 
     conn = get_db_connection()
     if conn is None:
@@ -329,12 +434,16 @@ def forgot_password():
 
     try:
         with conn.cursor() as cursor:
-            sql = "UPDATE users SET password_hash = %s WHERE username = %s AND phone = %s"
-            cursor.execute(sql, (new_password, username, phone))
+            sql = """
+                UPDATE users
+                SET password_hash = %s
+                WHERE username = %s AND phone = %s AND LOWER(email) = LOWER(%s)
+            """
+            cursor.execute(sql, (hash_password(new_password), username, phone, email))
             if cursor.rowcount > 0:
                 conn.commit()
                 return api_response({"code": 200, "message": "密码重置成功"}, 200)
-            return api_response({"code": 404, "message": "账号或预留手机号不匹配"}, 404)
+            return api_response({"code": 404, "message": "账号、手机号或邮箱不匹配"}, 404)
     except Exception as e:
         conn.rollback()
         return api_response({"code": 500, "message": "重置密码失败"}, 500)

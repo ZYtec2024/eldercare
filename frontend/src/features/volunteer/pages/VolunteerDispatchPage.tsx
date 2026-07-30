@@ -154,16 +154,45 @@ export default function VolunteerDispatchPage() {
       try {
         const mode: NavigationMode = returningHome ? 'driving' : navigationMode
         const routeKey = returningHome ? 'return' : activeNavTask?.order_id || 'route'
-        const route = await getAmapRoute(start, end, mode, mode === 'driving' ? 'REAL_TRAFFIC' : 'LEAST_TIME', `${routeKey}-${activeRoute?.traffic_version || 0}`)
+        let route = await getAmapRoute(
+          start,
+          end,
+          mode,
+          mode === 'driving' ? 'REAL_TRAFFIC' : 'LEAST_TIME',
+          `${routeKey}-${activeRoute?.traffic_version || 0}-steps-0`,
+        )
+        // AMap can return geometry before its detailed manoeuvre list is
+        // populated. Retry with a fresh planner/cache key instead of leaving
+        // the navigation panel permanently empty after the first response.
+        for (let attempt = 1; attempt <= 2 && (!route.geometryResolved || !route.steps.length); attempt++) {
+          await new Promise((resolve) => window.setTimeout(resolve, attempt * 350))
+          if (cancelled) return
+          route = await getAmapRoute(
+            start,
+            end,
+            mode,
+            mode === 'driving' ? 'REAL_TRAFFIC' : 'LEAST_TIME',
+            `${routeKey}-${activeRoute?.traffic_version || 0}-steps-${attempt}`,
+          )
+        }
         if (cancelled) return
         const progress = Math.max(0, Math.min(100, activeRoute?.progress ?? 0))
         const hasPersistedRoadGeometry = (activeRoute?.path?.length ?? 0) > 2
-        if (!route.geometryResolved && !hasPersistedRoadGeometry) {
-          setPlannedNavSteps([])
-          setPlannedRoute(activeRoute ?? null)
-          return
-        }
-        setPlannedNavSteps(route.geometryResolved ? route.steps : [])
+        const fallbackDistanceMeters = Math.max(
+          1,
+          Math.round(Number(route.distanceKm || activeRoute?.distance_km || 0.1) * 1000),
+        )
+        const steps = route.steps.length
+          ? route.steps
+          : [{
+              instruction: mode === 'driving'
+                ? '沿地图绿色路线继续行驶，注意道路名称和转向'
+                : mode === 'riding'
+                  ? '沿地图紫色路线继续骑行，注意道路名称和转向'
+                  : '沿地图蓝色路线继续步行，注意道路名称和转向',
+              distanceMeters: fallbackDistanceMeters,
+            }]
+        setPlannedNavSteps(steps)
         setPlannedRoute({
           ...(activeRoute as DispatchRoute),
           // The persisted road is the canonical journey geometry used by the
@@ -183,9 +212,14 @@ export default function VolunteerDispatchPage() {
         })
       } catch {
         if (!cancelled) {
-          setNavSteps([])
-          setPlannedNavSteps([])
-          setNavMeta({})
+          const fallbackDistanceMeters = Math.max(
+            1,
+            Math.round(Number(activeRoute?.distance_km || 0.1) * 1000),
+          )
+          setPlannedNavSteps([{
+            instruction: '沿地图路线继续前行，注意周边道路名称',
+            distanceMeters: fallbackDistanceMeters,
+          }])
           setPlannedRoute(activeRoute ?? null)
         }
       }
@@ -579,10 +613,11 @@ export default function VolunteerDispatchPage() {
         </div>
       </div>
 
-      <div>
-        <Typography.Title level={3}>我的候选请求</Typography.Title>
-        <div className="grid gap-4 lg:grid-cols-2">
-          {inviteTasks.length ? inviteTasks.map((task) => (
+      {inviteTasks.length ? (
+        <div>
+          <Typography.Title level={3}>我的候选请求</Typography.Title>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {inviteTasks.map((task) => (
             <Card
               key={task.order_id}
               className="!rounded-2xl"
@@ -606,11 +641,10 @@ export default function VolunteerDispatchPage() {
                 {renderTaskActions(task)}
               </div>
             </Card>
-          )) : (
-            <Card className="!rounded-2xl text-slate-500">{state.auto_accept_enabled ? '自动接单已开启：前35秒仍遵循Top1、Top3、Top10人工确认窗口；超时后系统才会自动兜底。' : '暂无向你开放的技能匹配任务。系统会在候选范围变化时自动刷新。'}</Card>
-          )}
+            ))}
+          </div>
         </div>
-      </div>
+      ) : null}
 
       <Card className="!rounded-2xl" title="已结束服务记录（按时间倒序）">
         <div className="space-y-2">

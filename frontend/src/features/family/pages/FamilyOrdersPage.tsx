@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
-  Alert, App, Button, Card, Empty, Form, Input, InputNumber, List, Modal, Popconfirm, Rate, Space, Tag, Typography,
+  Alert, App, Button, Card, Empty, Form, Input, InputNumber, List, Modal, Popconfirm, Radio, Rate, Space, Tag, Typography,
 } from 'antd'
 import { LikeOutlined, LikeFilled, PlusOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
@@ -19,6 +19,16 @@ const statusMap: Record<string, { color: string; text: string }> = {
   in_progress: { color: 'processing', text: '服务中' },
   completed: { color: 'green', text: '已完成' },
   cancelled: { color: 'default', text: '已取消' },
+}
+
+function formatServiceDuration(item: ServiceRequestCard) {
+  const minutes = item.actualDurationMinutes
+  if (!minutes || minutes <= 0) return '暂无完整记录'
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  if (!hours) return `${remainingMinutes} 分钟`
+  if (!remainingMinutes) return `${hours} 小时`
+  return `${hours} 小时 ${remainingMinutes} 分钟`
 }
 
 export default function FamilyOrdersPage() {
@@ -53,6 +63,26 @@ export default function FamilyOrdersPage() {
   }, [session?.userId])
 
   const activeOrders = orders.filter((item) => ['pending', 'accepted', 'in_progress'].includes(item.status))
+
+  const openConfirmHours = (item: ServiceRequestCard) => {
+    const hasActualDuration = typeof item.actualDurationHours === 'number' && item.actualDurationHours > 0
+    setConfirmTarget(item)
+    confirmForm.setFieldsValue({
+      durationBasis: hasActualDuration ? 'actual' : 'expected',
+      actualHours: hasActualDuration ? item.actualDurationHours : item.serviceHours,
+      reviewNote: '',
+    })
+  }
+
+  const selectDurationBasis = (basis: 'actual' | 'expected') => {
+    if (!confirmTarget) return
+    const hours = basis === 'actual'
+      ? confirmTarget.actualDurationHours
+      : confirmTarget.serviceHours
+    if (typeof hours === 'number' && hours > 0) {
+      confirmForm.setFieldValue('actualHours', hours)
+    }
+  }
 
   const handleCancel = async (orderId: number) => {
     if (!session) return
@@ -179,7 +209,7 @@ export default function FamilyOrdersPage() {
               if (item.hourReviewStatus === 'pending_admin') {
                 actions.push(<Tag key="pending-admin" color="gold">待管理员审核时长</Tag>)
               } else if (item.hourReviewStatus === 'pending_family' || !item.hourReviewStatus) {
-                actions.push(<Button key="hours" size="small" onClick={() => { setConfirmTarget(item); confirmForm.setFieldsValue({ actualHours: item.serviceHours }) }}>确认时长</Button>)
+                actions.push(<Button key="hours" size="small" onClick={() => openConfirmHours(item)}>确认时长</Button>)
               }
               if (item.assignedVolunteerId) {
                 actions.push(
@@ -203,9 +233,59 @@ export default function FamilyOrdersPage() {
         />
       </Card>
 
-      <Modal title="确认服务时长" open={!!confirmTarget} onCancel={() => setConfirmTarget(null)} onOk={() => void handleConfirmHours()} confirmLoading={confirming} okText="提交">
+      <Modal
+        title="确认服务时长"
+        open={!!confirmTarget}
+        onCancel={() => {
+          setConfirmTarget(null)
+          confirmForm.resetFields()
+        }}
+        onOk={() => void handleConfirmHours()}
+        confirmLoading={confirming}
+        okText="提交"
+      >
+        {confirmTarget ? (
+          <div className="mb-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Typography.Text type="secondary">开始时间</Typography.Text>
+                <div className="mt-1 font-medium">{confirmTarget.serviceStartedAt || '暂无记录'}</div>
+              </div>
+              <div>
+                <Typography.Text type="secondary">结束时间</Typography.Text>
+                <div className="mt-1 font-medium">{confirmTarget.serviceEndedAt || '暂无记录'}</div>
+              </div>
+            </div>
+            <div className="mt-3 border-t border-slate-200 pt-3">
+              <Typography.Text type="secondary">系统计算的实际时长：</Typography.Text>
+              <Typography.Text strong>{formatServiceDuration(confirmTarget)}</Typography.Text>
+            </div>
+          </div>
+        ) : null}
         <Form form={confirmForm} layout="vertical">
-          <Form.Item name="actualHours" label="实际时长(小时)" rules={[{ required: true }]}><InputNumber min={0.5} step={0.5} className="!w-full" /></Form.Item>
+          <Form.Item name="durationBasis" label="确认依据">
+            <Radio.Group
+              className="flex w-full flex-col gap-2"
+              onChange={(event) => selectDurationBasis(event.target.value)}
+            >
+              <Radio
+                value="actual"
+                disabled={!confirmTarget?.actualDurationHours}
+              >
+                按实际开始与结束时间差
+                {confirmTarget?.actualDurationHours ? `（${formatServiceDuration(confirmTarget)}）` : '（暂无完整记录）'}
+              </Radio>
+              <Radio value="expected">按预计服务时长（{confirmTarget?.serviceHours || 0} 小时）</Radio>
+            </Radio.Group>
+          </Form.Item>
+          <Form.Item
+            name="actualHours"
+            label="最终确认时长（小时）"
+            extra="选择上方依据后会自动填写，也可以根据实际情况微调。"
+            rules={[{ required: true, message: '请输入确认时长' }]}
+          >
+            <InputNumber min={0.01} step={0.1} precision={2} className="!w-full" />
+          </Form.Item>
           <Form.Item name="reviewNote" label="备注"><Input.TextArea rows={2} /></Form.Item>
         </Form>
       </Modal>

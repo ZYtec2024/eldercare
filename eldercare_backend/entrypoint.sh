@@ -30,4 +30,17 @@ else:
     print('⚠ 数据库等待超时，继续启动...')
 "
 
+if [ "${APP_ENV:-development}" = "production" ]; then
+    # The dispatch clock currently runs inside the app process. Keep one
+    # worker until that clock is moved to a dedicated scheduler service.
+    exec gunicorn \
+        --bind "0.0.0.0:${PORT:-5000}" \
+        --workers "${WEB_CONCURRENCY:-1}" \
+        --threads "${WEB_THREADS:-4}" \
+        --timeout "${WEB_TIMEOUT:-120}" \
+        --access-logfile - \
+        --error-logfile - \
+        app:app
+fi
+
 exec python app.py

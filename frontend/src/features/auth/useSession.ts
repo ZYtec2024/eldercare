@@ -2,9 +2,11 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from '
 
 import {
   loginWithCredentials,
+  logoutSession,
   restoreSession,
 } from '@/services/adapters/auth-adapter'
 import type { LoginPayload, SessionUser } from '@/types/domain'
+import { SESSION_EXPIRED_EVENT } from '@/services/http'
 import {
   clearStoredSession,
   consumeStoredRedirectPath,
@@ -78,6 +80,15 @@ export function SessionProvider({ children }: React.PropsWithChildren) {
     }
   }, [])
 
+  useEffect(() => {
+    const handleExpiredSession = () => {
+      clearStoredSession()
+      setSession(null)
+    }
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleExpiredSession)
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handleExpiredSession)
+  }, [])
+
   const value = useMemo<SessionContextValue>(
     () => ({
       session,
@@ -89,6 +100,7 @@ export function SessionProvider({ children }: React.PropsWithChildren) {
         return nextSession
       },
       logout() {
+        void logoutSession().catch(() => undefined)
         clearStoredSession()
         setSession(null)
       },

@@ -39,6 +39,8 @@ export interface SessionUser {
   /** Root admin with region_adcode='*' */
   isRoot?: boolean
   regionScopes?: string[]
+  /** Signed account identity scoped to this browser tab. */
+  portalToken?: string
 }
 
 export interface NavigationItem {
@@ -128,6 +130,10 @@ export interface ServiceRequestCard extends ServiceRequestDraft {
   assignedVolunteerName?: string
   hourReviewStatus?: 'pending_family' | 'pending_admin' | 'approved' | 'rejected'
   hourReviewApprovedHours?: number | null
+  serviceStartedAt?: string | null
+  serviceEndedAt?: string | null
+  actualDurationMinutes?: number | null
+  actualDurationHours?: number | null
 }
 
 export interface PendingService {
@@ -143,7 +149,10 @@ export interface PendingService {
   canReview?: boolean
   reviewSubmitted?: boolean
   proxyCreatedBy?: number | null
+  proxyCreatorName?: string | null
+  proxyCreatorRole?: string | null
   proxyFamilyName?: string | null
+  isProxy?: boolean
   isFamilyProxy?: boolean
 }
 
@@ -311,6 +320,7 @@ export interface ProfileSnapshot {
   phone: string
   email: string
   medicalHistory?: string
+  personalityBio?: string
   alertSysThreshold?: number
   skills?: string
   totalHours?: number
@@ -350,6 +360,7 @@ export interface LoginPayload {
 export interface PasswordResetPayload {
   username: string
   phone: string
+  email: string
   newPassword: string
 }
 

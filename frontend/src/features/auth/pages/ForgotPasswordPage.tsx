@@ -9,7 +9,7 @@ export default function ForgotPasswordPage() {
   const { message } = App.useApp()
   const [loading, setLoading] = useState(false)
 
-  const onFinish = async (values: { username: string; phone: string; newPassword: string }) => {
+  const onFinish = async (values: { username: string; phone: string; email: string; newPassword: string }) => {
     setLoading(true)
     try {
       await resetPassword(values)
@@ -30,7 +30,7 @@ export default function ForgotPasswordPage() {
             找回密码
           </Typography.Title>
           <Typography.Text className="text-gray-500">
-            通过用户名和手机号验证身份
+            通过用户名、手机号和预留邮箱核对身份
           </Typography.Text>
         </div>
 
@@ -49,7 +49,25 @@ export default function ForgotPasswordPage() {
             >
               <Input placeholder="请输入注册时的手机号" maxLength={11} />
             </Form.Item>
-            <Form.Item name="newPassword" label="新密码" rules={[{ required: true, message: '请输入新密码' }]}>
+            <Form.Item
+              name="email"
+              label="预留邮箱"
+              rules={[
+                { required: true, message: '请输入预留邮箱' },
+                { type: 'email', message: '请输入正确的邮箱地址' },
+              ]}
+            >
+              <Input placeholder="请输入注册时的邮箱" />
+            </Form.Item>
+            <Form.Item
+              name="newPassword"
+              label="新密码"
+              rules={[
+                { required: true, message: '请输入新密码' },
+                { min: 8, message: '密码至少8位' },
+                { pattern: /^(?=.*[A-Za-z])(?=.*\d).+$/, message: '密码必须同时包含字母和数字' },
+              ]}
+            >
               <Input.Password placeholder="请输入新密码" />
             </Form.Item>
             <Form.Item className="!mb-3">

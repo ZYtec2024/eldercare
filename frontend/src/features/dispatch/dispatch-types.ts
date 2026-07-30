@@ -50,6 +50,8 @@ export interface DispatchOrder {
   amap_marker_url?: string
   amap_navigation_url?: string
   proxy_created_by?: number | null
+  proxy_creator_name?: string | null
+  proxy_creator_role?: string | null
   proxy_family_name?: string | null
   proxy_reason?: string | null
 }

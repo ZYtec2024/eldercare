@@ -18,7 +18,9 @@ from urllib.parse import urlencode
 
 from flask import Blueprint, jsonify, request
 
+from auth_security import hash_password
 from db import get_db_connection
+from location_policy import find_unfinished_elder_order, location_change_block_message
 from region_service import (
     admin_is_root,
     amap_web_key,
@@ -912,15 +914,22 @@ def _ensure_column(cursor: Any, table_name: str, column_name: str, definition: s
         cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
 
 
-def _user_id(cursor: Any, username: str, role: str, name: str, index: int) -> int:
+def _user_id(
+    cursor: Any,
+    username: str,
+    role: str,
+    name: str,
+    index: int,
+    password: str = "pass123",
+) -> int:
     cursor.execute("SELECT user_id FROM users WHERE username = %s", (username,))
     row = cursor.fetchone()
     if row:
         return int(row["user_id"])
     cursor.execute(
         """INSERT INTO users (username, password_hash, role, real_name, phone, email)
-           VALUES (%s, 'pass123', %s, %s, %s, %s) RETURNING user_id""",
-        (username, role, name, f"1399{index:07d}", f"{username}@dispatch.demo"),
+           VALUES (%s, %s, %s, %s, %s, %s) RETURNING user_id""",
+        (username, hash_password(password), role, name, f"1399{index:07d}", f"{username}@dispatch.demo"),
     )
     return int(cursor.fetchone()["user_id"])
 
@@ -933,6 +942,15 @@ def _demo_point(index: int, ring: int) -> tuple[float, float]:
     lng = center_lng + math.cos(angle) * radius
     lat = center_lat + math.sin(angle) * radius * 0.58
     return round(max(121.402, min(121.518, lng)), 6), round(max(31.338, min(31.425, lat)), 6)
+
+
+# Keep the three named dispatch-demo volunteers close enough to Zhang's
+# map-searchable home address for a useful 2–3 km route preview.
+_NAMED_VOLUNTEER_DEFAULT_POINTS = {
+    0: ((121.405500, 31.325500), (121.406500, 31.326500)),  # 王佳明
+    1: ((121.411000, 31.326000), (121.412000, 31.327000)),  # 李志强
+    5: ((121.407500, 31.329000), (121.408500, 31.330000)),  # 黄鑫
+}
 
 
 def seed_dispatch_demo_data(conn: Any) -> None:
@@ -996,10 +1014,14 @@ def seed_dispatch_demo_data(conn: Any) -> None:
             volunteer_ids = volunteer_ids[:8]
             for index, user_id in enumerate(volunteer_ids):
                 ring = 0 if index < 5 else 1 if index < 7 else 2
-                lng, lat = _demo_point(index, ring)
-                # Current position is the sole dispatch origin.  Home is a
-                # different fixed destination used only when returning.
-                home_lng, home_lat = _demo_point(index + 17, min(2, ring + 1))
+                named_points = _NAMED_VOLUNTEER_DEFAULT_POINTS.get(index)
+                if named_points:
+                    (lng, lat), (home_lng, home_lat) = named_points
+                else:
+                    lng, lat = _demo_point(index, ring)
+                    # Current position is the sole dispatch origin.  Home is a
+                    # different fixed destination used only when returning.
+                    home_lng, home_lat = _demo_point(index + 17, min(2, ring + 1))
                 cursor.execute("SELECT volunteer_id FROM volunteer_location_state WHERE volunteer_id = %s", (user_id,))
                 if not cursor.fetchone():
                     cursor.execute("""
@@ -1010,11 +1032,19 @@ def seed_dispatch_demo_data(conn: Any) -> None:
                 else:
                     cursor.execute("""UPDATE volunteer_location_state SET lng = %s, lat = %s
                                       WHERE volunteer_id = %s AND location_source = 'simulated'""", (lng, lat, user_id))
-                cursor.execute("""UPDATE volunteer_location_state
-                                  SET home_lng = %s, home_lat = %s
-                                  WHERE volunteer_id = %s
-                                    AND (home_lng IS NULL OR (home_lng = lng AND home_lat = lat AND location_source = 'simulated'))""",
-                               (home_lng, home_lat, user_id))
+                if named_points:
+                    cursor.execute("""UPDATE volunteer_location_state
+                                      SET home_lng = %s, home_lat = %s
+                                      WHERE volunteer_id = %s
+                                        AND availability = 'idle'
+                                        AND location_source = 'simulated'""",
+                                   (home_lng, home_lat, user_id))
+                else:
+                    cursor.execute("""UPDATE volunteer_location_state
+                                      SET home_lng = %s, home_lat = %s
+                                      WHERE volunteer_id = %s
+                                        AND (home_lng IS NULL OR (home_lng = lng AND home_lat = lat AND location_source = 'simulated'))""",
+                                   (home_lng, home_lat, user_id))
                 # One-time migration for legacy demo records where a virtual
                 # starting point had been copied into the home fields.  Only
                 # idle records with exactly equal coordinates are changed;
@@ -1227,8 +1257,14 @@ def seed_regional_demo_data(conn: Any) -> None:
 
             for region_adcode, scenario in scenarios.items():
                 admin_username, admin_name = scenario["admin"]
-                admin_id = _user_id(cursor, admin_username, "admin", admin_name, int(region_adcode[-4:]))
-                cursor.execute("UPDATE users SET password_hash = 'Admin@2026' WHERE user_id = %s", (admin_id,))
+                admin_id = _user_id(
+                    cursor,
+                    admin_username,
+                    "admin",
+                    admin_name,
+                    int(region_adcode[-4:]),
+                    "Admin@2026",
+                )
                 cursor.execute("SELECT 1 FROM admin_region_scope WHERE admin_user_id = %s AND region_adcode = %s", (admin_id, region_adcode))
                 if not cursor.fetchone():
                     cursor.execute("INSERT INTO admin_region_scope (admin_user_id, region_adcode, permission) VALUES (%s, %s, 'manage')", (admin_id, region_adcode))
@@ -1236,7 +1272,6 @@ def seed_regional_demo_data(conn: Any) -> None:
                 for index, (name, skills) in enumerate(scenario["volunteers"], start=1):
                     username = f"demo_{region_adcode}_vol_{index}"
                     volunteer_id = _user_id(cursor, username, "volunteer", name, int(region_adcode[-4:]) + index)
-                    cursor.execute("UPDATE users SET password_hash = 'pass123' WHERE user_id = %s", (volunteer_id,))
                     cursor.execute("SELECT profile_id FROM volunteers_profile WHERE user_id = %s", (volunteer_id,))
                     if cursor.fetchone():
                         cursor.execute("UPDATE volunteers_profile SET audit_status = 'approved' WHERE user_id = %s", (volunteer_id,))
@@ -1267,7 +1302,6 @@ def seed_regional_demo_data(conn: Any) -> None:
                 for index, (name, address) in enumerate(scenario["elders"], start=1):
                     username = f"demo_{region_adcode}_elder_{index}"
                     elder_user_id = _user_id(cursor, username, "elder", name, int(region_adcode[-4:]) + 100 + index)
-                    cursor.execute("UPDATE users SET password_hash = 'pass123' WHERE user_id = %s", (elder_user_id,))
                     cursor.execute("SELECT elder_id FROM elders WHERE user_id = %s", (elder_user_id,))
                     elder = cursor.fetchone()
                     if elder:
@@ -1335,7 +1369,6 @@ def seed_regional_demo_data(conn: Any) -> None:
                             ),
                         )
                     family_id = _user_id(cursor, f"demo_{region_adcode}_family_{index}", "family", f"{name}家属", int(region_adcode[-4:]) + 200 + index)
-                    cursor.execute("UPDATE users SET password_hash = 'pass123' WHERE user_id = %s", (family_id,))
                     cursor.execute("SELECT 1 FROM user_elder_relation WHERE family_user_id = %s AND elder_id = %s", (family_id, elder_id))
                     if not cursor.fetchone():
                         cursor.execute("INSERT INTO user_elder_relation (family_user_id, elder_id, relation_type) VALUES (%s, %s, '子女')", (family_id, elder_id))
@@ -1450,6 +1483,15 @@ def _create_or_bind_district_admin(
 def _valid_baoshan_point(lng: Any, lat: Any) -> tuple[float, float] | None:
     """Backward-compatible helper for the existing Baoshan-only sandbox APIs."""
     return _valid_region_point(lng, lat, DEFAULT_REGION_ADCODE)
+
+
+def _valid_open_region_point(lng: Any, lat: Any) -> tuple[float, float] | None:
+    """Accept a map point that belongs to any currently opened service region."""
+    for region_adcode in REGION_CATALOG:
+        valid = _valid_region_point(lng, lat, region_adcode)
+        if valid:
+            return valid
+    return None
 
 
 def _location_source(value: Any) -> str:
@@ -4675,7 +4717,7 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
                    o.service_lng, o.service_lat, o.proxy_created_by, o.proxy_reason,
                    d.urgency, d.dispatch_state, d.search_stage, d.dispatch_phase, d.phase_expires_at, d.forced_assignment,
                    u.real_name AS volunteer_name, p.lng AS volunteer_lng, p.lat AS volunteer_lat, p.availability, p.service_rating,
-                   pu.real_name AS proxy_family_name,
+                   pu.real_name AS proxy_creator_name, pu.role AS proxy_creator_role,
                    COALESCE((SELECT string_agg(s.skill_tag, '|') FROM volunteer_skill_tags s
                              WHERE s.volunteer_id = o.volunteer_id), '') AS volunteer_skills_text
             FROM orders o JOIN dispatch_orders d ON d.order_id = o.order_id
@@ -4701,7 +4743,9 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
                 "forced_assignment": bool(row["forced_assignment"]),
                 "address": row["order_address"] or default_address,
                 "proxy_created_by": int(row["proxy_created_by"]) if row.get("proxy_created_by") else None,
-                "proxy_family_name": row.get("proxy_family_name"),
+                "proxy_creator_name": row.get("proxy_creator_name"),
+                "proxy_creator_role": row.get("proxy_creator_role"),
+                "proxy_family_name": row.get("proxy_creator_name"),
                 "proxy_reason": row.get("proxy_reason"),
             }
             if row["status"] in active_statuses and row["volunteer_id"]:
@@ -5468,6 +5512,12 @@ def update_elder_location():
             elder = cursor.fetchone()
             if not elder:
                 return jsonify({"code": 404, "message": "当前账号没有老人档案"}), 404
+            unfinished = find_unfinished_elder_order(cursor, int(elder["elder_id"]))
+            if unfinished:
+                return jsonify({
+                    "code": 409,
+                    "message": location_change_block_message(unfinished),
+                }), 409
             resolved_region = _region_for_point(data.get("lng"), data.get("lat"))
             if not resolved_region:
                 return jsonify({"code": 400, "message": "该区域尚未开通服务，无法更新定位"}), 400
@@ -5622,7 +5672,7 @@ def move_return_route():
             if len(path) < 2:
                 return jsonify({"code": 409, "message": "返家路线数据无效"}), 409
             progress = min(100, max(0, int(route.get("progress", 0)) + int(data.get("step", 20))))
-            browser_point = _valid_baoshan_point(data.get("lng"), data.get("lat"))
+            browser_point = _valid_open_region_point(data.get("lng"), data.get("lat"))
             if browser_point:
                 lng, lat = browser_point
             else:
@@ -6550,7 +6600,7 @@ def respond_dispatch_order(order_id: int):
                     return jsonify({"code": 409, "message": "路线尚未生成，请稍后再试"}), 409
                 progress = min(95, max(0, int(route.get("progress", 0)) + int(data.get("step", 15))))
                 path = route["path"]
-                browser_point = _valid_baoshan_point(data.get("lng"), data.get("lat"))
+                browser_point = _valid_open_region_point(data.get("lng"), data.get("lat"))
                 if browser_point:
                     # The client supplies a point sampled from AMap.Driving.
                     lng, lat = browser_point
@@ -7039,8 +7089,8 @@ def persist_amap_route_geometry(order_id: int):
         return jsonify({"code": 400, "message": "路线坐标格式不正确"}), 400
     path: list[list[float]] = []
     for point in raw_path[:360]:
-        valid = _valid_baoshan_point(point[0] if isinstance(point, (list, tuple)) and len(point) >= 2 else None,
-                                     point[1] if isinstance(point, (list, tuple)) and len(point) >= 2 else None)
+        valid = _valid_open_region_point(point[0] if isinstance(point, (list, tuple)) and len(point) >= 2 else None,
+                                        point[1] if isinstance(point, (list, tuple)) and len(point) >= 2 else None)
         if valid and (not path or valid != tuple(path[-1])):
             path.append([valid[0], valid[1]])
     if len(path) < 2:
@@ -7053,8 +7103,8 @@ def persist_amap_route_geometry(order_id: int):
                 continue
             section = []
             for point in (segment.get("path") or [])[:100]:
-                valid = _valid_baoshan_point(point[0] if isinstance(point, (list, tuple)) and len(point) >= 2 else None,
-                                             point[1] if isinstance(point, (list, tuple)) and len(point) >= 2 else None)
+                valid = _valid_open_region_point(point[0] if isinstance(point, (list, tuple)) and len(point) >= 2 else None,
+                                                 point[1] if isinstance(point, (list, tuple)) and len(point) >= 2 else None)
                 if valid:
                     section.append([valid[0], valid[1]])
             if len(section) >= 2:

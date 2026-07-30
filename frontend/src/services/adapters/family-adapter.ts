@@ -408,6 +408,22 @@ export async function fetchFamilyOrders(familyUserId = 101) {
           : row.hourReviewApprovedHours ?? row.hour_review_approved_hours
             ? Number(row.hourReviewApprovedHours ?? row.hour_review_approved_hours)
             : undefined,
+      serviceStartedAt:
+        typeof (row.serviceStartedAt ?? row.service_started_at) === 'string'
+          ? String(row.serviceStartedAt ?? row.service_started_at)
+          : null,
+      serviceEndedAt:
+        typeof (row.serviceEndedAt ?? row.service_ended_at) === 'string'
+          ? String(row.serviceEndedAt ?? row.service_ended_at)
+          : null,
+      actualDurationMinutes:
+        row.actualDurationMinutes === null || row.actual_duration_minutes === null
+          ? null
+          : Number(row.actualDurationMinutes ?? row.actual_duration_minutes),
+      actualDurationHours:
+        row.actualDurationHours === null || row.actual_duration_hours === null
+          ? null
+          : Number(row.actualDurationHours ?? row.actual_duration_hours),
     } satisfies ServiceRequestCard
   })
 }

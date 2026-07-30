@@ -52,11 +52,18 @@ function routeNavSteps(result: any): AmapNavStep[] {
   const steps = result?.routes?.[0]?.steps
   if (!Array.isArray(steps)) return []
   return steps
-    .map((step: any) => ({
-      instruction: String(step.instruction || step.action || '').trim(),
-      distanceMeters: Number(step.distance ?? 0),
-      road: typeof step.road === 'string' && step.road ? step.road : undefined,
-    }))
+    .map((step: any) => {
+      const instruction = String(step.instruction || step.action || '').trim()
+      const explicitRoad = String(step.road || step.roadName || step.name || '').trim()
+      const inferredRoad = instruction.match(
+        /(?:沿|进入|驶入|转入|到达)([^，。；]{1,30}?(?:路|街|大道|公路|高架|隧道|大桥|桥))/,
+      )?.[1]
+      return {
+        instruction,
+        distanceMeters: Number(step.distance ?? 0),
+        road: explicitRoad || inferredRoad || undefined,
+      }
+    })
     .filter((step: AmapNavStep) => step.instruction || step.distanceMeters > 0)
 }
 
@@ -460,7 +467,11 @@ export function DispatchMap({
     map.resize?.()
     const focusKey = [
       overview.region_adcode ?? '',
-      ...overview.elders.map((item) => `e${item.elder_id}`),
+      // Elder positions change only through an explicit location/address
+      // update. Include their coordinates so every authorised map reframes
+      // once after that change, while frequent volunteer movement still does
+      // not snap the user's zoom on every poll.
+      ...overview.elders.map((item) => `e${item.elder_id}:${item.lng.toFixed(5)},${item.lat.toFixed(5)}`),
       ...overview.volunteers.map((item) => `v${item.volunteer_id}`),
       ...overview.orders.map((item) => `o${item.order_id}`),
       ...overview.routes.map((item) => `r${item.order_id}`),

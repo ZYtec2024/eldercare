@@ -211,7 +211,6 @@ def _groq_request(path: str, api_key: str, payload: dict[str, Any]) -> dict[str,
         f'https://api.groq.com/openai/v1/{path.lstrip("/")}',
         headers=_groq_headers(api_key),
         json=payload,
-        timeout=90,
     )
     try:
         response_data = response.json()
@@ -251,7 +250,7 @@ def _run_tts(text: str, voice: str, rate: str, volume: str) -> bytes:
     # If a loop is already running (e.g. under gunicorn with gevent, or nested),
     # run the coroutine in a thread to avoid nesting conflicts.
     future = _TTS_EXECUTOR.submit(asyncio.run, _render_tts_audio(text, voice, rate, volume))
-    return future.result(timeout=60)
+    return future.result()
 
 
 @ai_bp.route('/admin/ai-config', methods=['GET'])
@@ -353,7 +352,6 @@ def _openai_compatible_request(api_key: str, base_url: str, payload: dict[str, A
             'Content-Type': 'application/json',
         },
         json=payload,
-        timeout=90,
     )
     try:
         response_data = response.json()
@@ -478,7 +476,6 @@ def elder_companion_transcribe():
                     headers={'Authorization': f'Bearer {api_key}'},
                     files={'file': (uploaded.filename or 'audio.webm', uploaded.read(), uploaded.mimetype or 'application/octet-stream')},
                     data={'model': str(settings.get('groq_transcribe_model') or DEFAULT_AI_SETTINGS['groq_transcribe_model']), 'language': 'zh'},
-                    timeout=90,
                 )
                 try:
                     response_data = response.json()

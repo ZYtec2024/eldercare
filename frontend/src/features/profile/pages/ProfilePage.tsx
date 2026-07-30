@@ -48,6 +48,8 @@ export default function ProfilePage() {
   const [poiSearching, setPoiSearching] = useState(false)
   const [locationSaving, setLocationSaving] = useState(false)
   const [liveLocationHint, setLiveLocationHint] = useState('')
+  const [currentLocationSource, setCurrentLocationSource] = useState('')
+  const [hasUnfinishedOrder, setHasUnfinishedOrder] = useState(false)
   const poiTimerRef = useRef<number | null>(null)
   const [provinces, setProvinces] = useState<PublicRegionNode[]>([])
   const [cities, setCities] = useState<PublicRegionNode[]>([])
@@ -77,9 +79,13 @@ export default function ProfilePage() {
       fetchPublicRegionChildren().then(setProvinces).catch(() => setProvinces([]))
       fetchDispatchTracking('elder', session.userId)
         .then((tracking) => {
+          setHasUnfinishedOrder(
+            tracking.orders.some((order) => ['pending', 'accepted', 'in_progress'].includes(order.status)),
+          )
           const elder = tracking.elders[0]
           if (!elder) return
           const source = elder.location_source || ''
+          setCurrentLocationSource(source)
           if (source === 'browser_gps' || source === 'virtual') {
             setLiveLocationHint(elder.address ? `当前服务点（实时）：${elder.address}` : '当前服务点为实时定位')
           } else {
@@ -87,8 +93,33 @@ export default function ProfilePage() {
           }
         })
         .catch(() => setLiveLocationHint(''))
+    } else {
+      setHasUnfinishedOrder(false)
     }
   }, [session])
+
+  useEffect(() => {
+    if (!session || session.role !== 'elder') return
+    let stopped = false
+    const refreshOrderLock = () => {
+      fetchDispatchTracking('elder', session.userId)
+        .then((tracking) => {
+          if (!stopped) {
+            setHasUnfinishedOrder(
+              tracking.orders.some((order) => ['pending', 'accepted', 'in_progress'].includes(order.status)),
+            )
+            const elder = tracking.elders[0]
+            if (elder?.location_source) setCurrentLocationSource(elder.location_source)
+          }
+        })
+        .catch(() => {})
+    }
+    const timer = window.setInterval(refreshOrderLock, 4000)
+    return () => {
+      stopped = true
+      window.clearInterval(timer)
+    }
+  }, [session?.userId, session?.role])
 
   const chooseAddressProvince = async (adcode: string) => {
     const province = provinces.find((item) => item.adcode === adcode)
@@ -133,7 +164,13 @@ export default function ProfilePage() {
         ? await updateElderAddress({ ...payload, addressId: editingAddress.addressId, isCurrent: editingAddress.isCurrent })
         : await addElderAddress(payload)
       message.success(result.message)
-      setAddresses(await fetchElderAddresses(session.userId))
+      const latestAddresses = await fetchElderAddresses(session.userId)
+      setAddresses(latestAddresses)
+      if (!editingAddress || editingAddress.isCurrent) {
+        setCurrentLocationSource('amap_geocode')
+        const current = latestAddresses.find((address) => address.isCurrent)
+        if (current) setLiveLocationHint(`当前服务点：${current.fullAddress}`)
+      }
       setAddressOpen(false)
       setEditingAddress(null)
       addressForm.resetFields()
@@ -145,6 +182,10 @@ export default function ProfilePage() {
   }
 
   const openNewAddress = () => {
+    if (hasUnfinishedOrder) {
+      message.warning('当前有未结束订单，请在订单完成或取消后再添加并切换当前地址')
+      return
+    }
     setEditingAddress(null)
     setSelectedPoi(null)
     setPoiSuggestions([])
@@ -156,6 +197,10 @@ export default function ProfilePage() {
   }
 
   const openEditAddress = async (address: ElderAddress) => {
+    if (address.isCurrent && hasUnfinishedOrder) {
+      message.warning('当前有未结束订单，请在订单完成或取消后再修改当前地址')
+      return
+    }
     setEditingAddress(address)
     setSelectedPoi(null)
     setPoiSuggestions([])
@@ -200,9 +245,16 @@ export default function ProfilePage() {
 
   const switchAddress = async (addressId: number) => {
     if (!session) return
+    if (hasUnfinishedOrder) {
+      message.warning('当前有未结束订单，请在订单完成或取消后再切换地址')
+      return
+    }
     try {
       message.success((await selectElderAddress(session.userId, addressId)).message)
       setAddresses(await fetchElderAddresses(session.userId))
+      setCurrentLocationSource('address_book')
+      const selected = addresses.find((address) => address.addressId === addressId)
+      if (selected) setLiveLocationHint(`当前服务点：${selected.fullAddress}`)
     } catch (err: any) {
       message.error(err?.message || '切换地址失败')
     }
@@ -280,6 +332,10 @@ export default function ProfilePage() {
 
   const captureElderLocation = () => {
     if (!session) return
+    if (hasUnfinishedOrder) {
+      message.warning('当前有未结束订单，请在订单完成或取消后再更新实时位置')
+      return
+    }
     setLocationSaving(true)
     captureBrowserLocation()
       .then((fix) =>
@@ -292,6 +348,7 @@ export default function ProfilePage() {
             source: 'browser_gps',
             syncDisplay: true,
           })
+          setCurrentLocationSource('browser_gps')
           setLiveLocationHint(`当前服务点（实时）：${resolved.formattedAddress}`)
           message.success(`实时位置已更新（${formatAccuracyHint(fix.accuracyMeters, fix.source)}），家属端可见`)
         }),
@@ -384,24 +441,40 @@ export default function ProfilePage() {
               <span className="text-slate-900">{profile.email || '-'}</span>
             </div>
             {(profile.role === 'elder' || profile.role === 'volunteer') && (
-              <div className="flex gap-3 text-sm sm:col-span-2">
+              <div className={`flex gap-3 text-sm ${profile.role === 'elder' ? '' : 'sm:col-span-2'}`}>
                 <span className="w-24 shrink-0 text-slate-500">注册区县</span>
                 <span className="text-slate-900">{profile.regionName || profile.regionAdcode || '未配置'}</span>
               </div>
             )}
             {profile.role === 'elder' && (
               <>
-                <div className="flex gap-3 text-sm sm:col-span-2">
+                <div className="flex gap-3 text-sm sm:col-start-2">
                   <span className="w-24 shrink-0 text-slate-500">病史</span>
-                  <span className="text-slate-900">{profile.medicalHistory || '无'}</span>
+                  <span className="min-w-0 leading-6 text-slate-900">{profile.medicalHistory || '无'}</span>
                 </div>
-                <div className="flex gap-3 text-sm sm:col-span-2">
+                <div className="flex gap-3 text-sm sm:col-start-2 sm:row-start-4">
+                  <span className="w-24 shrink-0 text-slate-500">性格简介</span>
+                  <span className="min-w-0 leading-6 text-slate-900">{profile.personalityBio || '暂未填写'}</span>
+                </div>
+                <div className="flex gap-3 text-sm sm:col-start-1 sm:row-start-4">
                   <span className="w-24 shrink-0 text-slate-500">实时位置</span>
                   <div className="min-w-0 space-y-2">
                     <Space wrap>
-                      <Button icon={<AimOutlined />} loading={locationSaving} onClick={captureElderLocation}>获取实时位置</Button>
+                      <Button
+                        icon={<AimOutlined />}
+                        loading={locationSaving}
+                        disabled={hasUnfinishedOrder}
+                        title={hasUnfinishedOrder ? '订单完成或取消后才能更新位置' : undefined}
+                        onClick={captureElderLocation}
+                      >
+                        获取实时位置
+                      </Button>
                     </Space>
-                    <div className="text-xs leading-5 text-slate-600">{liveLocationHint || '切换后家属端可看到当前服务点变化'}</div>
+                    <div className={`text-xs leading-5 ${hasUnfinishedOrder ? 'font-medium text-amber-700' : 'text-slate-600'}`}>
+                      {hasUnfinishedOrder
+                        ? '当前有未结束订单，服务地点已锁定；完成或取消订单后才能更新位置。'
+                        : (liveLocationHint || '切换后家属端可看到当前服务点变化')}
+                    </div>
                     <div className="text-xs leading-5 text-slate-500">请用 http://localhost:3000 打开并允许位置权限。地址簿不会被覆盖。</div>
                   </div>
                 </div>
@@ -463,9 +536,18 @@ export default function ProfilePage() {
               <Input />
             </Form.Item>
             {profile.role === 'elder' && (
-              <Form.Item label="病史" name="medicalHistory">
-                <Input.TextArea rows={3} />
-              </Form.Item>
+              <>
+                <Form.Item label="病史" name="medicalHistory">
+                  <Input.TextArea rows={3} />
+                </Form.Item>
+                <Form.Item
+                  label="性格简介"
+                  name="personalityBio"
+                  extra="可填写职业经历、兴趣爱好、称呼偏好和照护习惯，供智能陪聊和志愿服务参考。"
+                >
+                  <Input.TextArea rows={3} maxLength={200} showCount />
+                </Form.Item>
+              </>
             )}
             {profile.role === 'volunteer' && (
               <Form.Item label="技能" name="skills">
@@ -480,7 +562,16 @@ export default function ProfilePage() {
         <Card
           className="!rounded-2xl"
           title={<span><EnvironmentOutlined className="mr-2" />我的地址</span>}
-          extra={<Button icon={<PlusOutlined />} onClick={openNewAddress}>添加地址</Button>}
+          extra={
+            <Button
+              icon={<PlusOutlined />}
+              disabled={hasUnfinishedOrder}
+              title={hasUnfinishedOrder ? '订单完成或取消后才能添加并切换当前地址' : undefined}
+              onClick={openNewAddress}
+            >
+              添加地址
+            </Button>
+          }
         >
           <div className="space-y-3">
             {addresses.map((address) => (
@@ -491,8 +582,21 @@ export default function ProfilePage() {
                   <div className="mt-1 text-xs text-slate-400">{address.provinceName} / {address.cityName} / {address.districtName}</div>
                 </div>
                 <Space>
-                  <Button icon={<EditOutlined />} onClick={() => void openEditAddress(address)}>编辑</Button>
-                  {!address.isCurrent ? <Button onClick={() => void switchAddress(address.addressId)}>设为当前地址</Button> : null}
+                  <Button
+                    icon={<EditOutlined />}
+                    disabled={address.isCurrent && hasUnfinishedOrder}
+                    onClick={() => void openEditAddress(address)}
+                  >
+                    编辑
+                  </Button>
+                  {!address.isCurrent || ['browser_gps', 'virtual'].includes(currentLocationSource) ? (
+                    <Button
+                      disabled={hasUnfinishedOrder}
+                      onClick={() => void switchAddress(address.addressId)}
+                    >
+                      {address.isCurrent ? '切换回此地址' : '设为当前地址'}
+                    </Button>
+                  ) : null}
                 </Space>
               </div>
             ))}
@@ -525,7 +629,8 @@ export default function ProfilePage() {
               name="newPassword"
               rules={[
                 { required: true, message: '请输入新密码' },
-                { min: 6, message: '密码至少6位' },
+                { min: 8, message: '密码至少8位' },
+                { pattern: /^(?=.*[A-Za-z])(?=.*\d).+$/, message: '密码必须同时包含字母和数字' },
               ]}
             >
               <Input.Password placeholder="请输入新密码" />

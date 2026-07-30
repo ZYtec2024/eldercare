@@ -351,7 +351,14 @@ export function VolunteerNavMap({
         pitchEnable: true,
         buildingAnimation: true,
         mapStyle: 'amap://styles/normal',
+        // Keep the surrounding road network, road names and POI labels visible
+        // under the navigation polyline.
+        features: ['bg', 'road', 'building', 'point'],
+        showLabel: true,
+        labelzIndex: 130,
       })
+      map.setFeatures?.(['bg', 'road', 'building', 'point'])
+      map.setStatus?.({ showLabel: true })
       map.addControl(new AMap.Scale())
       try {
           map.addControl(new AMap.ControlBar({ position: { right: '12px', bottom: '78px' } }))

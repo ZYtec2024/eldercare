@@ -1073,11 +1073,14 @@ def list_donations():
                    LIMIT %s OFFSET %s""",
                 (page_size, offset),
             )
+            items = cursor.fetchall()
+            for item in items:
+                item['created_at'] = format_datetime(item.get('created_at'))
             return jsonify({
                 "code": 200,
                 "message": "获取爱心捐赠记录成功",
                 "data": {
-                    "items": cursor.fetchall(),
+                    "items": items,
                     "total": int(summary.get('total') or 0),
                     "total_amount": float(summary.get('total_amount') or 0),
                     "page": page,

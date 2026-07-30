@@ -15,7 +15,7 @@ services:
       # 时区
       - /etc/localtime:/etc/localtime:ro
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
 
   # ===== Flask 后端 =====
   backend:
@@ -28,12 +28,19 @@ services:
       DB_PASSWORD: Enmo@123
       DB_NAME: omm
       TZ: Asia/Shanghai
+      # 公网部署必须在 .env 中设置高强度随机值，并将 SESSION_COOKIE_SECURE 改为 true。
+      SECRET_KEY: ${SECRET_KEY:-dev-only-change-before-production}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000}
+      ALLOW_DEMO_PASSWORD_RESET: ${ALLOW_DEMO_PASSWORD_RESET:-true}
+      FLASK_DEBUG: ${FLASK_DEBUG:-false}
+      APP_ENV: ${APP_ENV:-development}
       # 行政区官方边界（高德 Web 服务 Key；需开通「行政区域查询」）
       AMAP_WEB_KEY: ${AMAP_WEB_KEY:-09b7fc116d61f287bdc729d4818cb583}
     depends_on:
       - db
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     volumes:
       - /etc/localtime:/etc/localtime:ro
     healthcheck:
@@ -53,7 +60,7 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "3000:80"
+      - "127.0.0.1:3000:80"
     volumes:
       - /etc/localtime:/etc/localtime:ro
 

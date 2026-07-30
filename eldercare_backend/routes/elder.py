@@ -222,7 +222,8 @@ def my_services():
                 SELECT o.order_id, o.service_type, o.service_time, o.status, o.address,
                        o.volunteer_id, v.real_name AS volunteer_name,
                        o.proxy_created_by, o.proxy_reason,
-                       pu.real_name AS proxy_family_name,
+                       pu.real_name AS proxy_creator_name,
+                       pu.role AS proxy_creator_role,
                        d.dispatch_state,
                        EXISTS(SELECT 1 FROM reviews r WHERE r.order_id = o.order_id) AS review_submitted
                 FROM orders o
@@ -255,9 +256,12 @@ def my_services():
                     'canReview': status == 'completed' and bool(row['volunteer_id']) and not bool(row['review_submitted']),
                     'canComplete': can_complete,
                     'proxyCreatedBy': proxy_by,
-                    'proxyFamilyName': row.get('proxy_family_name'),
+                    'proxyCreatorName': row.get('proxy_creator_name'),
+                    'proxyCreatorRole': row.get('proxy_creator_role'),
+                    'proxyFamilyName': row.get('proxy_creator_name'),
                     'proxyReason': row.get('proxy_reason'),
-                    'isFamilyProxy': bool(proxy_by),
+                    'isProxy': bool(proxy_by),
+                    'isFamilyProxy': bool(proxy_by) and row.get('proxy_creator_role') == 'family',
                 })
             return jsonify({"code": 200, "message": "查询成功", "data": services})
     finally:

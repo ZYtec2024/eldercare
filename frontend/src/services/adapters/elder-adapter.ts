@@ -115,10 +115,17 @@ export async function fetchPendingServices(userId = 201) {
     canReview: Boolean(row.canReview ?? row.can_review),
     canComplete: Boolean(row.canComplete ?? row.can_complete),
     proxyCreatedBy: Number(row.proxyCreatedBy ?? row.proxy_created_by ?? 0) || null,
+    proxyCreatorName: typeof (row.proxyCreatorName ?? row.proxy_creator_name ?? row.proxyFamilyName ?? row.proxy_family_name) === 'string'
+      ? String(row.proxyCreatorName ?? row.proxy_creator_name ?? row.proxyFamilyName ?? row.proxy_family_name)
+      : null,
+    proxyCreatorRole: typeof (row.proxyCreatorRole ?? row.proxy_creator_role) === 'string'
+      ? String(row.proxyCreatorRole ?? row.proxy_creator_role)
+      : null,
     proxyFamilyName: typeof (row.proxyFamilyName ?? row.proxy_family_name) === 'string'
       ? String(row.proxyFamilyName ?? row.proxy_family_name)
       : null,
-    isFamilyProxy: Boolean(row.isFamilyProxy ?? row.is_family_proxy ?? row.proxyCreatedBy ?? row.proxy_created_by),
+    isProxy: Boolean(row.isProxy ?? row.is_proxy ?? row.proxyCreatedBy ?? row.proxy_created_by),
+    isFamilyProxy: Boolean(row.isFamilyProxy ?? row.is_family_proxy),
   }))
 }
 

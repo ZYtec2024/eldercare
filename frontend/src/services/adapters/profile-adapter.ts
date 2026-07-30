@@ -140,6 +140,12 @@ export async function fetchProfileInfo(userId: number, role: Role) {
         : typeof data.medical_history === 'string'
           ? data.medical_history
           : undefined,
+    personalityBio:
+      typeof data.personalityBio === 'string'
+        ? data.personalityBio
+        : typeof data.personality_bio === 'string'
+          ? data.personality_bio
+          : undefined,
     alertSysThreshold: toNumber(data.alertSysThreshold ?? data.alert_sys_threshold),
     skills:
       typeof data.skills === 'string'
@@ -165,6 +171,7 @@ export async function updateProfileInfo(payload: {
   email: string
   realName?: string
   medicalHistory?: string
+  personalityBio?: string
   alertSysThreshold?: number
   skills?: string
 }) {
@@ -177,6 +184,7 @@ export async function updateProfileInfo(payload: {
       email: payload.email,
       real_name: payload.realName,
       medical_history: payload.medicalHistory,
+      personality_bio: payload.personalityBio,
       alert_sys_threshold: payload.alertSysThreshold,
       skills: payload.skills,
     },

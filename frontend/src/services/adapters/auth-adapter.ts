@@ -18,6 +18,7 @@ interface LoginResponseData {
   review_status?: ReviewState
   is_root?: boolean
   region_scopes?: string[]
+  portal_session_token?: string
 }
 
 function buildSessionUser(data: LoginResponseData): SessionUser {
@@ -32,6 +33,7 @@ function buildSessionUser(data: LoginResponseData): SessionUser {
     lastVisitedRoute: getDefaultRoute(data.role),
     isRoot: Boolean(data.is_root),
     regionScopes: Array.isArray(data.region_scopes) ? data.region_scopes.map(String) : [],
+    portalToken: data.portal_session_token,
   }
 }
 
@@ -89,6 +91,7 @@ export async function resetPassword(payload: PasswordResetPayload) {
   const response = await http.post<ApiEnvelope<null>>('/auth/forgot-password', {
     username: payload.username,
     phone: payload.phone,
+    email: payload.email,
     new_password: payload.newPassword,
   })
 
@@ -96,7 +99,20 @@ export async function resetPassword(payload: PasswordResetPayload) {
 }
 
 export async function restoreSession(session: SessionUser) {
-  return Promise.resolve(session)
+  const response = await http.get<ApiEnvelope<LoginResponseData>>('/auth/session')
+  const restored = buildSessionUser(response.data.data)
+  if (restored.userId !== session.userId) {
+    throw new Error('当前标签页的旧登录状态需要重新登录')
+  }
+  return {
+    ...restored,
+    portalToken: restored.portalToken || session.portalToken,
+    lastVisitedRoute: session.lastVisitedRoute || getDefaultRoute(response.data.data.role),
+  }
+}
+
+export async function logoutSession() {
+  await http.post<ApiEnvelope<null>>('/auth/logout')
 }
 
 export async function changePassword(payload: {

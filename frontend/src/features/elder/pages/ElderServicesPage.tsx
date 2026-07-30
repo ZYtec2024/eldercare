@@ -7,6 +7,7 @@ import { fetchPendingServices, submitServiceReview } from '@/services/adapters/e
 import { cancelElderDispatchOrder, completeElderDispatchOrder } from '@/services/adapters/dispatch-adapter'
 import { likeVolunteer } from '@/services/adapters/volunteer-adapter'
 import type { PendingService } from '@/types/domain'
+import { proxyActorName, proxyOrderAlertTitle, proxyOrderTag } from '@/features/elder/proxy-order-labels'
 
 const statusMap: Record<string, { color: string; text: string }> = {
   pending: { color: 'orange', text: '等待接单' },
@@ -28,18 +29,20 @@ export default function ElderServicesPage() {
   const [likedOrders, setLikedOrders] = useState<Set<number>>(new Set())
   const [form] = Form.useForm()
 
-  const load = () => {
+  const load = (silent = false) => {
     if (!session) return
-    setLoading(true)
+    if (!silent) setLoading(true)
     fetchPendingServices(session.userId)
       .then(setServices)
       .catch(() => {})
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (!silent) setLoading(false)
+      })
   }
 
   useEffect(() => {
     load()
-    const timer = window.setInterval(load, 4000)
+    const timer = window.setInterval(() => load(true), 4000)
     return () => window.clearInterval(timer)
   }, [session?.userId])
 
@@ -56,7 +59,7 @@ export default function ElderServicesPage() {
       message.success('评价已提交')
       setReviewTarget(null)
       form.resetFields()
-      load()
+      load(true)
     } catch (err: any) {
       message.error(err?.message || '评价失败')
     } finally {
@@ -69,7 +72,7 @@ export default function ElderServicesPage() {
     setCompletingId(orderId)
     try {
       message.success((await completeElderDispatchOrder(orderId, session.userId)).message || '已确认服务完成')
-      load()
+      load(true)
     } catch (err: any) {
       message.error(err?.message || '确认完成失败')
     } finally {
@@ -82,7 +85,7 @@ export default function ElderServicesPage() {
     setCancellingId(orderId)
     try {
       message.success((await cancelElderDispatchOrder(orderId, session.userId)).message || '已取消')
-      load()
+      load(true)
     } catch (err: any) {
       message.error(err?.message || '取消失败')
     } finally {
@@ -107,7 +110,7 @@ export default function ElderServicesPage() {
 
   const active = services.filter((item) => ['pending', 'accepted', 'in_progress'].includes(item.status))
   const history = services.filter((item) => !['pending', 'accepted', 'in_progress'].includes(item.status))
-  const proxyActive = active.filter((item) => item.isFamilyProxy)
+  const proxyActive = active.filter((item) => item.isProxy)
 
   const renderActions = (item: PendingService) => {
     const isLiked = likedOrders.has(item.orderId)
@@ -185,11 +188,11 @@ export default function ElderServicesPage() {
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-lg font-medium text-slate-900">{item.serviceType}</span>
             <Tag color={st.color}>{st.text}</Tag>
-            {item.isFamilyProxy ? <Tag color="gold">家属代下</Tag> : null}
+            {item.isProxy ? <Tag color="gold">{proxyOrderTag(item.proxyCreatorRole)}</Tag> : null}
           </div>
-          {item.isFamilyProxy ? (
+          {item.isProxy ? (
             <div className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              {item.proxyFamilyName || '家属'}已为您代下此单
+              {proxyActorName(item.proxyCreatorName, item.proxyCreatorRole)}已为您代下此单
               {item.address ? ` · ${item.address}` : ''}
             </div>
           ) : null}
@@ -216,9 +219,9 @@ export default function ElderServicesPage() {
         <Alert
           showIcon
           type="warning"
-          message="家属已为您代下服务单"
+          message={proxyOrderAlertTitle(proxyActive.map((item) => item.proxyCreatorRole))}
           description={proxyActive.slice(0, 3).map((item) => (
-            `${item.proxyFamilyName || '家属'} · ${item.serviceType}${item.address ? ` · ${item.address}` : ''}`
+            `${proxyActorName(item.proxyCreatorName, item.proxyCreatorRole)} · ${item.serviceType}${item.address ? ` · ${item.address}` : ''}`
           )).join('；')}
         />
       ) : null}
