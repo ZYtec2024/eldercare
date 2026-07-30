@@ -37,11 +37,16 @@ export default function ElderCompanionPage() {
   const [recording, setRecording] = useState(false)
   const [autoSpeak, setAutoSpeak] = useState(true)
   const [busyAudio, setBusyAudio] = useState(false)
+  const [playing, setPlaying] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const chunksRef = useRef<Blob[]>([])
+  const recordStartRef = useRef<number>(0)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const maxVolumeRef = useRef<number>(0)
   const nextIdRef = useRef(2)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const currentUrlRef = useRef<string | null>(null)
@@ -50,10 +55,16 @@ export default function ElderCompanionPage() {
   const canRecord = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
 
   useEffect(() => () => {
+    const audio = audioRef.current
+    if (audio) {
+      audio.pause()
+      audio.currentTime = 0
+    }
     if (currentUrlRef.current) {
       URL.revokeObjectURL(currentUrlRef.current)
     }
     streamRef.current?.getTracks().forEach((track) => track.stop())
+    audioCtxRef.current?.close().catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -88,7 +99,21 @@ export default function ElderCompanionPage() {
     return nextMessage
   }
 
+  const stopAudio = () => {
+    const audio = audioRef.current
+    if (audio) {
+      audio.pause()
+      audio.currentTime = 0
+    }
+    setPlaying(false)
+  }
+
   const playBlob = async (blob: Blob) => {
+    // 如果正在播放，再次点击则中止播放
+    if (playing) {
+      stopAudio()
+      return
+    }
     if (currentUrlRef.current) {
       URL.revokeObjectURL(currentUrlRef.current)
     }
@@ -97,9 +122,16 @@ export default function ElderCompanionPage() {
     const audio = audioRef.current || new Audio()
     audioRef.current = audio
     audio.src = url
-    await audio.play().catch(() => {
+    audio.onended = () => setPlaying(false)
+    audio.onpause = () => setPlaying(false)
+    audio.onerror = () => setPlaying(false)
+    try {
+      setPlaying(true)
+      await audio.play()
+    } catch {
+      setPlaying(false)
       toast.warning('语音已生成，可以点击消息右侧的朗读按钮重试')
-    })
+    }
   }
 
   const speakText = async (text: string) => {
@@ -188,6 +220,32 @@ export default function ElderCompanionPage() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       streamRef.current = stream
       chunksRef.current = []
+      recordStartRef.current = Date.now()
+      maxVolumeRef.current = 0
+
+      // 用 AnalyserNode 实时监测时域音量，判断录音是否包含实际语音
+      const audioCtx = new AudioContext()
+      audioCtxRef.current = audioCtx
+      const source = audioCtx.createMediaStreamSource(stream)
+      const analyser = audioCtx.createAnalyser()
+      analyser.fftSize = 512
+      analyserRef.current = analyser
+      source.connect(analyser)
+      const timeData = new Float32Array(analyser.fftSize)
+      let volumeTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
+        if (!analyserRef.current) return
+        analyserRef.current.getFloatTimeDomainData(timeData)
+        // 时域 RMS：128 是零线，偏离越大音量越高
+        let sum = 0
+        for (let i = 0; i < timeData.length; i++) {
+          sum += timeData[i] * timeData[i]
+        }
+        const rms = Math.sqrt(sum / timeData.length) * 100
+        if (rms > maxVolumeRef.current) {
+          maxVolumeRef.current = rms
+        }
+      }, 100)
+
       const recorder = new MediaRecorder(stream)
       recorderRef.current = recorder
       recorder.ondataavailable = (event) => {
@@ -198,18 +256,37 @@ export default function ElderCompanionPage() {
       recorder.onstop = async () => {
         setRecording(false)
         streamRef.current?.getTracks().forEach((track) => track.stop())
+        if (volumeTimer) { clearInterval(volumeTimer); volumeTimer = null }
+        audioCtxRef.current?.close().catch(() => {})
+        audioCtxRef.current = null
+        analyserRef.current = null
+
+        const duration = Date.now() - recordStartRef.current
         const audioBlob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' })
-        if (!audioBlob.size) {
+        if (duration < 1500 || audioBlob.size < 4096) {
+          toast.warning('录音时长太短，请说话后再结束录音')
+          return
+        }
+        // 时域 RMS（0-100 尺度）：<1.0 为几乎静音，环境噪音通常在 0.5-2.0，语音在 3.0+
+        if (maxVolumeRef.current < 1.8) {
+          toast.warning('未检测到有效语音，请说话后再结束录音')
           return
         }
         try {
           const text = await transcribeCompanionAudio(session!.userId, audioBlob)
-          if (!text.trim()) {
+          const trimmed = text.trim()
+          if (!trimmed || !/[^\x00-\xff]/.test(trimmed) || trimmed.length < 2) {
             toast.warning('没有识别到有效语音内容')
             return
           }
-          setDraft(text)
-          await submitMessage(text)
+          // 转写 < 5 字 → 可能为噪音幻觉，先放入输入框让用户确认
+          if (trimmed.length < 5) {
+            setDraft(trimmed)
+            toast.warning('识别内容较短，请确认后手动发送')
+            return
+          }
+          // ≥ 5 字 → 自动发送（老人友好）
+          await submitMessage(trimmed)
         } catch (error: any) {
           toast.error(error?.message || '语音转写失败')
         }
@@ -326,12 +403,18 @@ export default function ElderCompanionPage() {
                         <Button
                           type="text"
                           size="small"
-                          icon={<SoundOutlined />}
+                          icon={playing ? <StopOutlined /> : <SoundOutlined />}
                           className="!h-6 !px-2 !text-xs"
-                          loading={busyAudio}
-                          onClick={() => void speakText(item.content)}
+                          loading={busyAudio && !playing}
+                          onClick={() => {
+                            if (playing) {
+                              stopAudio()
+                            } else {
+                              void speakText(item.content)
+                            }
+                          }}
                         >
-                          朗读
+                          {playing ? '停止' : '朗读'}
                         </Button>
                       )}
                     </Space>

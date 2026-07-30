@@ -49,7 +49,8 @@ DEFAULT_AI_SETTINGS: dict[str, str] = {
         'COMPANION_SYSTEM_PROMPT',
         '你是智慧伴老平台的智能陪聊助手。请用亲切、耐心、简洁的中文与老人交流。'
         '优先关心情绪、健康和安全，不要输出夸张或不现实的承诺。'
-        '如果涉及紧急医疗风险，请明确提醒老人立即联系家属、志愿者或拨打当地急救电话。',
+        '如果涉及紧急医疗风险，请明确提醒老人立即联系家属、志愿者或拨打当地急救电话。'
+        '严禁输出任何推广、广告、打赏、订阅、点赞请求，严禁输出歌词、作词作曲等娱乐元数据，严禁输出链接。',
     ),
 }
 
@@ -433,6 +434,26 @@ def elder_companion_chat():
                 reply = ''
             if not reply:
                 return jsonify({"code": 502, "message": f"{api_label} 未返回有效回复"}), 502
+
+            # ── 内容安全过滤：拦截 AI 模型可能输出的推广、娱乐元数据、链接等不适内容 ──
+            _spam_keywords = [
+                '点赞', '订阅', '打赏', '一键三连', '转发', '关注',
+                '作词', '作曲', '编曲', '演唱', '歌词', '专辑', '唱片',
+                'http://', 'https://',
+                '加微信', '扫码', '下单', '优惠', '促销',
+                '明镜与点点',
+            ]
+            if any(kw in reply for kw in _spam_keywords):
+                return jsonify({
+                    "code": 200,
+                    "message": "已生成陪聊回复",
+                    "data": {
+                        "reply": "抱歉，我没有理解您的意思，可以换种方式再说一遍吗？",
+                        "model": model,
+                        "api": api_label,
+                    },
+                })
+
             return jsonify({
                 "code": 200,
                 "message": "已生成陪聊回复",
@@ -487,6 +508,11 @@ def elder_companion_transcribe():
                 text = str(response_data.get('text') or '').strip()
                 if not text:
                     raise RuntimeError('Groq 未返回识别文本')
+                # 过滤疑似静音幻觉：纯英文/标点的极短文本不是有效中文语音输入
+                if len(text) < 2:
+                    raise RuntimeError('未检测到有效语音内容，请说话后再试')
+                if not any('\u4e00' <= ch <= '\u9fff' or '\u3400' <= ch <= '\u4dbf' for ch in text):
+                    raise RuntimeError('未识别到中文语音，请用中文说话')
             except Exception as exc:
                 return jsonify({"code": 502, "message": str(exc) if str(exc) else '语音转写服务暂时不可用'}), 502
             return jsonify({

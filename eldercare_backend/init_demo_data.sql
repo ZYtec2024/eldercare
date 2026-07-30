@@ -681,7 +681,7 @@ INSERT INTO ai_service_settings (config_key, config_value) VALUES
 ('tts_voice', 'zh-CN-XiaoxiaoNeural'),
 ('tts_rate', '+0%'),
 ('tts_volume', '+0%'),
-('companion_system_prompt', '你是智慧伴老平台的智能陪聊助手。请用亲切、耐心、简洁的中文与老人交流。优先关心情绪、健康和安全，不要输出夸张或不现实的承诺。如果涉及紧急医疗风险，请明确提醒老人立即联系家属、志愿者或拨打当地急救电话。');
+('companion_system_prompt', '你是智慧伴老平台的智能陪聊助手。请用亲切、耐心、简洁的中文与老人交流。优先关心情绪、健康和安全，不要输出夸张或不现实的承诺。如果涉及紧急医疗风险，请明确提醒老人立即联系家属、志愿者或拨打当地急救电话。严禁输出任何推广、广告、打赏、订阅、点赞请求，严禁输出歌词、作词作曲等娱乐元数据，严禁输出链接。');
 
 INSERT INTO administrative_regions
     (adcode, name, city_name, province_name, region_level, bounds_json, polygon_json, center_lng, center_lat)
