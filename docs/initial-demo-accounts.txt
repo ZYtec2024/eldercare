@@ -1,0 +1,90 @@
+智慧养老系统初始演示账号
+================================
+
+说明：
+- 以下账号仅用于本地演示、答辩和试点测试。
+- 初始化 SQL 中不保存明文密码，数据库 users.password_hash 字段保存的是 scrypt 哈希。
+- 正式上线前应修改默认演示密码，或删除不需要的演示账号。
+
+
+管理员账号（6个）
+--------------------------------
+类型            用户名              密码          姓名
+总管理员        admin               admin123      系统管理员
+宝山管理员      admin_baoshan       admin123      宝山管理0
+宝山管理员      admin_baoshan1      admin123      宝山管理1
+浦东管理员      admin_pudong        Admin@2026    浦东新区管理员
+朝阳管理员      admin_chaoyang      Admin@2026    朝阳区管理员
+测试管理员      admin_xinan         admin123      1
+
+
+主要老人账号
+--------------------------------
+用户名              密码       姓名
+elder_zhang         pass123    张大爷
+elder_li            pass123    李奶奶
+elder_wang          pass123    王伯伯
+elder_chen          pass123    陈阿姨
+elder_liu           pass123    刘爷爷
+elder_chenzhiang    pass123    陈之昂1
+
+
+批量老人账号
+--------------------------------
+区域        用户名范围                              密码       数量
+宝山沙盘    sim_elder_06 ～ sim_elder_25             pass123    20
+浦东新区    demo_310115_elder_1 ～ demo_310115_elder_6   pass123    6
+北京朝阳    demo_110105_elder_1 ～ demo_110105_elder_6   pass123    6
+
+
+主要家属账号
+--------------------------------
+用户名          密码       姓名
+zhangsan        pass123    张三
+lisi_family     pass123    李思
+wangwu_family   pass123    王五
+zhaoliu_family  pass123    赵六
+test            pass123    111
+
+
+批量家属账号
+--------------------------------
+区域        用户名范围                                  密码       数量
+浦东新区    demo_310115_family_1 ～ demo_310115_family_6   pass123    6
+北京朝阳    demo_110105_family_1 ～ demo_110105_family_6   pass123    6
+
+家属编号与老人编号对应，例如：
+- demo_310115_family_1 绑定 demo_310115_elder_1
+- demo_310115_family_2 绑定 demo_310115_elder_2
+
+
+主要志愿者账号
+--------------------------------
+用户名              密码       姓名
+vol_wangjiaming     pass123    王佳明
+vol_lizhiqiang      pass123    李志强
+vol_chenxiaoyu      pass123    陈小宇
+vol_zhoumin         pass123    周敏
+vol_sunhao          pass123    孙浩
+vol_huangxin        pass123    黄鑫
+sim_vol_07          pass123    调度志愿者07
+sim_vol_08          pass123    调度志愿者08
+vol_chenzhiang      pass123    陈之昂
+
+
+浦东志愿者
+--------------------------------
+用户名                密码       姓名
+demo_310115_vol_1     pass123    浦东志愿者李晨
+demo_310115_vol_2     pass123    浦东志愿者王宁
+demo_310115_vol_3     pass123    浦东志愿者陈悦
+demo_310115_vol_4     pass123    浦东志愿者赵峰
+
+
+北京朝阳志愿者
+--------------------------------
+用户名                密码       姓名
+demo_110105_vol_1     pass123    朝阳志愿者刘洋
+demo_110105_vol_2     pass123    朝阳志愿者周倩
+demo_110105_vol_3     pass123    朝阳志愿者马强
+demo_110105_vol_4     pass123    朝阳志愿者何静
