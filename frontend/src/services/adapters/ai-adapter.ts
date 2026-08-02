@@ -9,6 +9,10 @@ export interface CompanionConfig {
   hasGroqApiKey: boolean
   groqChatModel: string
   groqTranscribeModel: string
+  transcribeProvider: 'groq' | 'tencent'
+  hasTencentAsrCredentials: boolean
+  tencentAsrRegion: string
+  tencentAsrEngineModelType: string
   hasChatApiKey: boolean
   chatApiBaseUrl: string
   chatModelName: string
@@ -51,6 +55,11 @@ export async function updateCompanionConfig(payload: {
   groqApiKey?: string
   groqChatModel: string
   groqTranscribeModel: string
+  transcribeProvider: 'groq' | 'tencent'
+  tencentAsrSecretId?: string
+  tencentAsrSecretKey?: string
+  tencentAsrRegion: string
+  tencentAsrEngineModelType: string
   chatApiKey?: string
   chatApiBaseUrl: string
   chatModelName: string
@@ -67,6 +76,11 @@ export async function updateCompanionConfig(payload: {
     groq_api_key: payload.groqApiKey,
     groq_chat_model: payload.groqChatModel,
     groq_transcribe_model: payload.groqTranscribeModel,
+    transcribe_provider: payload.transcribeProvider,
+    tencent_asr_secret_id: payload.tencentAsrSecretId,
+    tencent_asr_secret_key: payload.tencentAsrSecretKey,
+    tencent_asr_region: payload.tencentAsrRegion,
+    tencent_asr_engine_model_type: payload.tencentAsrEngineModelType,
     chat_api_key: payload.chatApiKey,
     chat_api_base_url: payload.chatApiBaseUrl,
     chat_model_name: payload.chatModelName,

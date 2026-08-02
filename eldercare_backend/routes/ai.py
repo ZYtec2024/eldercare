@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import concurrent.futures
+import json
 import os
+import subprocess
 import tempfile
+import uuid
 from io import BytesIO
 from typing import Any
 
@@ -23,6 +27,23 @@ try:
 except ImportError:  # pragma: no cover - dependency is declared in requirements.txt
     edge_tts = None
 
+try:
+    import imageio_ffmpeg
+except ImportError:  # pragma: no cover - dependency is declared in requirements.txt
+    imageio_ffmpeg = None
+
+try:
+    from tencentcloud.asr.v20190614 import asr_client, models as asr_models
+    from tencentcloud.common import credential as tencent_credential
+    from tencentcloud.common.profile.client_profile import ClientProfile
+    from tencentcloud.common.profile.http_profile import HttpProfile
+except ImportError:  # pragma: no cover - optional unless Tencent ASR is selected
+    asr_client = None
+    asr_models = None
+    tencent_credential = None
+    ClientProfile = None
+    HttpProfile = None
+
 
 ai_bp = Blueprint('ai', __name__)
 
@@ -32,6 +53,12 @@ DEFAULT_AI_SETTINGS: dict[str, str] = {
     'groq_api_key': os.getenv('GROQ_API_KEY', ''),
     'groq_chat_model': os.getenv('GROQ_CHAT_MODEL', 'llama-3.1-8b-instant'),
     'groq_transcribe_model': os.getenv('GROQ_TRANSCRIBE_MODEL', 'whisper-large-v3'),
+    # Speech-to-text provider. Groq remains the backwards-compatible default.
+    'transcribe_provider': os.getenv('TRANSCRIBE_PROVIDER', 'groq'),
+    'tencent_asr_secret_id': os.getenv('TENCENT_ASR_SECRET_ID', ''),
+    'tencent_asr_secret_key': os.getenv('TENCENT_ASR_SECRET_KEY', ''),
+    'tencent_asr_region': os.getenv('TENCENT_ASR_REGION', 'ap-shanghai'),
+    'tencent_asr_engine_model_type': os.getenv('TENCENT_ASR_ENGINE_MODEL_TYPE', '16k_zh'),
     # Custom chat model (OpenAI-compatible API) — when set, overrides Groq for chat
     'chat_api_key': os.getenv('CHAT_API_KEY', ''),
     'chat_api_base_url': os.getenv('CHAT_API_BASE_URL', ''),
@@ -235,6 +262,90 @@ def _groq_request(path: str, api_key: str, payload: dict[str, Any]) -> dict[str,
     return response_data
 
 
+def _convert_to_tencent_wav(audio: bytes, filename: str) -> bytes:
+    """Convert browser-recorded audio (usually WebM/Opus) to Tencent ASR WAV."""
+    if imageio_ffmpeg is None:
+        raise RuntimeError('服务器未安装音频转换组件，请重新构建后端镜像')
+    suffix = os.path.splitext(str(filename or 'audio.webm'))[1] or '.webm'
+    input_path = ''
+    output_path = ''
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as source:
+            source.write(audio)
+            input_path = source.name
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as target:
+            output_path = target.name
+        completed = subprocess.run(
+            [
+                imageio_ffmpeg.get_ffmpeg_exe(), '-hide_banner', '-loglevel', 'error', '-y',
+                '-i', input_path, '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', output_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if completed.returncode != 0:
+            detail = str(completed.stderr or '').strip()[-300:]
+            raise RuntimeError(f'录音格式转换失败：{detail}' if detail else '录音格式转换失败')
+        with open(output_path, 'rb') as converted:
+            wav_audio = converted.read()
+        if not wav_audio:
+            raise RuntimeError('录音格式转换后没有音频数据')
+        if len(wav_audio) > 3 * 1024 * 1024:
+            raise RuntimeError('录音过长，请控制在 60 秒以内')
+        return wav_audio
+    except FileNotFoundError as exc:
+        raise RuntimeError('服务器未安装音频转换组件，请重新构建后端镜像') from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError('录音格式转换超时，请缩短录音后重试') from exc
+    finally:
+        for path in (input_path, output_path):
+            if path:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+
+def _tencent_transcribe(audio: bytes, filename: str, settings: dict[str, str]) -> tuple[str, str]:
+    if not all((asr_client, asr_models, tencent_credential, ClientProfile, HttpProfile)):
+        raise RuntimeError('腾讯云语音识别 SDK 未安装，请重新构建后端镜像')
+
+    secret_id = str(settings.get('tencent_asr_secret_id') or '').strip()
+    secret_key = str(settings.get('tencent_asr_secret_key') or '').strip()
+    if not secret_id or not secret_key:
+        raise RuntimeError('尚未配置腾讯云 ASR SecretId 和 SecretKey，请联系总管理员')
+
+    region = str(settings.get('tencent_asr_region') or 'ap-shanghai').strip()
+    engine = str(settings.get('tencent_asr_engine_model_type') or '16k_zh').strip()
+    wav_audio = _convert_to_tencent_wav(audio, filename)
+
+    cred = tencent_credential.Credential(secret_id, secret_key)
+    http_profile = HttpProfile()
+    http_profile.endpoint = 'asr.tencentcloudapi.com'
+    client_profile = ClientProfile()
+    client_profile.httpProfile = http_profile
+    client = asr_client.AsrClient(cred, region, client_profile)
+    req = asr_models.SentenceRecognitionRequest()
+    req.from_json_string(json.dumps({
+        'ProjectId': 0,
+        'SubServiceType': 2,
+        'EngSerViceType': engine,
+        'SourceType': 1,
+        'VoiceFormat': 'wav',
+        'UsrAudioKey': uuid.uuid4().hex,
+        'Data': base64.b64encode(wav_audio).decode('ascii'),
+        'DataLen': len(wav_audio),
+    }))
+    response = client.SentenceRecognition(req)
+    response_data = json.loads(response.to_json_string())
+    text = str(response_data.get('Result') or '').strip()
+    if not text:
+        raise RuntimeError('腾讯云 ASR 未返回识别文本')
+    return text, engine
+
+
 async def _render_tts_audio(text: str, voice: str, rate: str, volume: str) -> bytes:
     if edge_tts is None:
         raise RuntimeError('edge-tts 依赖未安装，无法生成语音')
@@ -283,6 +394,16 @@ def get_ai_config():
                     "has_groq_api_key": _has_api_key(settings.get('groq_api_key', '')),
                     "groq_chat_model": settings.get('groq_chat_model', DEFAULT_AI_SETTINGS['groq_chat_model']),
                     "groq_transcribe_model": settings.get('groq_transcribe_model', DEFAULT_AI_SETTINGS['groq_transcribe_model']),
+                    "transcribe_provider": settings.get('transcribe_provider', DEFAULT_AI_SETTINGS['transcribe_provider']),
+                    "has_tencent_asr_credentials": bool(
+                        _has_api_key(settings.get('tencent_asr_secret_id', ''))
+                        and _has_api_key(settings.get('tencent_asr_secret_key', ''))
+                    ),
+                    "tencent_asr_region": settings.get('tencent_asr_region', DEFAULT_AI_SETTINGS['tencent_asr_region']),
+                    "tencent_asr_engine_model_type": settings.get(
+                        'tencent_asr_engine_model_type',
+                        DEFAULT_AI_SETTINGS['tencent_asr_engine_model_type'],
+                    ),
                     "has_chat_api_key": _has_api_key(settings.get('chat_api_key', '')),
                     "chat_api_base_url": settings.get('chat_api_base_url', DEFAULT_AI_SETTINGS['chat_api_base_url']),
                     "chat_model_name": settings.get('chat_model_name', DEFAULT_AI_SETTINGS['chat_model_name']),
@@ -302,6 +423,9 @@ def get_ai_config():
 @ai_bp.route('/admin/ai-config', methods=['PUT'])
 def update_ai_config():
     data = request.get_json(silent=True) or {}
+    requested_transcribe_provider = str(data.get('transcribe_provider') or '').strip().lower()
+    if requested_transcribe_provider and requested_transcribe_provider not in ('groq', 'tencent'):
+        return jsonify({"code": 400, "message": "语音识别供应商仅支持 Groq 或腾讯云 ASR"}), 400
     conn = get_db_connection()
     if not conn:
         return jsonify({"code": 500, "message": "数据库连接失败"}), 500
@@ -315,6 +439,11 @@ def update_ai_config():
                 'groq_api_key': str(data.get('groq_api_key') or '').strip() or current.get('groq_api_key', ''),
                 'groq_chat_model': str(data.get('groq_chat_model') or current.get('groq_chat_model', DEFAULT_AI_SETTINGS['groq_chat_model'])).strip(),
                 'groq_transcribe_model': str(data.get('groq_transcribe_model') or current.get('groq_transcribe_model', DEFAULT_AI_SETTINGS['groq_transcribe_model'])).strip(),
+                'transcribe_provider': str(data.get('transcribe_provider') or current.get('transcribe_provider', DEFAULT_AI_SETTINGS['transcribe_provider'])).strip(),
+                'tencent_asr_secret_id': str(data.get('tencent_asr_secret_id') or '').strip() or current.get('tencent_asr_secret_id', ''),
+                'tencent_asr_secret_key': str(data.get('tencent_asr_secret_key') or '').strip() or current.get('tencent_asr_secret_key', ''),
+                'tencent_asr_region': str(data.get('tencent_asr_region') or current.get('tencent_asr_region', DEFAULT_AI_SETTINGS['tencent_asr_region'])).strip(),
+                'tencent_asr_engine_model_type': str(data.get('tencent_asr_engine_model_type') or current.get('tencent_asr_engine_model_type', DEFAULT_AI_SETTINGS['tencent_asr_engine_model_type'])).strip(),
                 'chat_api_key': str(data.get('chat_api_key') or '').strip() or current.get('chat_api_key', ''),
                 'chat_api_base_url': str(data.get('chat_api_base_url') or current.get('chat_api_base_url', DEFAULT_AI_SETTINGS['chat_api_base_url'])).strip(),
                 'chat_model_name': str(data.get('chat_model_name') or current.get('chat_model_name', DEFAULT_AI_SETTINGS['chat_model_name'])).strip(),
@@ -335,6 +464,13 @@ def update_ai_config():
                     "has_groq_api_key": _has_api_key(updates['groq_api_key']),
                     "groq_chat_model": updates['groq_chat_model'],
                     "groq_transcribe_model": updates['groq_transcribe_model'],
+                    "transcribe_provider": updates['transcribe_provider'],
+                    "has_tencent_asr_credentials": bool(
+                        _has_api_key(updates['tencent_asr_secret_id'])
+                        and _has_api_key(updates['tencent_asr_secret_key'])
+                    ),
+                    "tencent_asr_region": updates['tencent_asr_region'],
+                    "tencent_asr_engine_model_type": updates['tencent_asr_engine_model_type'],
                     "has_chat_api_key": _has_api_key(updates['chat_api_key']),
                     "chat_api_base_url": updates['chat_api_base_url'],
                     "chat_model_name": updates['chat_model_name'],
@@ -490,9 +626,9 @@ def elder_companion_transcribe():
             if error:
                 return error
             settings = _load_settings(cursor)
-            api_key = str(settings.get('groq_api_key') or '').strip()
-            if not api_key:
-                return jsonify({"code": 400, "message": "尚未配置 Groq API Key，请联系总管理员"}), 400
+            provider = str(settings.get('transcribe_provider') or 'groq').strip().lower()
+            if provider not in ('groq', 'tencent'):
+                return jsonify({"code": 400, "message": "暂不支持当前语音识别供应商"}), 400
 
             uploaded = request.files.get('audio') or request.files.get('file')
             if not uploaded:
@@ -502,22 +638,36 @@ def elder_companion_transcribe():
                 return jsonify({"code": 502, "message": "requests 依赖未安装，无法转写语音"}), 502
 
             try:
-                response = requests.post(
-                    'https://api.groq.com/openai/v1/audio/transcriptions',
-                    headers={'Authorization': f'Bearer {api_key}'},
-                    files={'file': (uploaded.filename or 'audio.webm', uploaded.read(), uploaded.mimetype or 'application/octet-stream')},
-                    data={'model': str(settings.get('groq_transcribe_model') or DEFAULT_AI_SETTINGS['groq_transcribe_model']), 'language': 'zh'},
-                )
-                try:
-                    response_data = response.json()
-                except Exception:
-                    response_data = {'message': response.text[:500]}
-                if not response.ok:
-                    message = response_data.get('error', {}).get('message') if isinstance(response_data, dict) else None
-                    raise RuntimeError(message or response_data.get('message') or 'Groq 语音转写失败')
-                text = str(response_data.get('text') or '').strip()
-                if not text:
-                    raise RuntimeError('Groq 未返回识别文本')
+                filename = uploaded.filename or 'audio.webm'
+                audio = uploaded.read()
+                if not audio:
+                    raise RuntimeError('上传的录音没有音频数据')
+
+                if provider == 'tencent':
+                    text, model = _tencent_transcribe(audio, filename, settings)
+                    api_label = '腾讯云 ASR'
+                else:
+                    api_key = str(settings.get('groq_api_key') or '').strip()
+                    if not api_key:
+                        raise RuntimeError('尚未配置 Groq API Key，请联系总管理员')
+                    model = str(settings.get('groq_transcribe_model') or DEFAULT_AI_SETTINGS['groq_transcribe_model'])
+                    response = requests.post(
+                        'https://api.groq.com/openai/v1/audio/transcriptions',
+                        headers={'Authorization': f'Bearer {api_key}'},
+                        files={'file': (filename, audio, uploaded.mimetype or 'application/octet-stream')},
+                        data={'model': model, 'language': 'zh'},
+                    )
+                    try:
+                        response_data = response.json()
+                    except Exception:
+                        response_data = {'message': response.text[:500]}
+                    if not response.ok:
+                        message = response_data.get('error', {}).get('message') if isinstance(response_data, dict) else None
+                        raise RuntimeError(message or response_data.get('message') or 'Groq 语音转写失败')
+                    text = str(response_data.get('text') or '').strip()
+                    if not text:
+                        raise RuntimeError('Groq 未返回识别文本')
+                    api_label = 'Groq Whisper'
                 # 过滤疑似静音幻觉：纯英文/标点的极短文本不是有效中文语音输入
                 if len(text) < 2:
                     raise RuntimeError('未检测到有效语音内容，请说话后再试')
@@ -530,7 +680,8 @@ def elder_companion_transcribe():
                 "message": "语音转写成功",
                 "data": {
                     "text": text,
-                    "model": str(settings.get('groq_transcribe_model') or DEFAULT_AI_SETTINGS['groq_transcribe_model']),
+                    "model": model,
+                    "api": api_label,
                 },
             })
     finally:

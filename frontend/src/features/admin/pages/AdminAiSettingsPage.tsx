@@ -13,8 +13,15 @@ export default function AdminAiSettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [hasGroqApiKey, setHasGroqApiKey] = useState(false)
+  const [hasTencentAsrCredentials, setHasTencentAsrCredentials] = useState(false)
   const [hasChatApiKey, setHasChatApiKey] = useState(false)
   const [hasReportApiKey, setHasReportApiKey] = useState(false)
+  const transcribeProvider = Form.useWatch('transcribeProvider', form) || 'groq'
+  const groqChatModel = Form.useWatch('groqChatModel', form) || 'llama-3.1-8b-instant'
+  const chatApiBaseUrl = Form.useWatch('chatApiBaseUrl', form) || ''
+  const chatModelName = Form.useWatch('chatModelName', form) || ''
+  const reportApiBaseUrl = Form.useWatch('reportApiBaseUrl', form) || ''
+  const reportModelName = Form.useWatch('reportModelName', form) || ''
 
   useEffect(() => {
     if (!session) return
@@ -26,12 +33,18 @@ export default function AdminAiSettingsPage() {
     fetchCompanionConfig(session.userId)
       .then((config) => {
         setHasGroqApiKey(config.hasGroqApiKey)
+        setHasTencentAsrCredentials(config.hasTencentAsrCredentials)
         setHasChatApiKey(config.hasChatApiKey)
         setHasReportApiKey(config.hasReportApiKey)
         form.setFieldsValue({
           groqApiKey: '',
           groqChatModel: config.groqChatModel,
           groqTranscribeModel: config.groqTranscribeModel,
+          transcribeProvider: config.transcribeProvider,
+          tencentAsrSecretId: '',
+          tencentAsrSecretKey: '',
+          tencentAsrRegion: config.tencentAsrRegion,
+          tencentAsrEngineModelType: config.tencentAsrEngineModelType,
           chatApiKey: '',
           chatApiBaseUrl: config.chatApiBaseUrl,
           chatModelName: config.chatModelName,
@@ -60,6 +73,11 @@ export default function AdminAiSettingsPage() {
         groqApiKey: values.groqApiKey,
         groqChatModel: values.groqChatModel,
         groqTranscribeModel: values.groqTranscribeModel,
+        transcribeProvider: values.transcribeProvider,
+        tencentAsrSecretId: values.tencentAsrSecretId,
+        tencentAsrSecretKey: values.tencentAsrSecretKey,
+        tencentAsrRegion: values.tencentAsrRegion,
+        tencentAsrEngineModelType: values.tencentAsrEngineModelType,
         chatApiKey: values.chatApiKey,
         chatApiBaseUrl: values.chatApiBaseUrl,
         chatModelName: values.chatModelName,
@@ -72,10 +90,17 @@ export default function AdminAiSettingsPage() {
         reportModelName: values.reportModelName,
       })
       setHasGroqApiKey(nextConfig.hasGroqApiKey)
+      setHasTencentAsrCredentials(nextConfig.hasTencentAsrCredentials)
       setHasChatApiKey(nextConfig.hasChatApiKey)
       setHasReportApiKey(nextConfig.hasReportApiKey)
       message.success('AI 配置已保存')
-      form.setFieldsValue({ groqApiKey: '', chatApiKey: '', reportApiKey: '' })
+      form.setFieldsValue({
+        groqApiKey: '',
+        tencentAsrSecretId: '',
+        tencentAsrSecretKey: '',
+        chatApiKey: '',
+        reportApiKey: '',
+      })
     } catch (error: any) {
       if (error?.errorFields) return
       message.error(error?.message || '保存失败')
@@ -92,20 +117,29 @@ export default function AdminAiSettingsPage() {
     return <div className="flex justify-center py-20"><Spin size="large" /></div>
   }
 
-  const companionModel = hasChatApiKey && form.getFieldValue('chatModelName')
-    ? form.getFieldValue('chatModelName')
+  const customChatActive = Boolean(hasChatApiKey && chatApiBaseUrl && chatModelName)
+  const companionModel = customChatActive
+    ? `自定义模型 · ${chatModelName}`
     : hasGroqApiKey
-      ? `Groq: ${form.getFieldValue('groqChatModel')}`
+      ? `Groq · ${groqChatModel}`
       : '未配置'
 
-  const reportModel = hasReportApiKey && form.getFieldValue('reportModelName')
-    ? form.getFieldValue('reportModelName')
+  const transcribeService = transcribeProvider === 'tencent'
+    ? hasTencentAsrCredentials ? '腾讯云 ASR' : '腾讯云 ASR（缺少密钥）'
+    : hasGroqApiKey ? 'Groq Whisper' : 'Groq Whisper（缺少密钥）'
+
+  const reportModel = hasReportApiKey && reportApiBaseUrl && reportModelName
+    ? `自定义模型 · ${reportModelName}`
     : '未配置'
+
+  const groqUsage = transcribeProvider === 'groq' || !customChatActive
+    ? '正在使用'
+    : hasGroqApiKey ? '仅作备用' : '未配置'
 
   return (
     <div className="space-y-6">
       <div className="rounded-3xl bg-gradient-to-r from-slate-900 via-slate-800 to-sky-900 px-6 py-7 text-white shadow-xl">
-        <Space align="start" className="w-full justify-between">
+        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <Typography.Title level={2} className="!mb-2 !text-white">
               AI 模型配置
@@ -114,24 +148,28 @@ export default function AdminAiSettingsPage() {
               管理陪聊及周报的默认模型、自定义模型以及 Edge TTS 朗读参数。
             </Typography.Paragraph>
           </div>
-          <div className="flex gap-3">
+          <div className="grid gap-3 sm:grid-cols-3">
             <div className="rounded-2xl bg-white/10 px-4 py-3 backdrop-blur-sm">
               <div className="text-sm text-slate-200">当前陪聊对话模型</div>
-              <div className="mt-1 text-lg font-semibold">{companionModel}</div>
+              <div className="mt-1 whitespace-nowrap text-base font-semibold">{companionModel}</div>
+            </div>
+            <div className="rounded-2xl bg-white/10 px-4 py-3 backdrop-blur-sm">
+              <div className="text-sm text-slate-200">当前语音转文字</div>
+              <div className="mt-1 whitespace-nowrap text-base font-semibold">{transcribeService}</div>
             </div>
             <div className="rounded-2xl bg-white/10 px-4 py-3 backdrop-blur-sm">
               <div className="text-sm text-slate-200">当前周报模型</div>
-              <div className="mt-1 text-lg font-semibold">{reportModel}</div>
+              <div className="mt-1 whitespace-nowrap text-base font-semibold">{reportModel}</div>
             </div>
           </div>
-        </Space>
+        </div>
       </div>
 
       <Alert
         type="info"
         showIcon
-        message="使用说明"
-        description="智能陪聊的语音转写固定使用 Groq Whisper。若自定义模型的三项（API Key + Base URL + 模型名）均填写，对话将优先使用自定义模型而非 Groq。智能周报固定使用自定义模型"
+        message="当前生效链路"
+        description={`语音转文字：${transcribeService}；陪聊回答：${companionModel}；语音朗读：Edge TTS；健康周报：${reportModel}。Groq 当前${groqUsage}。`}
       />
 
       <Card className="!rounded-3xl !shadow-[0_10px_40px_rgba(15,23,42,.08)]" title={<Space><RobotOutlined />模型与服务配置</Space>}>
@@ -142,6 +180,11 @@ export default function AdminAiSettingsPage() {
             groqApiKey: '',
             groqChatModel: 'llama-3.1-8b-instant',
             groqTranscribeModel: 'whisper-large-v3',
+            transcribeProvider: 'groq',
+            tencentAsrSecretId: '',
+            tencentAsrSecretKey: '',
+            tencentAsrRegion: 'ap-shanghai',
+            tencentAsrEngineModelType: '16k_zh',
             chatApiKey: '',
             chatApiBaseUrl: 'https://api.deepseek.com',
             chatModelName: 'deepseek-chat',
@@ -154,7 +197,7 @@ export default function AdminAiSettingsPage() {
           }}
         >
           <div className="grid gap-4 md:grid-cols-2">
-            <Form.Item label="Groq API Key" name="groqApiKey" extra="语音转写始终使用 Groq。留空不修改。">
+            <Form.Item label="Groq API Key" name="groqApiKey" extra="Groq 对话或转写使用；留空不修改。">
               <Input.Password placeholder="gsk_xxx" autoComplete="off" />
             </Form.Item>
             <Form.Item label="Groq 对话模型（默认）" name="groqChatModel" rules={[{ required: true }]}>
@@ -163,6 +206,56 @@ export default function AdminAiSettingsPage() {
             <Form.Item label="Groq 转写模型" name="groqTranscribeModel" rules={[{ required: true }]}>
               <Input placeholder="whisper-large-v3" />
             </Form.Item>
+          </div>
+
+          <Divider plain>
+            <Tag color="cyan">语音转文字（可选供应商）</Tag>
+          </Divider>
+          <Typography.Paragraph type="secondary" className="!mb-4 !text-xs">
+            默认使用 Groq，不影响现有环境。服务器无法访问 Groq 时可切换腾讯云 ASR；密钥留空表示保留原配置。
+          </Typography.Paragraph>
+
+          <div className="grid gap-4 md:grid-cols-3">
+            <Form.Item label="语音识别供应商" name="transcribeProvider" rules={[{ required: true }]}>
+              <Select
+                options={[
+                  { label: 'Groq Whisper', value: 'groq' },
+                  { label: '腾讯云 ASR', value: 'tencent' },
+                ]}
+              />
+            </Form.Item>
+            {transcribeProvider === 'tencent' && (
+              <>
+                <Form.Item
+                  label="腾讯云 SecretId"
+                  name="tencentAsrSecretId"
+                  extra={hasTencentAsrCredentials ? '已配置，留空不修改' : '尚未配置'}
+                  rules={hasTencentAsrCredentials ? [] : [{ required: true, message: '请输入腾讯云 SecretId' }]}
+                >
+                  <Input.Password placeholder="AKID..." autoComplete="off" />
+                </Form.Item>
+                <Form.Item
+                  label="腾讯云 SecretKey"
+                  name="tencentAsrSecretKey"
+                  extra={hasTencentAsrCredentials ? '已配置，留空不修改' : '尚未配置'}
+                  rules={hasTencentAsrCredentials ? [] : [{ required: true, message: '请输入腾讯云 SecretKey' }]}
+                >
+                  <Input.Password placeholder="SecretKey" autoComplete="off" />
+                </Form.Item>
+                <Form.Item label="腾讯云地域" name="tencentAsrRegion" rules={[{ required: true }]} extra="服务器在香港也可以调用上海地域的 ASR">
+                  <Input placeholder="ap-shanghai" />
+                </Form.Item>
+                <Form.Item label="识别引擎" name="tencentAsrEngineModelType" rules={[{ required: true }]}>
+                  <Select
+                    options={[
+                      { label: '中文普通话 16k', value: '16k_zh' },
+                      { label: '中英文大模型 2.0', value: '16k_zh_en_2.0' },
+                      { label: '中文多方言', value: '16k_zh_dialect' },
+                    ]}
+                  />
+                </Form.Item>
+              </>
+            )}
           </div>
 
           <Divider plain>
@@ -257,10 +350,10 @@ export default function AdminAiSettingsPage() {
             <div>
               <div className="text-sm font-medium text-slate-700">服务状态</div>
               <div className="text-xs text-slate-500">
-                Groq: {hasGroqApiKey ? '已配置' : '未配置'} · 自定义模型: {hasChatApiKey ? '已配置' : '未配置'} · 周报模型: {hasReportApiKey ? '已配置' : '未配置'} · 保存后立即生效
+                当前语音：{transcribeService} · 当前陪聊：{companionModel} · 当前周报：{reportModel} · Groq：{groqUsage} · 保存后立即生效
               </div>
             </div>
-            <Switch checked={hasGroqApiKey || hasChatApiKey} disabled />
+            <Switch checked={hasGroqApiKey || hasChatApiKey || hasTencentAsrCredentials} disabled />
           </div>
 
           <div className="mt-5 flex justify-end">

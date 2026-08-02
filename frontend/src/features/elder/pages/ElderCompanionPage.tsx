@@ -28,6 +28,22 @@ type CompanionMessage = CompanionHistoryItem & { id: number }
 
 const introMessage = '您好，我是智能陪聊助手。您可以直接打字，也可以按下录音按钮说话，我会帮您转成文字并读出回复。'
 
+function recordingPermissionMessage(error: unknown) {
+  const candidate = error as { name?: string; message?: string } | null
+  const name = String(candidate?.name || '')
+  const detail = String(candidate?.message || '')
+  if (name === 'NotAllowedError' || /permission|dismissed|denied/i.test(detail)) {
+    return '麦克风权限未允许。请在浏览器地址栏左侧的站点设置中允许麦克风，然后刷新页面重试。'
+  }
+  if (name === 'NotFoundError' || /device not found/i.test(detail)) {
+    return '没有检测到可用麦克风，请检查设备连接和系统录音设置。'
+  }
+  if (name === 'NotReadableError' || /could not start|track start/i.test(detail)) {
+    return '麦克风正被其他程序占用，请关闭其他录音程序后重试。'
+  }
+  return detail || '无法开启录音权限'
+}
+
 export default function ElderCompanionPage() {
   const { session } = useSession()
   const { message: toast } = App.useApp()
@@ -294,7 +310,7 @@ export default function ElderCompanionPage() {
       recorder.start()
       setRecording(true)
     } catch (error: any) {
-      toast.error(error?.message || '无法开启录音权限')
+      toast.error(recordingPermissionMessage(error))
     }
   }
 

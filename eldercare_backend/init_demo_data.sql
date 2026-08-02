@@ -679,6 +679,9 @@ INSERT INTO dispatch_system_state (state_key, state_value) VALUES
 INSERT INTO ai_service_settings (config_key, config_value) VALUES
 ('groq_chat_model', 'llama-3.1-8b-instant'),
 ('groq_transcribe_model', 'whisper-large-v3'),
+('transcribe_provider', 'groq'),
+('tencent_asr_region', 'ap-shanghai'),
+('tencent_asr_engine_model_type', '16k_zh'),
 ('tts_voice', 'zh-CN-XiaoxiaoNeural'),
 ('tts_rate', '+0%'),
 ('tts_volume', '+0%'),
