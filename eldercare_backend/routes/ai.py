@@ -104,14 +104,24 @@ def _persist_settings(cursor, updates: dict[str, str]) -> dict[str, str]:
     merged = _load_settings(cursor)
     merged.update({key: value for key, value in updates.items() if value is not None})
     for key, value in merged.items():
+        normalized = str(value or '')
+        # In openGauss Oracle-compatible mode an empty string is stored as
+        # NULL.  config_value is intentionally NOT NULL, so absent optional
+        # settings must remain absent instead of being persisted as ''.
+        if not normalized:
+            cursor.execute(
+                f"DELETE FROM {AI_SETTINGS_TABLE} WHERE config_key = %s",
+                (key,),
+            )
+            continue
         cursor.execute(
             f"UPDATE {AI_SETTINGS_TABLE} SET config_value = %s, updated_at = CURRENT_TIMESTAMP WHERE config_key = %s",
-            (str(value or ''), key),
+            (normalized, key),
         )
         if cursor.rowcount == 0:
             cursor.execute(
                 f"INSERT INTO {AI_SETTINGS_TABLE} (config_key, config_value, updated_at) VALUES (%s, %s, CURRENT_TIMESTAMP)",
-                (key, str(value or '')),
+                (key, normalized),
             )
     return merged
 

@@ -2024,15 +2024,24 @@ def _phase_settings(phase: str) -> tuple[int, int | None, int | None, str]:
 
 def _set_dispatch_phase(cursor: Any, order: dict[str, Any], phase: str) -> None:
     stage, _, expiry_seconds, label = _phase_settings(phase)
-    cursor.execute("""UPDATE dispatch_orders
-                      SET dispatch_phase = %s, search_stage = %s,
-                          phase_started_at = CURRENT_TIMESTAMP,
-                          phase_expires_at = CASE WHEN %s IS NULL THEN NULL
-                              ELSE CURRENT_TIMESTAMP + (%s * INTERVAL '1 second') END,
-                          dispatch_version = COALESCE(dispatch_version, 0) + 1,
-                          last_expanded_at = CURRENT_TIMESTAMP
-                      WHERE order_id = %s""",
-                   (phase, stage, expiry_seconds, expiry_seconds, order["order_id"]))
+    if expiry_seconds is None:
+        cursor.execute("""UPDATE dispatch_orders
+                          SET dispatch_phase = %s, search_stage = %s,
+                              phase_started_at = CURRENT_TIMESTAMP,
+                              phase_expires_at = NULL,
+                              dispatch_version = COALESCE(dispatch_version, 0) + 1,
+                              last_expanded_at = CURRENT_TIMESTAMP
+                          WHERE order_id = %s""",
+                       (phase, stage, order["order_id"]))
+    else:
+        cursor.execute("""UPDATE dispatch_orders
+                          SET dispatch_phase = %s, search_stage = %s,
+                              phase_started_at = CURRENT_TIMESTAMP,
+                              phase_expires_at = CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
+                              dispatch_version = COALESCE(dispatch_version, 0) + 1,
+                              last_expanded_at = CURRENT_TIMESTAMP
+                          WHERE order_id = %s""",
+                       (phase, stage, expiry_seconds, order["order_id"]))
     order["dispatch_phase"] = phase
     order["search_stage"] = stage
     _event(cursor, int(order["order_id"]), "dispatch_phase_changed", f"调度进入{label}阶段。",
@@ -4047,7 +4056,15 @@ def _advance_dispatch_unthrottled(cursor: Any) -> None:
             _upsert_candidates(cursor, order)
             _invite_candidates(cursor, order, "补齐Top1专属确认计时")
             continue
-        if _now() < (_ensure_naive(expires_at) or expires_at):
+        # Compare two database timestamps with the database clock.  Different
+        # openGauss images may expose CURRENT_TIMESTAMP in UTC or Asia/Shanghai;
+        # comparing it to Python's UTC clock can otherwise freeze Top1 for 8h.
+        cursor.execute(
+            "SELECT CASE WHEN CURRENT_TIMESTAMP >= %s THEN TRUE ELSE FALSE END AS phase_expired",
+            (expires_at,),
+        )
+        phase_expired = bool(cursor.fetchone()["phase_expired"])
+        if not phase_expired:
             # Keep ranking tied to live volunteer coordinates (and the elder's
             # current pin), not the snapshot from when the order was created.
             _upsert_candidates(cursor, order)
@@ -4105,8 +4122,9 @@ def run_dispatch_clock_tick() -> None:
         with conn.cursor() as cursor:
             advance_dispatch(cursor)
         conn.commit()
-    except Exception:
+    except Exception as exc:
         conn.rollback()
+        print(f"dispatch clock tick failed: {exc}", flush=True)
     finally:
         conn.close()
 

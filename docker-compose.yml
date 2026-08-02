@@ -1,7 +1,7 @@
 services:
   # ===== openGauss 数据库 =====
   db:
-    image: enmotech/opengauss:latest
+    image: ${OPENGAUSS_IMAGE:-enmotech/opengauss:latest}
     container_name: eldercare-db
     privileged: true
     environment:

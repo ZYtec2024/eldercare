@@ -4,6 +4,8 @@
 -- 数据库名: elderly_care_system
 -- ============================================================
 
+-- Persist system timestamps in UTC; API responses convert them to Shanghai.
+SET TIME ZONE 'UTC';
 SET search_path TO public;
 
 DROP TABLE IF EXISTS conversation_messages CASCADE;
@@ -675,7 +677,6 @@ INSERT INTO dispatch_system_state (state_key, state_value) VALUES
 ('traffic_version', '1');
 
 INSERT INTO ai_service_settings (config_key, config_value) VALUES
-('groq_api_key', ''),
 ('groq_chat_model', 'llama-3.1-8b-instant'),
 ('groq_transcribe_model', 'whisper-large-v3'),
 ('tts_voice', 'zh-CN-XiaoxiaoNeural'),

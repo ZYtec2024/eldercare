@@ -18,6 +18,12 @@ def get_db_connection():
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         conn.autocommit = False
+        # Keep system timestamps stable across openGauss images and host TZs.
+        # Business wall-clock values such as appointments are handled by the
+        # route layer and are not converted by this connection setting.
+        with conn.cursor() as cursor:
+            cursor.execute("SET TIME ZONE 'UTC'")
+        conn.commit()
         return conn
     except Exception as e:
         print(f"数据库连接失败: {e}")
