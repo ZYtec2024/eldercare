@@ -426,12 +426,14 @@ export async function fetchVolunteerDispatchFeed(volunteerId: number) {
   return response.data.data
 }
 
-export async function respondDispatchOrder(orderId: number, volunteerId: number, action: 'accept' | 'decline' | 'start' | 'simulate_move' | 'complete' | 'cancel', position?: { lng: number; lat: number }, step?: number) {
+export async function respondDispatchOrder(orderId: number, volunteerId: number, action: 'accept' | 'decline' | 'start' | 'simulate_move' | 'complete' | 'cancel', position?: { lng: number; lat: number; accuracyMeters?: number; fromGps?: boolean }, step?: number) {
   const response = await http.post<ApiEnvelope<unknown>>(`/dispatch/orders/${orderId}/respond`, {
     volunteer_id: volunteerId,
     action,
     lng: position?.lng,
     lat: position?.lat,
+    accuracy_m: position?.accuracyMeters,
+    from_gps: position?.fromGps,
     step,
   })
   return response.data

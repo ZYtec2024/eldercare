@@ -1,5 +1,5 @@
 # routes/admin.py
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, session
 from db import get_db_connection
 from utils import format_datetime, format_wall_datetime, split_awards_text, merge_awards_text, get_pagination_params, beijing_now
 import datetime
@@ -10,6 +10,55 @@ DISPATCH_SKILL_CODES = {
     'medical_support', 'emergency_response', 'mobility_assist', 'errand',
     'companion', 'rehab', 'digital_assist', 'grooming',
 }
+
+
+@admin_bp.route('/login-audits', methods=['GET'])
+def list_login_audits():
+    """Return recent masked login results to the root administrator only."""
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+        page_size = max(10, min(100, int(request.args.get('page_size', 30))))
+    except (TypeError, ValueError):
+        return jsonify({"code": 400, "message": "分页参数无效"}), 400
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            _, is_global, _, error = _admin_regions(cursor, session.get('user_id'))
+            if error:
+                return error
+            if not is_global:
+                return jsonify({"code": 403, "message": "仅总管理员可以查看登录记录"}), 403
+            cursor.execute("SELECT COUNT(*) AS total FROM login_audit_logs")
+            total = int(cursor.fetchone()['total'])
+            cursor.execute(
+                """
+                SELECT audit_id, user_id, username, role, masked_ip,
+                       login_success, created_at
+                FROM login_audit_logs
+                ORDER BY created_at DESC, audit_id DESC
+                LIMIT %s OFFSET %s
+                """,
+                (page_size, (page - 1) * page_size),
+            )
+            items = []
+            for row in cursor.fetchall():
+                items.append({
+                    "audit_id": int(row['audit_id']),
+                    "user_id": int(row['user_id']) if row.get('user_id') is not None else None,
+                    "username": row['username'],
+                    "role": row.get('role'),
+                    "masked_ip": row['masked_ip'],
+                    "login_success": bool(row['login_success']),
+                    "created_at": format_datetime(row.get('created_at')),
+                })
+            return jsonify({
+                "code": 200,
+                "message": "登录记录获取成功",
+                "data": {"items": items, "total": total},
+            })
+    finally:
+        conn.close()
 
 
 def _admin_regions(cursor, raw_admin_user_id):

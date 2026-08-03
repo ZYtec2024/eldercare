@@ -134,12 +134,28 @@ CREATE TABLE orders (
     proxy_created_by INT DEFAULT NULL,
     proxy_reason TEXT,
     status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'in_progress', 'completed', 'cancelled')),
+    arrived_at TIMESTAMP NULL,
+    service_started_at TIMESTAMP NULL,
+    service_ended_at TIMESTAMP NULL,
     notes TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (elder_id) REFERENCES elders(elder_id) ON DELETE CASCADE,
     FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE CASCADE,
     FOREIGN KEY (volunteer_id) REFERENCES users(user_id) ON DELETE SET NULL
 );
+
+-- 登录安全审计：应用写入前会先对客户端 IP 脱敏。
+CREATE TABLE login_audit_logs (
+    audit_id SERIAL PRIMARY KEY,
+    user_id INT NULL REFERENCES users(user_id) ON DELETE SET NULL,
+    username VARCHAR(50) NOT NULL,
+    role VARCHAR(20) NULL,
+    masked_ip VARCHAR(64) NOT NULL,
+    login_success BOOLEAN NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_login_audit_created_at ON login_audit_logs(created_at DESC);
+CREATE INDEX idx_login_audit_username ON login_audit_logs(username, created_at DESC);
 
 -- 7. 订单评价表
 CREATE TABLE reviews (

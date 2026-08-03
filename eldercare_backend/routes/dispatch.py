@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import math
+import os
 import random
 import threading
 import time
@@ -84,6 +85,17 @@ PRIORITY_ESCALATED = 1
 PRIORITY_NORMAL = 2
 _advance_lock = threading.Lock()
 _last_advance_at = 0.0
+
+
+def _simulation_enabled() -> bool:
+    configured = os.getenv("ENABLE_SIMULATION")
+    if configured is not None:
+        return configured.strip().lower() in {"1", "true", "yes", "on"}
+    return os.getenv("APP_ENV", "development").strip().lower() != "production"
+
+
+def _simulation_disabled_response():
+    return jsonify({"code": 403, "message": "正式运行环境已关闭模拟调度功能"}), 403
 
 SERVICE_CATALOG = {
     "陪同就医": {"label": "陪同就医", "skills": ["medical_support"], "hours": 2, "urgent": False},
@@ -655,6 +667,9 @@ def ensure_dispatch_schema() -> None:
             _ensure_column(cursor, "orders", "service_lat", "NUMERIC(10,6)")
             _ensure_column(cursor, "orders", "proxy_created_by", "INT NULL")
             _ensure_column(cursor, "orders", "proxy_reason", "TEXT NULL")
+            _ensure_column(cursor, "orders", "arrived_at", "TIMESTAMP NULL")
+            _ensure_column(cursor, "orders", "service_started_at", "TIMESTAMP NULL")
+            _ensure_column(cursor, "orders", "service_ended_at", "TIMESTAMP NULL")
             _ensure_column(cursor, "dispatch_orders", "region_adcode", "VARCHAR(12) NOT NULL DEFAULT '310113'")
             _ensure_column(cursor, "dispatch_orders", "dispatch_phase", "VARCHAR(24) NOT NULL DEFAULT 'top1'")
             _ensure_column(cursor, "dispatch_orders", "phase_started_at", "TIMESTAMP NULL")
@@ -2985,9 +3000,10 @@ def _release_dispatch_order(cursor: Any, order: dict[str, Any], volunteer_id: in
     cursor.execute("UPDATE orders SET volunteer_id = NULL, status = 'pending' WHERE order_id = %s", (order["order_id"],))
     cursor.execute("""UPDATE dispatch_orders SET dispatch_state = 'matching', last_expanded_at = CURRENT_TIMESTAMP
                       WHERE order_id = %s""", (order["order_id"],))
-    _materialize_dispatch_position(cursor, int(order["order_id"]), volunteer_id)
+    if _simulation_enabled():
+        _materialize_dispatch_position(cursor, int(order["order_id"]), volunteer_id)
     cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order["order_id"],))
-    return_route = _create_return_route(cursor, volunteer_id)
+    return_route = _create_return_route(cursor, volunteer_id) if _simulation_enabled() else None
     cursor.execute("""UPDATE volunteer_location_state SET availability = %s, updated_at = CURRENT_TIMESTAMP
                       WHERE volunteer_id = %s""", ("returning" if return_route else "idle", volunteer_id))
     cursor.execute("SELECT real_name FROM users WHERE user_id = %s", (volunteer_id,))
@@ -3460,9 +3476,10 @@ def _mid_service_redispatch(
            WHERE order_id = %s AND volunteer_id <> %s AND response_status <> 'rejected'""",
         (order_id, volunteer_id),
     )
-    _materialize_dispatch_position(cursor, order_id, volunteer_id)
+    if _simulation_enabled():
+        _materialize_dispatch_position(cursor, order_id, volunteer_id)
     cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order_id,))
-    return_route = _create_return_route(cursor, volunteer_id)
+    return_route = _create_return_route(cursor, volunteer_id) if _simulation_enabled() else None
     cursor.execute(
         """UPDATE volunteer_location_state
            SET availability = %s, updated_at = CURRENT_TIMESTAMP WHERE volunteer_id = %s""",
@@ -3972,7 +3989,8 @@ def _prune_lower_priority_invites_for_waiting_sos(cursor: Any) -> None:
 def _advance_dispatch_unthrottled(cursor: Any) -> None:
     _reset_daily_fatigue(cursor)
     _recover_fatigue(cursor)
-    _advance_active_journeys(cursor)
+    if _simulation_enabled():
+        _advance_active_journeys(cursor)
     _prune_lower_priority_invites_for_waiting_sos(cursor)
     # P0 SOS → P1 escalated → P2 normal; within a tier keep FIFO by created_at.
     cursor.execute("""
@@ -4524,11 +4542,14 @@ def _overview(cursor: Any, user_id: int | None = None, requested_region: str | N
                p.service_rating, p.assigned_today, p.auto_accept_enabled,
                COALESCE(string_agg(s.skill_tag, '|'), '') AS skills_text
         FROM volunteer_location_state p JOIN users u ON u.user_id = p.volunteer_id
+        JOIN orders active_order
+          ON active_order.volunteer_id = p.volunteer_id
+         AND active_order.status IN ('accepted', 'in_progress')
         LEFT JOIN volunteer_skill_tags s ON s.volunteer_id = p.volunteer_id
-        WHERE p.availability <> 'offline'
+        WHERE p.availability <> 'offline' AND active_order.region_adcode = %s
         GROUP BY p.volunteer_id, u.real_name, p.lng, p.lat, p.availability, p.fatigue_score, p.service_rating, p.assigned_today, p.auto_accept_enabled
         ORDER BY p.volunteer_id
-    """)
+    """, (region_adcode,))
     volunteers = []
     for row in cursor.fetchall():
         if _volunteer_current_region(row.get("lng"), row.get("lat")) != region_adcode:
@@ -4538,18 +4559,9 @@ def _overview(cursor: Any, user_id: int | None = None, requested_region: str | N
             "availability": row["availability"], "fatigue": int(row["fatigue_score"]), "rating": float(row["service_rating"]),
             "assigned_today": int(row["assigned_today"]), "auto_accept_enabled": bool(row["auto_accept_enabled"]), "skills": [tag for tag in str(row.get("skills_text") or "").split("|") if tag],
         })
-    cursor.execute("""
-        SELECT e.elder_id, e.name, l.lng, l.lat FROM elder_location_state l
-        JOIN elders e ON e.elder_id = l.elder_id
-        WHERE l.location_source <> 'hidden_demo' ORDER BY e.elder_id LIMIT 80
-    """)
+    # Administrators manage service events, not an always-on elder location
+    # directory. Active order pins below carry the confirmed service point.
     elders = []
-    for row in cursor.fetchall():
-        if _region_for_point(row.get("lng"), row.get("lat")) != region_adcode:
-            continue
-        elders.append({"elder_id": int(row["elder_id"]), "name": row["name"], "lng": float(row["lng"]), "lat": float(row["lat"])})
-        if len(elders) >= 25:
-            break
     cursor.execute("""
         SELECT o.order_id, o.service_type, o.status, o.volunteer_id, o.notes, v.real_name AS volunteer_name, e.name AS elder_name, e.personality_bio,
                d.urgency, d.dispatch_state, d.search_stage, d.dispatch_phase, d.phase_expires_at,
@@ -4586,15 +4598,16 @@ def _overview(cursor: Any, user_id: int | None = None, requested_region: str | N
     # Return journeys are part of the real command map too.  Previously only
     # the volunteer portal received them, which made the commander view look
     # as if a completed volunteer had teleported home.
-    cursor.execute("""SELECT r.volunteer_id, p.lng, p.lat
-                      FROM volunteer_return_routes r JOIN volunteer_location_state p ON p.volunteer_id = r.volunteer_id
-                      ORDER BY r.updated_at DESC LIMIT 40""")
-    for row in cursor.fetchall():
-        if _volunteer_current_region(row.get("lng"), row.get("lat")) != region_adcode:
-            continue
-        route = _return_route_for_volunteer(cursor, int(row["volunteer_id"]))
-        if route:
-            routes.append(route)
+    if _simulation_enabled():
+        cursor.execute("""SELECT r.volunteer_id, p.lng, p.lat
+                          FROM volunteer_return_routes r JOIN volunteer_location_state p ON p.volunteer_id = r.volunteer_id
+                          ORDER BY r.updated_at DESC LIMIT 40""")
+        for row in cursor.fetchall():
+            if _volunteer_current_region(row.get("lng"), row.get("lat")) != region_adcode:
+                continue
+            route = _return_route_for_volunteer(cursor, int(row["volunteer_id"]))
+            if route:
+                routes.append(route)
     routes_by_order = {int(route["order_id"]): route for route in routes}
     for order in orders:
         order["route"] = routes_by_order.get(int(order["order_id"]))
@@ -4638,7 +4651,14 @@ def _overview(cursor: Any, user_id: int | None = None, requested_region: str | N
     events = [{"event_id": int(row["event_id"]), "order_id": int(row["order_id"]) if row["order_id"] else None, "event_type": row["event_type"], "message": row["message"], "created_at": _iso(row["created_at"])} for row in cursor.fetchall()]
     cursor.execute("""SELECT o.status, d.dispatch_state, COUNT(*) AS count FROM dispatch_orders d JOIN orders o ON o.order_id = d.order_id
                       WHERE o.region_adcode = %s GROUP BY o.status, d.dispatch_state""", (region_adcode,))
-    summary = {"pending": 0, "assigned": 0, "sos": 0, "admin_watch": 0, "idle_volunteers": sum(1 for v in volunteers if v["availability"] == "idle")}
+    cursor.execute("""
+        SELECT COUNT(*) AS count
+        FROM volunteer_location_state p
+        JOIN volunteers_profile vp ON vp.user_id = p.volunteer_id AND vp.audit_status = 'approved'
+        WHERE p.availability = 'idle' AND p.service_region_adcode = %s
+    """, (region_adcode,))
+    idle_volunteer_count = int(cursor.fetchone()["count"])
+    summary = {"pending": 0, "assigned": 0, "sos": 0, "admin_watch": 0, "idle_volunteers": idle_volunteer_count}
     for row in cursor.fetchall():
         count = int(row["count"])
         if row["status"] == "pending": summary["pending"] += count
@@ -4715,7 +4735,7 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
             LIMIT 1
         """, (elder["elder_id"],))
         active_service = cursor.fetchone()
-        if active_service:
+        if active_service and _simulation_enabled():
             map_lng = float(active_service["service_lng"])
             map_lat = float(active_service["service_lat"])
             map_address = str(active_service.get("address") or default_address)
@@ -4932,13 +4952,12 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
         _set_tracking_region(payload, elder_rows[0].get("region_adcode"))
         payload["elders"] = []
         for row in elder_rows:
-            has_active = row.get("active_service_lng") is not None and row.get("active_service_lat") is not None
             payload["elders"].append({
                 "elder_id": int(row["elder_id"]),
                 "name": row["name"],
-                "address": (row.get("active_service_address") or row["address"]) if has_active else row["address"],
-                "lng": float(row["active_service_lng"]) if has_active else float(row["lng"]),
-                "lat": float(row["active_service_lat"]) if has_active else float(row["lat"]),
+                "address": row["address"],
+                "lng": float(row["lng"]),
+                "lat": float(row["lat"]),
                 "location_source": row["location_source"],
                 "is_home_fixed": bool(row["is_home_fixed"]),
             })
@@ -5531,7 +5550,7 @@ def update_elder_location():
             if not elder:
                 return jsonify({"code": 404, "message": "当前账号没有老人档案"}), 404
             unfinished = find_unfinished_elder_order(cursor, int(elder["elder_id"]))
-            if unfinished:
+            if unfinished and source != "browser_gps":
                 return jsonify({
                     "code": 409,
                     "message": location_change_block_message(unfinished),
@@ -5674,6 +5693,8 @@ def update_volunteer_preferences():
 
 @dispatch_bp.route("/volunteer/return/move", methods=["POST"])
 def move_return_route():
+    if not _simulation_enabled():
+        return _simulation_disabled_response()
     data = request.get_json() or {}
     volunteer_id = data.get("volunteer_id")
     if not volunteer_id:
@@ -6588,21 +6609,79 @@ def respond_dispatch_order(order_id: int):
                 # 接单后即出发：志愿者不可取消；老人端可取消（pending/accepted）。
                 return jsonify({"code": 403, "message": "已接单出发后不能取消，如需结束请由老人取消本次帮助"}), 403
             if action in ("start", "simulate_move"):
+                if action == "simulate_move" and not _simulation_enabled():
+                    return _simulation_disabled_response()
                 if int(order.get("volunteer_id") or 0) != int(volunteer_id):
                     return jsonify({"code": 403, "message": "仅指派的志愿者可以更新出发状态与位置"}), 403
                 if order["status"] not in ("accepted", "in_progress"):
                     return jsonify({"code": 409, "message": "请先接单后再更新行程"}), 409
                 if action == "start":
-                    cursor.execute("UPDATE orders SET status = 'in_progress' WHERE order_id = %s", (order_id,))
+                    arrival_details = {"volunteer_id": int(volunteer_id)}
+                    if not _simulation_enabled():
+                        try:
+                            raw_lng = float(data.get("lng"))
+                            raw_lat = float(data.get("lat"))
+                            accuracy_m = float(data.get("accuracy_m"))
+                        except (TypeError, ValueError):
+                            return jsonify({
+                                "code": 400,
+                                "message": "开始服务前必须重新获取志愿者真实定位",
+                            }), 400
+                        max_accuracy = max(20.0, float(os.getenv("ARRIVAL_MAX_ACCURACY_METERS", "150")))
+                        if accuracy_m <= 0 or accuracy_m > max_accuracy:
+                            return jsonify({
+                                "code": 409,
+                                "message": f"当前定位精度约 ±{round(accuracy_m)} 米，请到开阔位置重新定位",
+                            }), 409
+                        from_gps = data.get("from_gps", False)
+                        if isinstance(from_gps, str):
+                            from_gps = from_gps.strip().lower() in {"1", "true", "yes"}
+                        resolved = reverse_geocode(raw_lng, raw_lat, from_gps=bool(from_gps))
+                        live_lng = float(resolved["lng"])
+                        live_lat = float(resolved["lat"])
+                        distance_m = _distance_km(
+                            live_lng,
+                            live_lat,
+                            float(order["elder_lng"]),
+                            float(order["elder_lat"]),
+                        ) * 1000
+                        radius_m = max(30.0, float(os.getenv("ARRIVAL_GEOFENCE_METERS", "100")))
+                        if distance_m > radius_m:
+                            return jsonify({
+                                "code": 409,
+                                "message": f"当前距离订单服务点约 {round(distance_m)} 米，进入 {round(radius_m)} 米范围后才能开始服务",
+                                "data": {"distance_m": round(distance_m), "required_radius_m": round(radius_m)},
+                            }), 409
+                        cursor.execute(
+                            """UPDATE volunteer_location_state
+                               SET lng = %s, lat = %s, availability = 'serving',
+                                   location_source = 'browser_gps', updated_at = CURRENT_TIMESTAMP
+                               WHERE volunteer_id = %s""",
+                            (live_lng, live_lat, volunteer_id),
+                        )
+                        arrival_details.update({
+                            "distance_m": round(distance_m),
+                            "accuracy_m": round(accuracy_m),
+                            "location_source": "browser_gps",
+                        })
+                    cursor.execute(
+                        """UPDATE orders
+                           SET status = 'in_progress',
+                               arrived_at = COALESCE(arrived_at, CURRENT_TIMESTAMP),
+                               service_started_at = COALESCE(service_started_at, CURRENT_TIMESTAMP)
+                           WHERE order_id = %s""",
+                        (order_id,),
+                    )
                     cursor.execute("UPDATE dispatch_orders SET dispatch_state = 'serving' WHERE order_id = %s", (order_id,))
                     # A manual "arrived" click is an explicit confirmation
                     # that the volunteer is at the elder's home.  Snap the
                     # persisted shared coordinate to that address, not the
                     # previous virtual-road point, so elder/family/admin all
                     # render the same stationary service marker.
-                    cursor.execute("""UPDATE volunteer_location_state
-                                      SET lng = %s, lat = %s, availability = 'serving', location_source = 'virtual', updated_at = CURRENT_TIMESTAMP
-                                      WHERE volunteer_id = %s""", (order["elder_lng"], order["elder_lat"], volunteer_id))
+                    if _simulation_enabled():
+                        cursor.execute("""UPDATE volunteer_location_state
+                                          SET lng = %s, lat = %s, availability = 'serving', location_source = 'virtual', updated_at = CURRENT_TIMESTAMP
+                                          WHERE volunteer_id = %s""", (order["elder_lng"], order["elder_lat"], volunteer_id))
                     route = _route_for_order(cursor, order_id)
                     if route:
                         route["progress"] = 101
@@ -6610,7 +6689,7 @@ def respond_dispatch_order(order_id: int):
                         cursor.execute("""UPDATE dispatch_routes SET route_json = %s, eta_minutes = 0,
                                           replanned_at = CURRENT_TIMESTAMP WHERE order_id = %s""",
                                        (json.dumps(route, ensure_ascii=False), order_id))
-                    _event(cursor, order_id, "service_started", "志愿者已到达并开始服务，位置将持续向老人和绑定家属共享。", {"volunteer_id": volunteer_id})
+                    _event(cursor, order_id, "service_started", "志愿者已到达并开始服务，位置将持续向老人和绑定家属共享。", arrival_details)
                     conn.commit()
                     return jsonify({"code": 200, "message": "已开始服务，家属端正在同步状态"})
                 route = _route_for_order(cursor, order_id)
@@ -6656,7 +6735,7 @@ def respond_dispatch_order(order_id: int):
                         "code": 409,
                         "message": "订单尚未进入服务中状态，暂时不能完成并返家",
                     }), 409
-                cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
+                cursor.execute("UPDATE orders SET status = 'completed', service_ended_at = COALESCE(service_ended_at, CURRENT_TIMESTAMP) WHERE order_id = %s", (order_id,))
                 cursor.execute("UPDATE dispatch_orders SET dispatch_state = 'completed' WHERE order_id = %s", (order_id,))
                 _mark_sos_service_completed(cursor, order_id, "volunteer")
                 hours = float(order.get("service_hours") or 1)
@@ -6675,11 +6754,11 @@ def respond_dispatch_order(order_id: int):
                 # publishing the return route so the map keeps one continuous
                 # marker at the elder's location instead of two stale markers.
                 cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order_id,))
-                return_route = _create_return_route(cursor, int(volunteer_id))
+                return_route = _create_return_route(cursor, int(volunteer_id)) if _simulation_enabled() else None
                 _record_completed_service_fatigue(cursor, int(volunteer_id), hours)
                 cursor.execute("UPDATE volunteer_location_state SET availability = %s WHERE volunteer_id = %s",
                                ("returning" if return_route else "idle", volunteer_id))
-                _event(cursor, order_id, "service_completed", "志愿服务已完成，家属端已锁定志愿者位置；志愿者可按虚拟路线返家并在途中继续接单。")
+                _event(cursor, order_id, "service_completed", "志愿服务已完成，订单位置共享已停止，等待家属审核服务时长。")
                 if return_route:
                     _event(cursor, order_id, "return_journey_started", "已生成紫色返家路线；20秒返程展示后将自动扫描下一单。", {"volunteer_id": volunteer_id, "auto_scan_after_seconds": RETURN_AUTO_DISPATCH_GRACE_SECONDS})
                 _archive_order_conversations(cursor, order_id, "服务已完成，会话已结束。老人/家属/志愿者可删除本会话；管理员仍保留归档。")
@@ -6788,9 +6867,10 @@ def finalize_cancelled_dispatch_order(
     order = _order_context(cursor, order_id) or {}
     volunteer_id = int(order.get("volunteer_id") or 0)
     if volunteer_id:
-        _materialize_dispatch_position(cursor, order_id, volunteer_id)
+        if _simulation_enabled():
+            _materialize_dispatch_position(cursor, order_id, volunteer_id)
         cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order_id,))
-        return_route = _create_return_route(cursor, volunteer_id)
+        return_route = _create_return_route(cursor, volunteer_id) if _simulation_enabled() else None
         cursor.execute(
             """UPDATE volunteer_location_state
                SET availability = %s, updated_at = CURRENT_TIMESTAMP
@@ -6998,7 +7078,8 @@ def elder_complete_dispatch_order(order_id: int):
             elder = cursor.fetchone()
             if not elder or int(elder["elder_id"]) != int(order["elder_id"]):
                 return jsonify({"code": 403, "message": "无权确认该订单"}), 403
-            if order["status"] not in ("accepted", "in_progress") or not order.get("volunteer_id"):
+            allowed_statuses = ("accepted", "in_progress") if _simulation_enabled() else ("in_progress",)
+            if order["status"] not in allowed_statuses or not order.get("volunteer_id"):
                 return jsonify({"code": 409, "message": "志愿者接单后即可由老人确认完成；当前订单状态不可确认"}), 409
             volunteer_id = int(order["volunteer_id"])
 
@@ -7008,7 +7089,7 @@ def elder_complete_dispatch_order(order_id: int):
             # the normal volunteer-complete path.
             if order["status"] == "accepted":
                 cursor.execute("UPDATE orders SET status = 'in_progress' WHERE order_id = %s", (order_id,))
-            cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
+            cursor.execute("UPDATE orders SET status = 'completed', service_ended_at = COALESCE(service_ended_at, CURRENT_TIMESTAMP) WHERE order_id = %s", (order_id,))
             cursor.execute("UPDATE dispatch_orders SET dispatch_state = 'completed' WHERE order_id = %s", (order_id,))
             _mark_sos_service_completed(cursor, order_id, "elder")
             cursor.execute("SELECT review_id FROM volunteer_hour_reviews WHERE order_id = %s", (order_id,))
@@ -7023,7 +7104,7 @@ def elder_complete_dispatch_order(order_id: int):
                                   VALUES (%s, %s, %s, %s, %s, 'pending_family', NULL)""",
                                (order_id, volunteer_id, hours, hours, hours * 1.5))
             cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order_id,))
-            return_route = _create_return_route(cursor, volunteer_id)
+            return_route = _create_return_route(cursor, volunteer_id) if _simulation_enabled() else None
             _record_completed_service_fatigue(cursor, volunteer_id, hours)
             cursor.execute("UPDATE volunteer_location_state SET availability = %s WHERE volunteer_id = %s",
                            ("returning" if return_route else "idle", volunteer_id))
@@ -7032,7 +7113,7 @@ def elder_complete_dispatch_order(order_id: int):
                 _event(cursor, order_id, "return_journey_started", "已生成紫色返家路线；返程展示后可继续自动匹配下一单。", {"volunteer_id": volunteer_id})
             _archive_order_conversations(cursor, order_id, "老人已确认服务完成，会话已结束。老人/家属/志愿者可删除本会话；管理员仍保留归档。")
             conn.commit()
-            return jsonify({"code": 200, "message": "已确认服务完成，志愿者正在返家，家属可审核服务时长", "data": {"return_route": return_route}})
+            return jsonify({"code": 200, "message": "已确认服务完成，实时位置共享已停止，家属可审核服务时长", "data": {"return_route": return_route}})
     except Exception as exc:
         conn.rollback()
         return jsonify({"code": 500, "message": f"确认服务完成失败: {exc}"}), 500
@@ -7059,14 +7140,15 @@ def family_complete_dispatch_order(order_id: int):
             allowed, role = _actor_can_touch_order(cursor, order, int(user_id))
             if not allowed or role != "family":
                 return jsonify({"code": 403, "message": "无权确认该订单"}), 403
-            if order["status"] not in ("accepted", "in_progress") or not order.get("volunteer_id"):
+            allowed_statuses = ("accepted", "in_progress") if _simulation_enabled() else ("in_progress",)
+            if order["status"] not in allowed_statuses or not order.get("volunteer_id"):
                 return jsonify({"code": 409, "message": "志愿者接单后即可由家属确认完成；当前订单状态不可确认"}), 409
             volunteer_id = int(order["volunteer_id"])
 
             hours = float(order.get("service_hours") or 1)
             if order["status"] == "accepted":
                 cursor.execute("UPDATE orders SET status = 'in_progress' WHERE order_id = %s", (order_id,))
-            cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
+            cursor.execute("UPDATE orders SET status = 'completed', service_ended_at = COALESCE(service_ended_at, CURRENT_TIMESTAMP) WHERE order_id = %s", (order_id,))
             cursor.execute("UPDATE dispatch_orders SET dispatch_state = 'completed' WHERE order_id = %s", (order_id,))
             _mark_sos_service_completed(cursor, order_id, "family")
             cursor.execute("SELECT review_id FROM volunteer_hour_reviews WHERE order_id = %s", (order_id,))
@@ -7081,7 +7163,7 @@ def family_complete_dispatch_order(order_id: int):
                                   VALUES (%s, %s, %s, %s, %s, 'pending_family', NULL)""",
                                (order_id, volunteer_id, hours, hours, hours * 1.5))
             cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order_id,))
-            return_route = _create_return_route(cursor, volunteer_id)
+            return_route = _create_return_route(cursor, volunteer_id) if _simulation_enabled() else None
             _record_completed_service_fatigue(cursor, volunteer_id, hours)
             cursor.execute("UPDATE volunteer_location_state SET availability = %s WHERE volunteer_id = %s",
                            ("returning" if return_route else "idle", volunteer_id))
@@ -7090,7 +7172,7 @@ def family_complete_dispatch_order(order_id: int):
                 _event(cursor, order_id, "return_journey_started", "已生成紫色返家路线；返程展示后可继续自动匹配下一单。", {"volunteer_id": volunteer_id})
             _archive_order_conversations(cursor, order_id, "家属已确认服务完成，会话已结束。老人/家属/志愿者可删除本会话；管理员仍保留归档。")
             conn.commit()
-            return jsonify({"code": 200, "message": "已确认服务完成，志愿者正在返家，可继续审核服务时长", "data": {"return_route": return_route}})
+            return jsonify({"code": 200, "message": "已确认服务完成，实时位置共享已停止，可继续审核服务时长", "data": {"return_route": return_route}})
     except Exception as exc:
         conn.rollback()
         return jsonify({"code": 500, "message": f"确认服务完成失败: {exc}"}), 500
@@ -7209,6 +7291,8 @@ def persist_amap_route_geometry(order_id: int):
 
 @dispatch_bp.route("/traffic/perturb", methods=["POST"])
 def perturb_traffic():
+    if not _simulation_enabled():
+        return _simulation_disabled_response()
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
@@ -7236,6 +7320,8 @@ def perturb_traffic():
 
 @dispatch_bp.route("/simulation/burst", methods=["POST"])
 def simulation_burst():
+    if not _simulation_enabled():
+        return _simulation_disabled_response()
     data = request.get_json() or {}
     count = max(1, min(int(data.get("count", 2)), 6))
     conn = get_db_connection()
@@ -7284,6 +7370,8 @@ def simulation_burst():
 @dispatch_bp.route("/simulation/tick", methods=["POST"])
 def simulation_tick():
     """Advance a compact sandbox scenario quickly enough to be visible in a demo."""
+    if not _simulation_enabled():
+        return _simulation_disabled_response()
     data = request.get_json() or {}
     step = max(1, min(int(data.get("step", 3)), 30))
     sandbox_note = "并发调度沙盘自动生成"
@@ -7353,6 +7441,8 @@ def simulation_tick():
 @dispatch_bp.route("/simulation/reset", methods=["POST"])
 def simulation_reset():
     """Remove only orders created by the admin dispatch sandbox, never real requests."""
+    if not _simulation_enabled():
+        return _simulation_disabled_response()
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:

@@ -332,10 +332,6 @@ export default function ProfilePage() {
 
   const captureElderLocation = () => {
     if (!session) return
-    if (hasUnfinishedOrder) {
-      message.warning('当前有未结束订单，请在订单完成或取消后再更新实时位置')
-      return
-    }
     setLocationSaving(true)
     captureBrowserLocation()
       .then((fix) =>
@@ -346,11 +342,11 @@ export default function ProfilePage() {
             lat: resolved.lat,
             address: resolved.formattedAddress,
             source: 'browser_gps',
-            syncDisplay: true,
+            syncDisplay: !hasUnfinishedOrder,
           })
           setCurrentLocationSource('browser_gps')
           setLiveLocationHint(`当前服务点（实时）：${resolved.formattedAddress}`)
-          message.success(`实时位置已更新（${formatAccuracyHint(fix.accuracyMeters, fix.source)}），家属端可见`)
+          message.success(`实时位置已更新（${formatAccuracyHint(fix.accuracyMeters, fix.source)}），家属端可见；订单服务点未改变`)
         }),
       )
       .catch((err: any) => locateErrorHint(err, '当前环境无法定位，请检查浏览器位置权限'))
@@ -463,8 +459,6 @@ export default function ProfilePage() {
                       <Button
                         icon={<AimOutlined />}
                         loading={locationSaving}
-                        disabled={hasUnfinishedOrder}
-                        title={hasUnfinishedOrder ? '订单完成或取消后才能更新位置' : undefined}
                         onClick={captureElderLocation}
                       >
                         获取实时位置
@@ -472,7 +466,7 @@ export default function ProfilePage() {
                     </Space>
                     <div className={`text-xs leading-5 ${hasUnfinishedOrder ? 'font-medium text-amber-700' : 'text-slate-600'}`}>
                       {hasUnfinishedOrder
-                        ? '当前有未结束订单，服务地点已锁定；完成或取消订单后才能更新位置。'
+                        ? '订单服务地点已锁定，但仍可更新老人实时位置供绑定家属查看。'
                         : (liveLocationHint || '切换后家属端可看到当前服务点变化')}
                     </div>
                     <div className="text-xs leading-5 text-slate-500">请用 http://localhost:3000 打开并允许位置权限。地址簿不会被覆盖。</div>

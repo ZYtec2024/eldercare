@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import secrets
 from typing import Any
 
@@ -20,6 +21,56 @@ _HASH_PREFIXES = ("scrypt:", "pbkdf2:")
 PORTAL_SESSION_HEADER = "X-Portal-Session"
 PORTAL_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 _PORTAL_SESSION_SALT = "eldercare.portal.session.v1"
+
+
+def ensure_login_audit_schema() -> None:
+    """Create the lightweight login audit table for existing data volumes."""
+    conn = get_db_connection()
+    if conn is None:
+        return
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS login_audit_logs (
+                    audit_id SERIAL PRIMARY KEY,
+                    user_id INT NULL REFERENCES users(user_id) ON DELETE SET NULL,
+                    username VARCHAR(50) NOT NULL,
+                    role VARCHAR(20) NULL,
+                    masked_ip VARCHAR(64) NOT NULL,
+                    login_success BOOLEAN NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_login_audit_created_at ON login_audit_logs(created_at DESC)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_login_audit_username ON login_audit_logs(username, created_at DESC)"
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def mask_client_ip(value: Any) -> str:
+    """Retain enough network context for an audit without storing a full IP."""
+    raw = str(value or "").strip().split(",", 1)[0].strip()
+    if not raw:
+        return "unknown"
+    try:
+        parsed = ipaddress.ip_address(raw)
+    except ValueError:
+        return "unknown"
+    if isinstance(parsed, ipaddress.IPv4Address):
+        first, _, _, last = raw.split(".")
+        return f"{first}.***.***.{last}"
+    groups = parsed.exploded.split(":")
+    return f"{groups[0]}:{groups[1]}:****:****"
 
 
 def _portal_session_serializer() -> URLSafeTimedSerializer:

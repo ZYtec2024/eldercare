@@ -9,6 +9,7 @@ from auth_security import (
     PORTAL_SESSION_HEADER,
     hash_password,
     issue_portal_session_token,
+    mask_client_ip,
     validate_new_password,
     verify_password,
     verify_portal_session_token,
@@ -285,6 +286,9 @@ def login():
             sql = "SELECT user_id, username, password_hash, role, real_name, email FROM users WHERE username = %s"
             cursor.execute(sql, (username,))
             user = cursor.fetchone()
+            masked_ip = mask_client_ip(
+                request.headers.get('X-Forwarded-For') or request.remote_addr
+            )
 
             if user and verify_password(user.get('password_hash'), password):
                 # Compatibility for an old volume that was not reached by the
@@ -294,7 +298,13 @@ def login():
                         "UPDATE users SET password_hash = %s WHERE user_id = %s",
                         (hash_password(str(password)), user['user_id']),
                     )
-                    conn.commit()
+                cursor.execute(
+                    """INSERT INTO login_audit_logs
+                       (user_id, username, role, masked_ip, login_success)
+                       VALUES (%s, %s, %s, %s, TRUE)""",
+                    (user['user_id'], username, user['role'], masked_ip),
+                )
+                conn.commit()
                 session.clear()
                 session.permanent = True
                 session['user_id'] = int(user['user_id'])
@@ -310,6 +320,18 @@ def login():
                     "data": response_data,
                 }, 200)
             else:
+                cursor.execute(
+                    """INSERT INTO login_audit_logs
+                       (user_id, username, role, masked_ip, login_success)
+                       VALUES (%s, %s, %s, %s, FALSE)""",
+                    (
+                        user.get('user_id') if user else None,
+                        str(username)[:50],
+                        user.get('role') if user else None,
+                        masked_ip,
+                    ),
+                )
+                conn.commit()
                 return api_response({"code": 401, "message": "账号或密码错误"}, 401)
     finally:
         conn.close()

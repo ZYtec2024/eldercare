@@ -318,14 +318,31 @@ def update_order_status():
                     conn.rollback()
                     return jsonify({"code": 400, "message": "订单状态异常，无法开始"})
 
-                cursor.execute("UPDATE orders SET status = 'in_progress' WHERE order_id = %s", (order_id,))
+                cursor.execute("SELECT order_id FROM dispatch_orders WHERE order_id = %s", (order_id,))
+                smart_dispatch_order = bool(cursor.fetchone())
+                if smart_dispatch_order:
+                    from routes.dispatch import _simulation_enabled
+                    if not _simulation_enabled():
+                        conn.rollback()
+                        return jsonify({
+                            "code": 409,
+                            "message": "正式模式下请在智能推荐接单页面完成定位验证后开始服务",
+                        }), 409
+
+                cursor.execute(
+                    """UPDATE orders
+                       SET status = 'in_progress',
+                           arrived_at = COALESCE(arrived_at, CURRENT_TIMESTAMP),
+                           service_started_at = COALESCE(service_started_at, CURRENT_TIMESTAMP)
+                       WHERE order_id = %s""",
+                    (order_id,),
+                )
                 # The legacy task-detail screen may still start a smart
                 # dispatch order.  It must use the same shared-map invariant
                 # as /dispatch/orders/<id>/respond: service means the
                 # volunteer is physically at the elder's address, never at
                 # the previous route point.
-                cursor.execute("SELECT order_id FROM dispatch_orders WHERE order_id = %s", (order_id,))
-                if cursor.fetchone():
+                if smart_dispatch_order:
                     from routes.dispatch import _order_context
                     smart_order = _order_context(cursor, int(order_id))
                     if smart_order:
@@ -348,7 +365,10 @@ def update_order_status():
                     conn.rollback()
                     return jsonify({"code": 400, "message": "只有处于'进行中'的订单才能完成"})
 
-                cursor.execute("UPDATE orders SET status = 'completed' WHERE order_id = %s", (order_id,))
+                cursor.execute(
+                    "UPDATE orders SET status = 'completed', service_ended_at = COALESCE(service_ended_at, CURRENT_TIMESTAMP) WHERE order_id = %s",
+                    (order_id,),
+                )
 
                 expected_hours = float(order.get('service_hours') or 0)
                 try:
@@ -401,10 +421,10 @@ def update_order_status():
                 # stale "serving" location behind.
                 cursor.execute("SELECT order_id FROM dispatch_orders WHERE order_id = %s", (order_id,))
                 if cursor.fetchone():
-                    from routes.dispatch import _create_return_route, _record_completed_service_fatigue
+                    from routes.dispatch import _create_return_route, _record_completed_service_fatigue, _simulation_enabled
                     cursor.execute("UPDATE dispatch_orders SET dispatch_state = 'completed' WHERE order_id = %s", (order_id,))
                     cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order_id,))
-                    return_route = _create_return_route(cursor, int(volunteer_id))
+                    return_route = _create_return_route(cursor, int(volunteer_id)) if _simulation_enabled() else None
                     _record_completed_service_fatigue(cursor, int(volunteer_id), float(order.get('service_hours') or 1))
                     cursor.execute("UPDATE volunteer_location_state SET availability = %s WHERE volunteer_id = %s",
                                    ('returning' if return_route else 'idle', volunteer_id))

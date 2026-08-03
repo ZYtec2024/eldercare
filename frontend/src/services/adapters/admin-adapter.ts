@@ -1,6 +1,36 @@
 import { http, type ApiEnvelope } from '@/services/http'
 import type { AdminUserRow, AlertItem, AwardRequestItem, DashboardMetric, HourReviewItem, Role } from '@/types/domain'
 
+export interface LoginAuditItem {
+  auditId: number
+  userId?: number
+  username: string
+  role?: Role
+  maskedIp: string
+  loginSuccess: boolean
+  createdAt: string
+}
+
+export async function fetchLoginAudits(adminUserId: number, page = 1, pageSize = 30) {
+  const response = await http.get<ApiEnvelope<{ items: Array<Record<string, unknown>>; total: number }>>(
+    '/admin/login-audits',
+    { params: { admin_user_id: adminUserId, page, page_size: pageSize } },
+  )
+  const payload = response.data.data
+  return {
+    total: Number(payload?.total ?? 0),
+    items: (payload?.items ?? []).map((row): LoginAuditItem => ({
+      auditId: Number(row.audit_id ?? row.auditId),
+      userId: row.user_id == null && row.userId == null ? undefined : Number(row.user_id ?? row.userId),
+      username: String(row.username ?? ''),
+      role: row.role ? String(row.role) as Role : undefined,
+      maskedIp: String(row.masked_ip ?? row.maskedIp ?? 'unknown'),
+      loginSuccess: Boolean(row.login_success ?? row.loginSuccess),
+      createdAt: String(row.created_at ?? row.createdAt ?? ''),
+    })),
+  }
+}
+
 function toNumber(value: unknown, fallback = 0) {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : fallback

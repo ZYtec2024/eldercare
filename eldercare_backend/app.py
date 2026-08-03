@@ -25,6 +25,7 @@ from routes.dispatch import dispatch_bp, ensure_dispatch_schema, run_dispatch_cl
 from routes.report import report_bp
 from auth_security import (
     PORTAL_SESSION_HEADER,
+    ensure_login_audit_schema,
     migrate_legacy_password_hashes,
     verify_portal_session_token,
 )
@@ -212,6 +213,7 @@ def init_db():
 with app.app_context():
     init_db()
     ensure_dispatch_schema()
+    ensure_login_audit_schema()
     migrated_passwords = migrate_legacy_password_hashes()
     if migrated_passwords:
         print(f"✓ 已将 {migrated_passwords} 个旧账号密码迁移为安全哈希")

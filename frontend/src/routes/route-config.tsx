@@ -20,6 +20,7 @@ import {
   AdminDispatchBoardPage,
   AdminRegionsPage,
   AdminAiSettingsPage,
+  AdminLoginAuditsPage,
   AdminDashboardPage,
   AdminHomePage,
   AdminHourReviewsPage,
@@ -492,6 +493,17 @@ export const appRoutes: AppRouteDefinition[] = [
     element: AdminAiSettingsPage,
   },
   {
+    key: 'admin-login-audits',
+    path: '/admin/login-audits',
+    roles: ['admin'],
+    title: '登录记录',
+    description: '查看账号登录时间、脱敏 IP 与登录结果',
+    showInNavigation: true,
+    navigationOrder: 18,
+    navigation: { label: '登录记录', description: '', iconKey: 'document' },
+    element: AdminLoginAuditsPage,
+  },
+  {
     key: 'admin-dashboard',
     path: '/admin/dashboard',
     roles: ['admin'],
@@ -559,6 +571,9 @@ export function getNavigationForRole(role: Role, options?: { isRoot?: boolean })
         return false
       }
       if (route.key === 'admin-ai-settings' && !options?.isRoot) {
+        return false
+      }
+      if (route.key === 'admin-login-audits' && !options?.isRoot) {
         return false
       }
       if (route.key === 'admin-donations' && !options?.isRoot) {

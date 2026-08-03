@@ -15,6 +15,8 @@ import { VolunteerNavMap } from '@/features/dispatch/components/VolunteerNavMap'
 import type { DispatchRoute, DispatchTracking, NavigationMode, VolunteerDispatchTask } from '@/features/dispatch/dispatch-types'
 import { useSession } from '@/features/auth/useSession'
 import { fetchDispatchTracking, fetchVolunteerDispatchFeed, redispatchDispatchOrder, requestAdminForDispatchOrder, respondDispatchOrder, updateVolunteerDispatchPreferences, updateVolunteerNavigationRoute } from '@/services/adapters/dispatch-adapter'
+import { updateVolunteerLiveLocation } from '@/services/adapters/profile-adapter'
+import { captureBrowserLocation } from '@/utils/browser-geolocation'
 
 function NavStepsList({ steps, title }: { steps: AmapNavStep[]; title?: string }) {
   if (!steps.length) {
@@ -59,6 +61,7 @@ export default function VolunteerDispatchPage() {
   const { session } = useSession()
   const navigate = useNavigate()
   const { message } = App.useApp()
+  const simulationEnabled = import.meta.env.VITE_ENABLE_SIMULATION === 'true'
   const [tracking, setTracking] = useState<DispatchTracking | null>(null)
   const [tasks, setTasks] = useState<VolunteerDispatchTask[]>([])
   const [completedTasks, setCompletedTasks] = useState<Array<{ order_id: number; service_type: string; elder_name: string; address?: string; completed_at?: string | null; close_status?: string }>>([])
@@ -108,6 +111,27 @@ export default function VolunteerDispatchPage() {
     return tasks.find((task) => task.route?.path?.length && task.lng != null && task.lat != null)
   }, [tasks])
 
+  useEffect(() => {
+    if (!session || !activeNavTask || !navigator.geolocation) return
+    let lastUploadAt = 0
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        const now = Date.now()
+        if (now - lastUploadAt < 8_000) return
+        lastUploadAt = now
+        void updateVolunteerLiveLocation(
+          session.userId,
+          position.coords.longitude,
+          position.coords.latitude,
+          { fromGps: true },
+        ).catch(() => undefined)
+      },
+      () => undefined,
+      { enableHighAccuracy: true, maximumAge: 5_000, timeout: 15_000 },
+    )
+    return () => navigator.geolocation.clearWatch(watchId)
+  }, [activeNavTask?.order_id, session?.userId])
+
   const returningHome = state.availability === 'returning'
   const activeRoute = useMemo(() => {
     // Once return mode starts, never let a recently completed outbound task
@@ -118,7 +142,10 @@ export default function VolunteerDispatchPage() {
     return tracking?.routes?.[0]
   }, [activeNavTask, returningHome, state.availability, tracking])
 
-  const routePlanStart = activeRoute?.path?.[0]
+  const currentVolunteer = tracking?.volunteers[0]
+  const routePlanStart = !returningHome && currentVolunteer
+    ? [currentVolunteer.lng, currentVolunteer.lat] as [number, number]
+    : activeRoute?.path?.[0]
   const routePlanEnd = !returningHome && activeNavTask?.lng != null && activeNavTask?.lat != null
     ? [activeNavTask.lng, activeNavTask.lat] as [number, number]
     : activeRoute?.path?.[activeRoute.path.length - 1]
@@ -141,7 +168,10 @@ export default function VolunteerDispatchPage() {
       const end = !returningHome && activeNavTask?.lng != null && activeNavTask?.lat != null
         ? [activeNavTask.lng, activeNavTask.lat] as [number, number]
         : activeRoute?.path?.[activeRoute.path.length - 1]
-      const start = activeRoute?.path?.[0]
+      const me = tracking?.volunteers[0]
+      const start = !returningHome && me
+        ? [me.lng, me.lat] as [number, number]
+        : activeRoute?.path?.[0]
       if (!start || !end || start[0] == null || end[0] == null) {
         if (!cancelled) {
           setNavSteps([])
@@ -177,7 +207,7 @@ export default function VolunteerDispatchPage() {
         }
         if (cancelled) return
         const progress = Math.max(0, Math.min(100, activeRoute?.progress ?? 0))
-        const hasPersistedRoadGeometry = (activeRoute?.path?.length ?? 0) > 2
+        const hasPersistedRoadGeometry = simulationEnabled && (activeRoute?.path?.length ?? 0) > 2
         const fallbackDistanceMeters = Math.max(
           1,
           Math.round(Number(route.distanceKm || activeRoute?.distance_km || 0.1) * 1000),
@@ -206,10 +236,24 @@ export default function VolunteerDispatchPage() {
             ? route.trafficSegments
             : (activeRoute?.traffic_segments ?? []),
           distance_km: route.geometryResolved && route.distanceKm > 0 ? route.distanceKm : activeRoute?.distance_km,
-          eta_minutes: route.geometryResolved && route.etaMinutes > 0 ? route.etaMinutes : activeRoute?.eta_minutes,
+          eta_minutes: route.geometryResolved && route.etaMinutes > 0 ? route.etaMinutes : (activeRoute?.eta_minutes ?? 1),
           progress,
           navigation_mode: mode,
         })
+        if (!simulationEnabled && activeNavTask && route.geometryResolved) {
+          await updateVolunteerNavigationRoute({
+            orderId: activeNavTask.order_id,
+            volunteerId: session!.userId,
+            path: compactNavigationPath(route.path),
+            trafficSegments: route.trafficSegments.map((segment) => ({
+              ...segment,
+              path: compactNavigationPath(segment.path, 90),
+            })),
+            distanceKm: route.distanceKm,
+            etaMinutes: route.etaMinutes,
+            navigationMode: mode,
+          })
+        }
       } catch {
         if (!cancelled) {
           const fallbackDistanceMeters = Math.max(
@@ -226,7 +270,7 @@ export default function VolunteerDispatchPage() {
     }
     void refreshNav()
     return () => { cancelled = true }
-  }, [activeNavTask?.order_id, activeRoute?.order_id, activeRoute?.traffic_version, routePlanStartKey, routePlanEndKey, navigationMode, returningHome])
+  }, [activeNavTask?.order_id, activeRoute?.order_id, activeRoute?.traffic_version, routePlanStartKey, routePlanEndKey, navigationMode, returningHome, simulationEnabled])
 
   useEffect(() => {
     if (!activeRoute) {
@@ -405,7 +449,16 @@ export default function VolunteerDispatchPage() {
     if (!session) return
     setWorking(task.order_id)
     try {
-      let position: { lng: number; lat: number } | undefined
+      let position: { lng: number; lat: number; accuracyMeters?: number; fromGps?: boolean } | undefined
+      if (action === 'start') {
+        const fix = await captureBrowserLocation({ timeoutMs: 15_000 })
+        position = {
+          lng: fix.lng,
+          lat: fix.lat,
+          accuracyMeters: fix.accuracyMeters,
+          fromGps: fix.fromGps,
+        }
+      }
       const taskRoute = task.route
       if (action === 'simulate_move' && taskRoute && Array.isArray(taskRoute.path) && taskRoute.path.length >= 2) {
         const progress = Math.min(95, (taskRoute.progress ?? 0) + 15)
@@ -435,7 +488,7 @@ export default function VolunteerDispatchPage() {
       setWorking(null)
     }
   }
-  const statusText = state.availability === 'idle' ? '空闲可接单' : state.availability === 'returning' ? '虚拟返家中（可接单）' : state.availability === 'serving' ? '正在服务' : '已接单，正在出发'
+  const statusText = state.availability === 'idle' ? '空闲可接单' : state.availability === 'returning' ? '返程中（可接单）' : state.availability === 'serving' ? '正在服务' : '已接单，正在出发'
   const mySkills = tracking?.volunteers[0]?.skills ?? []
   const nextPreview = tracking?.next_assignment_preview
   const autoAssignment = tracking?.auto_assignment
@@ -461,13 +514,13 @@ export default function VolunteerDispatchPage() {
       {(task.response_status === 'accepted' || task.response_status === 'forced') && task.status === 'accepted' ? (
         <>
           <span className="text-sm text-emerald-700">已接单出发：系统正在前往服务点。接单后不可取消，如需结束请由老人取消。</span>
-          <Button type="primary" loading={working === task.order_id} onClick={() => respond(task, 'start')}>确认到达并开始服务</Button>
+          <Button type="primary" loading={working === task.order_id} onClick={() => respond(task, 'start')}>定位验证并开始服务</Button>
         </>
       ) : null}
       {task.status === 'in_progress' && state.availability !== 'serving' ? (
         <>
           <span className="text-sm text-amber-700">已接近服务点时可手动确认到达。</span>
-          <Button type="primary" loading={working === task.order_id} onClick={() => respond(task, 'start')}>确认到达并开始服务</Button>
+          <Button type="primary" loading={working === task.order_id} onClick={() => respond(task, 'start')}>定位验证并开始服务</Button>
         </>
       ) : null}
       {task.status === 'in_progress' && state.availability === 'serving' ? (
@@ -487,7 +540,7 @@ export default function VolunteerDispatchPage() {
     <div className="space-y-6">
       <div className="rounded-3xl bg-gradient-to-r from-emerald-700 via-teal-700 to-cyan-700 p-6 text-white shadow-xl">
         <Typography.Title level={2} className="!mb-1 !text-white">智能推荐接单中心</Typography.Title>
-        <Typography.Text className="!text-emerald-100">虚拟实时定位适合验收演示：从设置的起点出发、沿高德真实道路路线推进、服务完成后返家，返家途中也可接单。</Typography.Text>
+        <Typography.Text className="!text-emerald-100">接单后共享本人实时位置并根据当前位置规划路线；到达服务点 100 米范围内才能开始服务。</Typography.Text>
       </div>
       <Alert
         showIcon
@@ -688,7 +741,7 @@ export default function VolunteerDispatchPage() {
               type="info"
               showIcon
               message="实时位置驱动的清晰导航"
-              description="默认驾车并自动出发；去程可切换骑行或步行，系统会从当前位置重算。返家固定模拟驾车。拖动地图可暂时取消跟随。"
+              description="默认按实时位置规划驾车路线；去程可切换骑行或步行，位置变化后系统会重新计算。拖动地图可暂时取消跟随。"
             />
             {upcomingHint ? (
               <Alert

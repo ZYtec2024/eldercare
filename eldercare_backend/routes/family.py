@@ -596,13 +596,13 @@ def get_family_orders():
                         u.real_name AS assigned_volunteer_name,
                         hr.review_status AS hour_review_status,
                         hr.approved_hours AS hour_review_approved_hours,
-                        (
+                        COALESCE(o.service_started_at, (
                             SELECT MIN(start_event.created_at)
                             FROM dispatch_events start_event
                             WHERE start_event.order_id = o.order_id
                               AND start_event.event_type = 'service_started'
-                        ) AS service_started_at,
-                        (
+                        )) AS service_started_at,
+                        COALESCE(o.service_ended_at, (
                             SELECT MIN(end_event.created_at)
                             FROM dispatch_events end_event
                             WHERE end_event.order_id = o.order_id
@@ -612,7 +612,7 @@ def get_family_orders():
                                   'family_confirmed_completion',
                                   'simulation_service_completed'
                               )
-                        ) AS service_ended_at
+                        )) AS service_ended_at
                     FROM orders o
                     JOIN elders e ON o.elder_id = e.elder_id
                     LEFT JOIN users u ON o.volunteer_id = u.user_id
@@ -641,13 +641,13 @@ def get_family_orders():
                         u.real_name AS assigned_volunteer_name,
                         hr.review_status AS hour_review_status,
                         hr.approved_hours AS hour_review_approved_hours,
-                        (
+                        COALESCE(o.service_started_at, (
                             SELECT MIN(start_event.created_at)
                             FROM dispatch_events start_event
                             WHERE start_event.order_id = o.order_id
                               AND start_event.event_type = 'service_started'
-                        ) AS service_started_at,
-                        (
+                        )) AS service_started_at,
+                        COALESCE(o.service_ended_at, (
                             SELECT MIN(end_event.created_at)
                             FROM dispatch_events end_event
                             WHERE end_event.order_id = o.order_id
@@ -657,7 +657,7 @@ def get_family_orders():
                                   'family_confirmed_completion',
                                   'simulation_service_completed'
                               )
-                        ) AS service_ended_at
+                        )) AS service_ended_at
                     FROM orders o
                     JOIN elders e ON o.elder_id = e.elder_id
                     LEFT JOIN users u ON o.volunteer_id = u.user_id

@@ -19,7 +19,7 @@ const features: HomeFeatureItem[] = [
   {
     icon: <DeploymentUnitOutlined className="text-5xl text-cyan-600" />,
     title: '实时调度指挥台',
-    desc: '查看宝山区共享地图上的50位老人和20名志愿者，观察A*路线、模拟路况、SOS重规划、候选队列、疲劳度及技能硬匹配评分。',
+    desc: '查看当前待调度及服务中的订单位置、志愿者路线、SOS优先级、候选队列、疲劳度及技能硬匹配评分。',
     path: '/admin/dispatch-board',
     color: 'border-cyan-200 bg-cyan-50/50',
   },
