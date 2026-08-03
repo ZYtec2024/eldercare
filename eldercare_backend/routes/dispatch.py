@@ -258,6 +258,8 @@ def _demo_motion_seconds(eta_minutes: int | float | None, returning: bool = Fals
 
 
 def _route_motion_rate(route: dict[str, Any], fallback: float = JOURNEY_PROGRESS_PER_SECOND) -> float:
+    if not _simulation_enabled():
+        return 0.0
     try:
         seconds = float(route.get("motion_seconds") or 0)
         if seconds > 0:
@@ -711,6 +713,20 @@ def ensure_dispatch_schema() -> None:
                 WHERE NOT EXISTS (
                     SELECT 1 FROM elder_addresses ea WHERE ea.elder_id = e.elder_id
                 )
+            """)
+            # Formal-mode baseline: a seed-only position starts at the current
+            # default address. Real GPS/address-book updates use another source
+            # and are therefore never overwritten by this migration.
+            cursor.execute("""
+                UPDATE elder_location_state loc
+                SET lng = ea.lng, lat = ea.lat,
+                    location_source = 'address_book', is_home_fixed = TRUE,
+                    updated_at = CURRENT_TIMESTAMP
+                FROM elder_addresses ea
+                WHERE ea.elder_id = loc.elder_id
+                  AND ea.is_current = TRUE
+                  AND ea.lng IS NOT NULL AND ea.lat IS NOT NULL
+                  AND loc.location_source IN ('simulated', 'hidden_demo')
             """)
             # Older demo records stopped at a community/building address. Give
             # every elder a deterministic room number so upgraded and fresh
@@ -4552,8 +4568,6 @@ def _overview(cursor: Any, user_id: int | None = None, requested_region: str | N
     """, (region_adcode,))
     volunteers = []
     for row in cursor.fetchall():
-        if _volunteer_current_region(row.get("lng"), row.get("lat")) != region_adcode:
-            continue
         volunteers.append({
             "volunteer_id": int(row["volunteer_id"]), "name": row["real_name"], "lng": float(row["lng"]), "lat": float(row["lat"]),
             "availability": row["availability"], "fatigue": int(row["fatigue_score"]), "rating": float(row["service_rating"]),
@@ -4572,7 +4586,7 @@ def _overview(cursor: Any, user_id: int | None = None, requested_region: str | N
         JOIN elders e ON e.elder_id = o.elder_id JOIN elder_location_state l ON l.elder_id = e.elder_id
         LEFT JOIN users v ON v.user_id = o.volunteer_id
         WHERE o.status IN ('pending', 'accepted', 'in_progress') AND o.region_adcode = %s
-        ORDER BY d.created_at DESC LIMIT 30
+        ORDER BY d.created_at DESC
     """, (region_adcode,))
     orders = [{
         "order_id": int(row["order_id"]), "service_type": row["service_type"], "status": row["status"],
@@ -4587,14 +4601,14 @@ def _overview(cursor: Any, user_id: int | None = None, requested_region: str | N
     cursor.execute("""SELECT r.order_id, r.volunteer_id, r.route_json, r.eta_minutes, r.traffic_version, r.replanned_at
                       FROM dispatch_routes r JOIN orders o ON o.order_id = r.order_id
                       WHERE o.status IN ('accepted', 'in_progress') AND o.region_adcode = %s
-                      ORDER BY r.replanned_at DESC LIMIT 20""", (region_adcode,))
+                      ORDER BY r.replanned_at DESC""", (region_adcode,))
     routes = []
     for row in cursor.fetchall():
         try:
             route = json.loads(row["route_json"])
         except (TypeError, json.JSONDecodeError):
             route = {"path": []}
-        routes.append({"order_id": int(row["order_id"]), "volunteer_id": int(row["volunteer_id"]), "eta_minutes": int(row["eta_minutes"]), "traffic_version": int(row["traffic_version"]), "replanned_at": _iso(row["replanned_at"]), "motion_rate": _route_motion_rate(route), **route})
+        routes.append({"order_id": int(row["order_id"]), "volunteer_id": int(row["volunteer_id"]), "eta_minutes": int(row["eta_minutes"]), "traffic_version": int(row["traffic_version"]), "replanned_at": _iso(row["replanned_at"]), **route, "motion_rate": _route_motion_rate(route)})
     # Return journeys are part of the real command map too.  Previously only
     # the volunteer portal received them, which made the commander view look
     # as if a completed volunteer had teleported home.
@@ -4786,6 +4800,9 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
                 "proxy_family_name": row.get("proxy_creator_name"),
                 "proxy_reason": row.get("proxy_reason"),
             }
+            if row["status"] in ("pending", "accepted", "in_progress"):
+                item["lng"] = service_lng
+                item["lat"] = service_lat
             if row["status"] in active_statuses and row["volunteer_id"]:
                 volunteer = {
                     "volunteer_id": int(row["volunteer_id"]), "name": row["volunteer_name"],
@@ -4882,7 +4899,6 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
               ))
             ORDER BY o.order_id DESC
         """, (user_id, user_id, user_id, user_id))
-        seen_elders: set[int] = set()
         for row in cursor.fetchall():
             elder_id = int(row["elder_id"])
             assigned_to_me = int(row["volunteer_id"] or 0) == user_id and row["status"] in active_statuses
@@ -4897,12 +4913,6 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
                 "location_unlocked": assigned_to_me,
             }
             if assigned_to_me:
-                if elder_id not in seen_elders:
-                    payload["elders"].append({
-                        "elder_id": elder_id, "name": row["elder_name"], "address": row["elder_address"],
-                        "lng": float(row["lng"]), "lat": float(row["lat"]),
-                    })
-                    seen_elders.add(elder_id)
                 item["lng"] = float(row["lng"])
                 item["lat"] = float(row["lat"])
                 item["amap_marker_url"] = _amap_marker_url(float(row["lng"]), float(row["lat"]), f"{row['elder_name']}服务点")
@@ -4913,10 +4923,10 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
                     own["lng"], own["lat"], item["lng"], item["lat"], f"{row['elder_name']}服务点",
                 )
             payload["orders"].append(item)
-        if payload["elders"]:
-            payload["privacy_message"] = "已接单：地图显示老人真实服务点与前往路线。未接单时仅显示您自己的位置。"
+        if any(order.get("location_unlocked") for order in payload["orders"]):
+            payload["privacy_message"] = "已接单：地图显示订单服务点与前往路线。未接单时仅显示您自己的位置。"
         else:
-            payload["privacy_message"] = "未接单时地图只显示您自己的位置；接单后才会解锁老人真实坐标与导航路线。"
+            payload["privacy_message"] = "未接单时地图只显示您自己的位置；接单后才会解锁订单服务点与导航路线。"
         return payload
 
     if role == "family":
@@ -4988,6 +4998,9 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
                 "service_lng": service_lng,
                 "service_lat": service_lat,
             }
+            if row["status"] in ("pending", "accepted", "in_progress"):
+                item["lng"] = service_lng
+                item["lat"] = service_lat
             if row["status"] in active_statuses and row["volunteer_id"]:
                 volunteer = {"volunteer_id": int(row["volunteer_id"]), "name": row["volunteer_name"], "lng": float(row["volunteer_lng"]), "lat": float(row["volunteer_lat"]), "availability": row["availability"], "fatigue": 0, "rating": 0, "assigned_today": 0, "skills": []}
                 payload["volunteers"].append(volunteer)
@@ -6007,7 +6020,7 @@ def create_smart_order_for_elder(
         lng=lng,
         lat=lat,
         address=address,
-        sync_pin=True,
+        sync_pin=_simulation_enabled(),
     )
     region_adcode = str(point["region_adcode"])
     service_lng = float(point["lng"])
@@ -6282,27 +6295,8 @@ def create_dispatch_order():
                 ).strip()
                 if not is_active_region(region_adcode, REGION_CATALOG):
                     return jsonify({"code": 400, "message": "该区域尚未开通服务，无法派单"}), 400
-                if location_row.get("saved_address"):
-                    cursor.execute(
-                        "UPDATE elders SET address = %s WHERE elder_id = %s",
-                        (location_row["saved_address"], elder["elder_id"]),
-                    )
-                cursor.execute("SELECT elder_id FROM elder_location_state WHERE elder_id = %s", (elder["elder_id"],))
-                if cursor.fetchone():
-                    cursor.execute(
-                        """UPDATE elder_location_state
-                           SET lng = %s, lat = %s, location_source = 'address_book',
-                               is_home_fixed = TRUE, updated_at = CURRENT_TIMESTAMP
-                           WHERE elder_id = %s""",
-                        (service_lng, service_lat, elder["elder_id"]),
-                    )
-                else:
-                    cursor.execute(
-                        """INSERT INTO elder_location_state
-                           (elder_id, lng, lat, location_source, is_home_fixed)
-                           VALUES (%s, %s, %s, 'address_book', TRUE)""",
-                        (elder["elder_id"], service_lng, service_lat),
-                    )
+                # The chosen address belongs to this order snapshot. It must
+                # never overwrite the elder's independently tracked position.
             cursor.execute("""
                 INSERT INTO orders
                     (elder_id, created_by, service_type, service_time, service_hours,

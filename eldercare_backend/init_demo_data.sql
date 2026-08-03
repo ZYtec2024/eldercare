@@ -759,6 +759,9 @@ VALUES
 (36, 116.489798, 39.952311, 'simulated', TRUE),
 (37, 116.469750, 39.950015, 'simulated', TRUE);
 
+-- 正式版中初始实时位置来自当前默认地址，不属于自动模拟位置。
+UPDATE elder_location_state SET location_source = 'address_book';
+
 INSERT INTO elder_addresses
     (elder_id, label, province_name, city_name, district_name, region_adcode,
      detail_address, full_address, lng, lat, is_current)

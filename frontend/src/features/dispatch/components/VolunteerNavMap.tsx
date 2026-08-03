@@ -228,6 +228,7 @@ export function VolunteerNavMap({
   etaMinutes?: number
   onNavigationModeChange?: (mode: NavigationMode) => void
 }) {
+  const simulationEnabled = import.meta.env.VITE_ENABLE_SIMULATION === 'true'
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<any>(null)
   const overlaysRef = useRef<any[]>([])
@@ -480,7 +481,7 @@ export function VolunteerNavMap({
       })
     }
 
-    const position = self?.route?.path?.length && self.route.path.length > 2
+    const position = simulationEnabled && self?.route?.path?.length && self.route.path.length > 2
       ? pointAlongPath(self.route.path as Point[], self.route.progress ?? 0)
       : self?.position
     if (position && !selfMarkerRef.current) {
@@ -503,7 +504,7 @@ export function VolunteerNavMap({
     const path = (ego.route.path || []) as Point[]
     const incomingProgress = Math.max(0, Math.min(100, Number(ego.route.progress || 0)))
     const now = performance.now()
-    const motionRate = Math.max(0.05, Number(ego.route.motion_rate || 0.65))
+    const motionRate = simulationEnabled ? Math.max(0.05, Number(ego.route.motion_rate || 0.65)) : 0
     const current = routeMotionRef.current
 
     if (!current || current.key !== routeJourneyKey) {
@@ -519,7 +520,7 @@ export function VolunteerNavMap({
         totalDistanceMeters: Math.max(1, pathDistanceMeters(path)),
         rawPosition: ego.position,
       }
-      const initialPosition = path.length > 2 ? pointAlongPath(path, incomingProgress) : ego.position
+      const initialPosition = simulationEnabled && path.length > 2 ? pointAlongPath(path, incomingProgress) : ego.position
       selfMarkerRef.current?.setPosition?.(initialPosition)
       markerRenderedPositionRef.current = initialPosition
       cameraInitializedRef.current = false
@@ -589,7 +590,7 @@ export function VolunteerNavMap({
       lastMotionFrameAtRef.current = now
 
       if (motion && marker) {
-        const followsRoadGeometry = motion.path.length > 2
+        const followsRoadGeometry = simulationEnabled && motion.path.length > 2
         if (followsRoadGeometry) {
           // Predict only slightly beyond the last server anchor. If polling is
           // interrupted the vehicle pauses instead of drifting away from truth.

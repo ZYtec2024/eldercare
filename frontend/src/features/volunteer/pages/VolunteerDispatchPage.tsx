@@ -363,7 +363,7 @@ export default function VolunteerDispatchPage() {
         etaMinutes: route.etaMinutes,
         navigationMode: mode,
       })
-      if (!silent) message.success(`已切换为${mode === 'driving' ? '驾车' : mode === 'riding' ? '骑行' : '步行'}，从当前位置重新规划并自动出发`)
+      if (!silent) message.success(`已切换为${mode === 'driving' ? '驾车' : mode === 'riding' ? '骑行' : '步行'}，已从当前位置重新规划路线`)
       await load()
     } catch (err: any) {
       if (!silent) message.error(err?.message || '切换导航方式失败')
@@ -580,13 +580,6 @@ export default function VolunteerDispatchPage() {
           />
         </div>
       </Card>
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-        <div>
-          <b>接单后自动出发</b>
-          <div className="text-xs text-emerald-800">行程由后端统一时间轴推进；切换页面或家属端刷新都不会重置路线进度。</div>
-        </div>
-        <Switch checked disabled checkedChildren="自动出发" />
-      </div>
       <div className="relative">
         <DispatchMap overview={tracking} height={440} />
         {canOpenNavigation ? (

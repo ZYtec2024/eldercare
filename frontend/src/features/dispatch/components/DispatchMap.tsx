@@ -275,6 +275,7 @@ export function DispatchMap({
   expandable?: boolean
   onExpand?: () => void
 }) {
+  const simulationEnabled = import.meta.env.VITE_ENABLE_SIMULATION === 'true'
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<any>(null)
   const overlaysRef = useRef<any[]>([])
@@ -369,6 +370,10 @@ export function DispatchMap({
     overlaysRef.current = []
     const add = (overlay: any) => { overlay.setMap(map); overlaysRef.current.push(overlay) }
     const availabilityColor = (availability: string) => availability === 'idle' ? '#16a34a' : availability === 'serving' ? '#2563eb' : availability === 'returning' ? '#7c3aed' : '#f59e0b'
+    if (!simulationEnabled) {
+      animatedTripsRef.current.forEach((trip) => trip.marker.setMap?.(null))
+      animatedTripsRef.current.clear()
+    }
     // Keep a route at 100% for one render so the road marker reaches the
     // endpoint before the service/home marker takes over.
     const activeRouteIds = new Set(overview.routes.filter((route) => route.progress != null && route.progress <= 100).map((route) => route.order_id))
@@ -435,10 +440,12 @@ export function DispatchMap({
       focusPoints.push([elder.lng, elder.lat])
       add(new AMap.Marker({
         position: [elder.lng, elder.lat], offset: new AMap.Pixel(-13, -13),
-        content: markerHtml('#e11d48', '老', elder.name), label: { content: elder.name, direction: 'bottom', offset: new AMap.Pixel(0, 4), style: { fontSize: '11px', color: '#334155', border: '0', background: '#fff' } }, zIndex: 30,
+        content: markerHtml('#e11d48', '人', elder.name), label: { content: `${elder.name} · 实时位置`, direction: 'bottom', offset: new AMap.Pixel(0, 4), style: { fontSize: '11px', color: '#334155', border: '0', background: '#fff' } }, zIndex: 30,
       }))
     })
-    const routedVolunteerIds = new Set([...overview.routes.filter((route) => route.progress != null && route.progress <= 100).map((route) => route.volunteer_id), ...finishingVolunteerIds])
+    const routedVolunteerIds = simulationEnabled
+      ? new Set([...overview.routes.filter((route) => route.progress != null && route.progress <= 100).map((route) => route.volunteer_id), ...finishingVolunteerIds])
+      : new Set<number>()
     overview.volunteers.filter((volunteer) => !routedVolunteerIds.has(volunteer.volunteer_id)).forEach((volunteer) => {
       focusPoints.push([volunteer.lng, volunteer.lat])
       add(new AMap.Marker({
@@ -450,7 +457,9 @@ export function DispatchMap({
       focusPoints.push([order.lng!, order.lat!])
       add(new AMap.Marker({
         position: [order.lng!, order.lat!], offset: new AMap.Pixel(-11, -11),
-        content: markerHtml(order.urgency === 'sos' ? '#dc2626' : '#ea580c', order.urgency === 'sos' ? 'SOS' : '单', order.service_type), zIndex: 50,
+        content: markerHtml(order.urgency === 'sos' ? '#dc2626' : '#ea580c', order.urgency === 'sos' ? 'SOS' : '单', order.service_type),
+        label: { content: `${order.elder_name} · 订单服务点`, direction: 'bottom', offset: new AMap.Pixel(0, 4), style: { fontSize: '11px', color: '#7c2d12', border: '0', background: '#fff7ed' } },
+        zIndex: 50,
       }))
     })
     // Include the persisted road endpoints when fitting the command map.
@@ -542,7 +551,7 @@ export function DispatchMap({
             ...ROUTE_LINE_STYLE,
           }))
         })
-        if (route.progress != null && route.progress <= 100) {
+        if (simulationEnabled && route.progress != null && route.progress <= 100) {
           const previous = routeProgressRef.current.get(route.order_id)
           const history = sosRouteHistoryRef.current.get(route.order_id)
           // A new traffic version starts at the responder's *current* point.
