@@ -187,13 +187,13 @@ export default function AdminAiSettingsPage() {
             tencentAsrEngineModelType: '16k_zh',
             chatApiKey: '',
             chatApiBaseUrl: 'https://api.deepseek.com',
-            chatModelName: 'deepseek-v4-flash',
+            chatModelName: 'deepseek-chat',
             ttsVoice: 'zh-CN-XiaoxiaoNeural',
             ttsRate: '+0%',
             ttsVolume: '+0%',
             reportApiKey: '',
             reportApiBaseUrl: 'https://api.deepseek.com',
-            reportModelName: 'deepseek-v4-flash',
+            reportModelName: 'deepseek-chat',
           }}
         >
           <div className="grid gap-4 md:grid-cols-2">
@@ -273,7 +273,7 @@ export default function AdminAiSettingsPage() {
               <Input placeholder="https://api.deepseek.com" />
             </Form.Item>
             <Form.Item label="模型名称" name="chatModelName">
-              <Input placeholder="deepseek-v4-flash" />
+              <Input placeholder="deepseek-chat" />
             </Form.Item>
           </div>
 
@@ -342,7 +342,7 @@ export default function AdminAiSettingsPage() {
               <Input placeholder="https://api.deepseek.com" />
             </Form.Item>
             <Form.Item label="模型名称" name="reportModelName">
-              <Input placeholder="deepseek-v4-flash" />
+              <Input placeholder="deepseek-chat" />
             </Form.Item>
           </div>
 
