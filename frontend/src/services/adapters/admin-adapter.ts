@@ -1,5 +1,62 @@
 import { http, type ApiEnvelope } from '@/services/http'
 import type { AdminUserRow, AlertItem, AwardRequestItem, DashboardMetric, HourReviewItem, Role } from '@/types/domain'
+import type { DispatchRoute } from '@/features/dispatch/dispatch-types'
+
+export interface ServiceRecordItem {
+  orderId: number
+  elderName: string
+  volunteerName?: string
+  volunteerId?: number
+  serviceType: string
+  address?: string
+  regionAdcode?: string
+  serviceLng?: number
+  serviceLat?: number
+  serviceTime: string
+  arrivedAt: string
+  serviceStartedAt: string
+  serviceEndedAt: string
+  durationMinutes?: number
+  notes?: string
+  volunteerStartLng?: number
+  volunteerStartLat?: number
+  volunteerStartAddress?: string
+  actualDistanceKm?: number
+  route?: DispatchRoute
+}
+
+export async function fetchServiceRecords(page = 1, pageSize = 30, orderId?: number) {
+  const response = await http.get<ApiEnvelope<{ items: Array<Record<string, unknown>>; total: number }>>(
+    '/admin/service-records',
+    { params: { page, page_size: pageSize, order_id: orderId } },
+  )
+  const payload = response.data.data
+  return {
+    total: Number(payload?.total ?? 0),
+    items: (payload?.items ?? []).map((row): ServiceRecordItem => ({
+      orderId: Number(row.order_id),
+      elderName: String(row.elder_name ?? ''),
+      volunteerName: row.volunteer_name ? String(row.volunteer_name) : undefined,
+      volunteerId: row.volunteer_id == null ? undefined : Number(row.volunteer_id),
+      serviceType: String(row.service_type ?? ''),
+      address: row.address ? String(row.address) : undefined,
+      regionAdcode: row.region_adcode ? String(row.region_adcode) : undefined,
+      serviceLng: row.service_lng == null ? undefined : Number(row.service_lng),
+      serviceLat: row.service_lat == null ? undefined : Number(row.service_lat),
+      serviceTime: String(row.service_time ?? ''),
+      arrivedAt: String(row.arrived_at ?? ''),
+      serviceStartedAt: String(row.service_started_at ?? ''),
+      serviceEndedAt: String(row.service_ended_at ?? ''),
+      durationMinutes: row.duration_minutes == null ? undefined : Number(row.duration_minutes),
+      notes: row.notes ? String(row.notes) : undefined,
+      volunteerStartLng: row.volunteer_start_lng == null ? undefined : Number(row.volunteer_start_lng),
+      volunteerStartLat: row.volunteer_start_lat == null ? undefined : Number(row.volunteer_start_lat),
+      volunteerStartAddress: row.volunteer_start_address ? String(row.volunteer_start_address) : undefined,
+      actualDistanceKm: row.actual_distance_km == null ? undefined : Number(row.actual_distance_km),
+      route: row.route as DispatchRoute | undefined,
+    })),
+  }
+}
 
 export interface LoginAuditItem {
   auditId: number

@@ -85,13 +85,14 @@ export async function updateVolunteerLiveLocation(
   userId: number,
   lng: number,
   lat: number,
-  options?: { fromGps?: boolean },
+  options?: { fromGps?: boolean; accuracyMeters?: number },
 ) {
   const response = await http.post<ApiEnvelope<Record<string, unknown>>>('/profile/volunteer/location', {
     user_id: userId,
     lng,
     lat,
     from_gps: options?.fromGps === true,
+    accuracy_meters: options?.accuracyMeters,
   })
   return response.data
 }

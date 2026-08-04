@@ -18,6 +18,12 @@ export interface DispatchRoute {
   motion_rate?: number
   navigation_mode?: NavigationMode
   geometry_source?: 'amap' | string
+  actual_trace?: Array<[number, number]>
+  planned_path?: Array<[number, number]>
+  trace_source?: 'browser_gps' | 'planned_fallback' | string
+  start_lng?: number
+  start_lat?: number
+  start_address?: string
 }
 
 export interface DispatchOrder {

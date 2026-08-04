@@ -15,6 +15,8 @@ import {
 import { useSession } from '@/features/auth/useSession'
 import { http, type ApiEnvelope } from '@/services/http'
 import { AdminGeoScopeFilters, type AdminGeoScope } from '@/features/admin/components/AdminGeoScopeFilters'
+import { ServiceRecordModal } from '@/features/shared/ServiceRecordModal'
+import { fetchServiceRecords, type ServiceRecordItem } from '@/services/adapters/admin-adapter'
 
 interface PublicTask {
   order_id: number
@@ -61,6 +63,8 @@ export default function PublicTaskHallPage() {
   const [grabbingId, setGrabbingId] = useState<number | null>(null)
   const [geoScope, setGeoScope] = useState<AdminGeoScope>({})
   const [page, setPage] = useState(1)
+  const [recordLoadingId, setRecordLoadingId] = useState<number | null>(null)
+  const [selectedRecord, setSelectedRecord] = useState<ServiceRecordItem | null>(null)
   const pageSize = 9
 
   const isVolunteer = session?.role === 'volunteer'
@@ -172,6 +176,23 @@ export default function PublicTaskHallPage() {
     setSelectedIds((prev) =>
       prev.includes(orderId) ? prev.filter((id) => id !== orderId) : [...prev, orderId],
     )
+  }
+
+  const openServiceRecord = async (orderId: number) => {
+    setRecordLoadingId(orderId)
+    try {
+      const result = await fetchServiceRecords(1, 10, orderId)
+      const record = result.items[0]
+      if (!record) {
+        message.info('该订单暂无可查看的服务记录')
+        return
+      }
+      setSelectedRecord(record)
+    } catch (err: any) {
+      message.error(err?.message || '服务记录加载失败')
+    } finally {
+      setRecordLoadingId(null)
+    }
   }
 
   const completedTasks = tasks.filter((t) => t.status === 'completed')
@@ -372,6 +393,17 @@ export default function PublicTaskHallPage() {
                         志愿者：{task.volunteer_name}
                       </div>
                     )}
+                    {isAdmin && isCompleted ? (
+                      <Button
+                        className="!mt-3"
+                        size="small"
+                        type="link"
+                        loading={recordLoadingId === task.order_id}
+                        onClick={() => openServiceRecord(task.order_id)}
+                      >
+                        查看服务记录与路线
+                      </Button>
+                    ) : null}
                   </div>
                 </Card>
               )
@@ -407,6 +439,7 @@ export default function PublicTaskHallPage() {
           </div>
         )}
       </div>
+      <ServiceRecordModal record={selectedRecord} onClose={() => setSelectedRecord(null)} />
     </div>
   )
 }

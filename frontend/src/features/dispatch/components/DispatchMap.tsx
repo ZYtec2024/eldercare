@@ -106,8 +106,11 @@ function amapLoadHint(reason: string) {
   return `${reason}。当前主机「${host}」。本地演示请把 JS Key 白名单清空或选不校验 Referer；不要只加 127.0.0.1（用 localhost 打开会整图空白）。若必须加白名单，请同时加 localhost 与 127.0.0.1`
 }
 
-function markerHtml(color: string, icon: string, text: string) {
-  return `<div style="display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 2px 7px rgba(15,23,42,.35);color:#fff;font-size:12px;font-weight:700" title="${text}">${icon}</div>`
+function markerHtml(color: string, icon: string, text: string, kind: 'person' | 'order' = 'person') {
+  const radius = kind === 'order' ? '7px 7px 7px 2px' : '50%'
+  const transform = kind === 'order' ? 'rotate(-45deg)' : 'none'
+  const iconTransform = kind === 'order' ? 'rotate(45deg)' : 'none'
+  return `<div style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:${radius};transform:${transform};background:${color};border:2px solid #fff;box-shadow:0 2px 8px rgba(15,23,42,.35);color:#fff;font-size:11px;font-weight:700" title="${text}"><span style="transform:${iconTransform}">${icon}</span></div>`
 }
 
 function routePoints(result: any): Point[] {
@@ -450,14 +453,14 @@ export function DispatchMap({
       focusPoints.push([volunteer.lng, volunteer.lat])
       add(new AMap.Marker({
         position: [volunteer.lng, volunteer.lat], offset: new AMap.Pixel(-13, -13),
-        content: markerHtml(availabilityColor(volunteer.availability), '志', volunteer.name), label: { content: `${volunteer.name} · ${volunteer.availability}`, direction: 'bottom', offset: new AMap.Pixel(0, 4), style: { fontSize: '11px', color: '#334155', border: '0', background: '#fff' } }, zIndex: 40,
+        content: markerHtml('#2563eb', '志', volunteer.name), label: { content: `${volunteer.name} · 志愿者实时位置`, direction: 'bottom', offset: new AMap.Pixel(0, 4), style: { fontSize: '11px', color: '#1e3a8a', border: '0', background: '#eff6ff' } }, zIndex: 40,
       }))
     })
     overview.orders.filter((order) => order.lng != null && order.lat != null).forEach((order) => {
       focusPoints.push([order.lng!, order.lat!])
       add(new AMap.Marker({
         position: [order.lng!, order.lat!], offset: new AMap.Pixel(-11, -11),
-        content: markerHtml(order.urgency === 'sos' ? '#dc2626' : '#ea580c', order.urgency === 'sos' ? 'SOS' : '单', order.service_type),
+        content: markerHtml(order.urgency === 'sos' ? '#dc2626' : '#ea580c', order.urgency === 'sos' ? 'SOS' : '单', order.service_type, 'order'),
         label: { content: `${order.elder_name} · 订单服务点`, direction: 'bottom', offset: new AMap.Pixel(0, 4), style: { fontSize: '11px', color: '#7c2d12', border: '0', background: '#fff7ed' } },
         zIndex: 50,
       }))
@@ -510,19 +513,21 @@ export function DispatchMap({
       const end = fallback[fallback.length - 1]
       const journeyKey = route.journey_id
         || `${route.order_id}:${start[0].toFixed(5)},${start[1].toFixed(5)}:${end[0].toFixed(5)},${end[1].toFixed(5)}`
-      const key = `${route.order_id}:${route.traffic_version}:${start[0].toFixed(5)},${start[1].toFixed(5)}:${end[0].toFixed(5)},${end[1].toFixed(5)}`
+      const navigationMode = route.navigation_mode || 'driving'
+      const key = `${route.order_id}:${route.traffic_version}:${navigationMode}:${start[0].toFixed(5)},${start[1].toFixed(5)}:${end[0].toFixed(5)},${end[1].toFixed(5)}`
       const isSos = overview.orders.some((order) => order.order_id === route.order_id && order.urgency === 'sos')
       const publishGeometry = (points: Point[], segments: AmapDrivingRoute['trafficSegments']) => {
         // The first portal that resolves the AMap driving route publishes a
         // compact road polyline.  Thereafter every portal and the backend
         // movement clock use the identical geometry, just like the sandbox.
-        const signature = `${journeyKey}:${route.traffic_version}`
+        const signature = `${journeyKey}:${route.traffic_version}:${navigationMode}`
         if (publishedGeometryRef.current.has(signature) || points.length < 3) return
         publishedGeometryRef.current.add(signature)
         void http.post(`/dispatch/routes/${route.order_id}/geometry`, {
           volunteer_id: route.volunteer_id,
           path: compactPath(points, 320),
           traffic_segments: segments.map((segment) => ({ ...segment, path: compactPath(segment.path, 90) })),
+          navigation_mode: navigationMode,
         }).catch(() => publishedGeometryRef.current.delete(signature))
       }
       const paint = (points: Point[], isFallback = false, routeWithTraffic: DispatchRoute = route) => {
@@ -535,7 +540,7 @@ export function DispatchMap({
         // Green / yellow / red share one stroke style; only color differs.
         add(new AMap.Polyline({
           path: points,
-          strokeColor: '#16a34a',
+          strokeColor: route.geometry_source === 'actual_gps' ? '#2563eb' : '#16a34a',
           strokeStyle: isFallback ? 'dashed' : 'solid',
           zIndex: 19,
           ...ROUTE_LINE_STYLE,
@@ -607,17 +612,23 @@ export function DispatchMap({
           }
         }
       }
-      if (fallback.length > 2) { paint(fallback); return }
+      // A recorded GPS breadcrumb is evidence of the journey itself. Never
+      // ask AMap to replace it with a newly planned road after completion.
+      if (route.geometry_source === 'actual_gps' || fallback.length > 2) { paint(fallback); return }
       const cached = routeCache.current.get(key)
       if (cached) {
         paint(cached.path, false, { ...route, traffic_segments: cached.trafficSegments })
         return
       }
-      const driving = new AMap.Driving({ policy: AMap.DrivingPolicy.REAL_TRAFFIC ?? AMap.DrivingPolicy.LEAST_TIME, extensions: 'all', showTraffic: true, map: null, hideMarkers: true })
-      driving.search(new AMap.LngLat(...start), new AMap.LngLat(...end), (resultStatus: string, result: any) => {
+      const planner = navigationMode === 'walking'
+        ? new AMap.Walking({ map: null, hideMarkers: true })
+        : navigationMode === 'riding'
+          ? new AMap.Riding({ map: null, hideMarkers: true })
+          : new AMap.Driving({ policy: AMap.DrivingPolicy.REAL_TRAFFIC ?? AMap.DrivingPolicy.LEAST_TIME, extensions: 'all', showTraffic: true, map: null, hideMarkers: true })
+      planner.search(new AMap.LngLat(...start), new AMap.LngLat(...end), (resultStatus: string, result: any) => {
         const points = resultStatus === 'complete' ? routePoints(result) : []
         if (points.length > 1) {
-          const segments = routeTrafficSegments(result)
+          const segments = navigationMode === 'driving' ? routeTrafficSegments(result) : []
           // Keep the TMC colours together with the geometry. Polling can hit
           // this cache before the shared backend write returns; caching only
           // `path` repainted the same road green one second after red/yellow
@@ -649,7 +660,7 @@ export function DispatchMap({
   return <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-slate-100" style={{ height }}>
     <div ref={containerRef} className="h-full w-full" />
     {status !== 'ready' ? <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80 text-sm text-white">{status === 'loading' ? '正在加载高德真实地图与路况…' : `高德地图不可用：${error}`}</div> : null}
-    <div className="pointer-events-none absolute left-3 top-3 rounded-xl bg-slate-950/85 px-3 py-2 text-xs text-white shadow-lg"><div className="font-semibold">{overview?.region_name || '当前服务区县'} · 高德真实道路与规划路况</div><div className="mt-1 text-[11px] text-slate-300">红：老人/订单 · 绿/蓝/紫：志愿者状态 · 高德返回黄/红路况时覆盖绿色底线</div><div className="mt-2 flex gap-3 text-[11px]"><span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-emerald-400" />默认/畅通</span><span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-amber-400" />缓行</span><span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-red-500" />拥堵</span></div></div>
+    <div className="pointer-events-none absolute left-3 top-3 rounded-xl bg-slate-950/85 px-3 py-2 text-xs text-white shadow-lg"><div className="font-semibold">{overview?.region_name || '当前服务区县'} · 人单分离地图</div><div className="mt-1 text-[11px] text-slate-200"><span className="text-rose-300">● 老人实时位置</span> · <span className="text-blue-300">● 志愿者实时位置</span> · <span className="text-orange-300">◆ 订单服务位置</span></div><div className="mt-2 flex gap-3 text-[11px]"><span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-emerald-400" />畅通</span><span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-amber-400" />缓行</span><span><i className="mr-1 inline-block h-2 w-2 rounded-sm bg-red-500" />拥堵</span></div></div>
     {(expandable || onExpand) ? (
       <button
         type="button"

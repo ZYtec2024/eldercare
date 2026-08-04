@@ -4,8 +4,68 @@ from db import get_db_connection
 from location_policy import find_unfinished_elder_order, location_change_block_message
 from utils import get_validated_data
 from region_service import canonicalize_active_adcode, geocode_address, reverse_geocode, search_address_pois
+import json
+import math
 
 profile_bp = Blueprint('profile', __name__)
+
+
+def _point_distance_m(a, b):
+    """Fast local distance for deciding whether a GPS breadcrumb is useful."""
+    mean_lat = math.radians((float(a[1]) + float(b[1])) / 2)
+    dx = (float(b[0]) - float(a[0])) * 111000 * math.cos(mean_lat)
+    dy = (float(b[1]) - float(a[1])) * 111000
+    return math.hypot(dx, dy)
+
+
+def _append_active_service_trace(cursor, volunteer_id, lng, lat, accuracy_meters=None):
+    """Append real browser-GPS breadcrumbs without changing the planned route."""
+    try:
+        accuracy = float(accuracy_meters) if accuracy_meters is not None else None
+    except (TypeError, ValueError):
+        accuracy = None
+    # Very inaccurate network fixes would create implausible jumps in the audit trail.
+    if accuracy is not None and accuracy > 120:
+        return False
+    cursor.execute(
+        """
+        SELECT r.order_id, r.route_json
+        FROM dispatch_routes r
+        JOIN orders o ON o.order_id = r.order_id
+        WHERE r.volunteer_id = %s
+          AND o.volunteer_id = %s
+          AND o.status IN ('accepted', 'in_progress')
+        ORDER BY o.created_at DESC
+        LIMIT 1
+        FOR UPDATE
+        """,
+        (volunteer_id, volunteer_id),
+    )
+    row = cursor.fetchone()
+    if not row or not row.get('route_json'):
+        return False
+    try:
+        route = json.loads(row['route_json'])
+    except (TypeError, json.JSONDecodeError):
+        return False
+    trace = route.get('actual_trace')
+    if not isinstance(trace, list):
+        trace = []
+    point = [round(float(lng), 7), round(float(lat), 7)]
+    if trace and _point_distance_m(trace[-1], point) < 5:
+        return False
+    trace.append(point)
+    route['actual_trace'] = trace[-2000:]
+    route['trace_source'] = 'browser_gps'
+    cursor.execute(
+        """
+        UPDATE dispatch_routes
+        SET route_json = %s
+        WHERE order_id = %s
+        """,
+        (json.dumps(route, ensure_ascii=False), row['order_id']),
+    )
+    return True
 
 # 1. 获取个人详细信息 (多表 JOIN 经典运用)
 @profile_bp.route('/info', methods=['GET'])
@@ -199,11 +259,18 @@ def update_volunteer_live_location():
                    WHERE volunteer_id = %s""",
                 (resolved['lng'], resolved['lat'], user_id),
             )
+            trace_recorded = _append_active_service_trace(
+                cursor,
+                user_id,
+                resolved['lng'],
+                resolved['lat'],
+                data.get('accuracy_meters'),
+            )
             conn.commit()
             return jsonify({
                 "code": 200,
                 "message": "实时位置已更新，地图与管理端将使用此坐标",
-                "data": resolved,
+                "data": {**resolved, "trace_recorded": trace_recorded},
             })
     except Exception as exc:
         conn.rollback()
@@ -320,31 +387,12 @@ def save_elder_address_for_elder(elder_id: int, data: dict, address_id=None):
                 saved_address_id = int(address_id)
 
             if make_current:
-                # Keep signup registration district (elders.region_adcode) immutable;
-                # only refresh display address + map pin from the chosen address book row.
+                # The default/contact address and live GPS point are separate.
+                # Editing the address book must never move elder_location_state.
                 cursor.execute(
                     "UPDATE elders SET address = %s WHERE elder_id = %s",
                     (resolved['formatted_address'], elder_id),
                 )
-                cursor.execute(
-                    "SELECT elder_id FROM elder_location_state WHERE elder_id = %s",
-                    (elder_id,),
-                )
-                if cursor.fetchone():
-                    cursor.execute(
-                        """UPDATE elder_location_state
-                              SET lng = %s, lat = %s, location_source = 'amap_geocode',
-                                  is_home_fixed = TRUE, updated_at = CURRENT_TIMESTAMP
-                            WHERE elder_id = %s""",
-                        (resolved['lng'], resolved['lat'], elder_id),
-                    )
-                else:
-                    cursor.execute(
-                        """INSERT INTO elder_location_state
-                           (elder_id, lng, lat, location_source, is_home_fixed)
-                           VALUES (%s, %s, %s, 'amap_geocode', TRUE)""",
-                        (elder_id, resolved['lng'], resolved['lat']),
-                    )
             conn.commit()
             return jsonify({
                 "code": 200,
@@ -429,27 +477,8 @@ def select_elder_address():
                 "UPDATE elders SET address = %s WHERE elder_id = %s",
                 (address['full_address'], elder_id),
             )
-            cursor.execute(
-                "SELECT elder_id FROM elder_location_state WHERE elder_id = %s",
-                (elder_id,),
-            )
-            if cursor.fetchone():
-                cursor.execute(
-                    """UPDATE elder_location_state SET lng = %s, lat = %s,
-                              location_source = 'address_book', is_home_fixed = TRUE,
-                              updated_at = CURRENT_TIMESTAMP
-                       WHERE elder_id = %s""",
-                    (address['lng'], address['lat'], elder_id),
-                )
-            else:
-                cursor.execute(
-                    """INSERT INTO elder_location_state
-                       (elder_id, lng, lat, location_source, is_home_fixed)
-                       VALUES (%s, %s, %s, 'address_book', TRUE)""",
-                    (elder_id, address['lng'], address['lat']),
-                )
             conn.commit()
-            return jsonify({"code": 200, "message": "当前地址已切换"})
+            return jsonify({"code": 200, "message": "默认地址已切换，实时位置保持不变"})
     except Exception as exc:
         conn.rollback()
         return jsonify({"code": 500, "message": f"切换地址失败: {exc}"}), 500

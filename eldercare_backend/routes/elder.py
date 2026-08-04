@@ -326,7 +326,9 @@ def create_emergency_incident():
                     lng=float(order_lng) if order_lng is not None else None,
                     lat=float(order_lat) if order_lat is not None else None,
                     address=str(data.get('address') or '').strip() or None,
-                    sync_pin=True,
+                    # SOS/order service coordinates are event data. They must
+                    # never overwrite the elder's independent live position.
+                    sync_pin=False,
                 )
             except ValueError as exc:
                 return jsonify({'code': 400, 'message': str(exc)}), 400

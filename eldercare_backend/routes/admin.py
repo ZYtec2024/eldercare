@@ -3,6 +3,8 @@ from flask import Blueprint, request, jsonify, session
 from db import get_db_connection
 from utils import format_datetime, format_wall_datetime, split_awards_text, merge_awards_text, get_pagination_params, beijing_now
 import datetime
+import json
+import math
 
 admin_bp = Blueprint('admin', __name__)
 
@@ -10,6 +12,126 @@ DISPATCH_SKILL_CODES = {
     'medical_support', 'emergency_response', 'mobility_assist', 'errand',
     'companion', 'rehab', 'digital_assist', 'grooming',
 }
+
+
+@admin_bp.route('/service-records', methods=['GET'])
+def list_service_records():
+    """Completed services with a retained, read-only route snapshot."""
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+        page_size = max(10, min(100, int(request.args.get('page_size', 30))))
+        order_id = request.args.get('order_id', type=int)
+    except (TypeError, ValueError):
+        return jsonify({"code": 400, "message": "分页参数无效"}), 400
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            _, is_global, regions, error = _admin_regions(cursor, session.get('user_id'))
+            if error:
+                return error
+            where = "o.status = 'completed'"
+            params = []
+            if order_id:
+                where += " AND o.order_id = %s"
+                params.append(order_id)
+            if not is_global:
+                where += " AND o.region_adcode IN %s"
+                params.append(tuple(sorted(regions)))
+            cursor.execute(f"SELECT COUNT(*) AS total FROM orders o WHERE {where}", tuple(params))
+            total = int(cursor.fetchone()['total'])
+            cursor.execute(
+                f"""
+                SELECT o.order_id, o.service_type, o.address, o.region_adcode,
+                       o.service_lng, o.service_lat, o.service_time, o.arrived_at,
+                       o.service_started_at, o.service_ended_at, o.notes,
+                       e.name AS elder_name, u.real_name AS volunteer_name,
+                       r.volunteer_id, r.route_json, r.eta_minutes
+                FROM orders o
+                JOIN elders e ON e.elder_id = o.elder_id
+                LEFT JOIN users u ON u.user_id = o.volunteer_id
+                LEFT JOIN dispatch_routes r ON r.order_id = o.order_id
+                WHERE {where}
+                ORDER BY COALESCE(o.service_ended_at, o.created_at) DESC, o.order_id DESC
+                LIMIT %s OFFSET %s
+                """,
+                tuple(params + [page_size, (page - 1) * page_size]),
+            )
+            items = []
+            for row in cursor.fetchall():
+                route = None
+                if row.get('route_json'):
+                    try:
+                        route = json.loads(row['route_json'])
+                    except (TypeError, json.JSONDecodeError):
+                        route = None
+                started = row.get('service_started_at')
+                ended = row.get('service_ended_at')
+                duration_minutes = None
+                if started and ended:
+                    duration_minutes = max(0, int(round((ended - started).total_seconds() / 60)))
+                route_snapshot = None
+                start_lng = None
+                start_lat = None
+                start_address = ''
+                actual_distance_km = None
+                if route and row.get('volunteer_id'):
+                    planned_path = route.get('path') if isinstance(route.get('path'), list) else []
+                    actual_trace = route.get('actual_trace') if isinstance(route.get('actual_trace'), list) else []
+                    first_point = actual_trace[0] if actual_trace else (planned_path[0] if planned_path else None)
+                    raw_start_lng = route.get('start_lng')
+                    raw_start_lat = route.get('start_lat')
+                    start_lng = float(raw_start_lng) if raw_start_lng is not None else (float(first_point[0]) if first_point else None)
+                    start_lat = float(raw_start_lat) if raw_start_lat is not None else (float(first_point[1]) if first_point else None)
+                    start_address = str(route.get('start_address') or '')
+                    route_snapshot = {
+                        'order_id': int(row['order_id']),
+                        'volunteer_id': int(row['volunteer_id']),
+                        'eta_minutes': int(row.get('eta_minutes') or 0),
+                        'traffic_version': 0,
+                        **route,
+                    }
+                    if len(actual_trace) >= 2:
+                        distance_m = 0.0
+                        for previous, current in zip(actual_trace, actual_trace[1:]):
+                            mean_lat = math.radians((float(previous[1]) + float(current[1])) / 2)
+                            dx = (float(current[0]) - float(previous[0])) * 111000 * math.cos(mean_lat)
+                            dy = (float(current[1]) - float(previous[1])) * 111000
+                            distance_m += math.hypot(dx, dy)
+                        actual_distance_km = round(distance_m / 1000, 2)
+                        route_snapshot['planned_path'] = planned_path
+                        route_snapshot['path'] = actual_trace
+                        route_snapshot['traffic_segments'] = []
+                        route_snapshot['geometry_source'] = 'actual_gps'
+                        route_snapshot['trace_source'] = 'browser_gps'
+                    else:
+                        route_snapshot['geometry_source'] = 'planned_fallback'
+                        route_snapshot['trace_source'] = 'planned_fallback'
+                items.append({
+                    'order_id': int(row['order_id']),
+                    'elder_name': row['elder_name'],
+                    'volunteer_name': row.get('volunteer_name'),
+                    'volunteer_id': int(row['volunteer_id']) if row.get('volunteer_id') else None,
+                    'service_type': row['service_type'],
+                    'address': row.get('address'),
+                    'region_adcode': row.get('region_adcode'),
+                    'service_lng': float(row['service_lng']) if row.get('service_lng') is not None else None,
+                    'service_lat': float(row['service_lat']) if row.get('service_lat') is not None else None,
+                    'service_time': format_wall_datetime(row.get('service_time')),
+                    'arrived_at': format_wall_datetime(row.get('arrived_at')),
+                    'service_started_at': format_wall_datetime(started),
+                    'service_ended_at': format_wall_datetime(ended),
+                    'duration_minutes': duration_minutes,
+                    'notes': row.get('notes'),
+                    'volunteer_start_lng': start_lng,
+                    'volunteer_start_lat': start_lat,
+                    'volunteer_start_address': start_address,
+                    'actual_distance_km': actual_distance_km,
+                    'route': route_snapshot,
+                })
+            return jsonify({'code': 200, 'message': '服务记录获取成功', 'data': {'items': items, 'total': total}})
+    finally:
+        conn.close()
 
 
 @admin_bp.route('/login-audits', methods=['GET'])

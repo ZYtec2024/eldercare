@@ -51,6 +51,7 @@ export default function ProfilePage() {
   const [currentLocationSource, setCurrentLocationSource] = useState('')
   const [hasUnfinishedOrder, setHasUnfinishedOrder] = useState(false)
   const poiTimerRef = useRef<number | null>(null)
+  const autoLocationAttemptedRef = useRef('')
   const [provinces, setProvinces] = useState<PublicRegionNode[]>([])
   const [cities, setCities] = useState<PublicRegionNode[]>([])
   const [districts, setDistricts] = useState<PublicRegionNode[]>([])
@@ -69,7 +70,10 @@ export default function ProfilePage() {
       .finally(() => setLoading(false))
     if (session.role === 'volunteer') {
       fetchDispatchTracking('volunteer', session.userId)
-        .then((tracking) => setVerifiedSkills(tracking.volunteers[0]?.skills ?? []))
+        .then((tracking) => {
+          setVerifiedSkills(tracking.volunteers[0]?.skills ?? [])
+          if (tracking.volunteers[0]) setLiveLocationHint('当前位置由系统自动维护，可随时重新定位')
+        })
         .catch(() => setVerifiedSkills([]))
     } else {
       setVerifiedSkills([])
@@ -295,12 +299,12 @@ export default function ProfilePage() {
     }
   }
 
-  const captureVolunteerLocation = () => {
+  const locateVolunteer = (silent = false) => {
     if (!session) return
     setLocationSaving(true)
     captureBrowserLocation()
       .then((fix) =>
-        updateVolunteerLiveLocation(session.userId, fix.lng, fix.lat, { fromGps: fix.fromGps }).then(async (result) => {
+        updateVolunteerLiveLocation(session.userId, fix.lng, fix.lat, { fromGps: fix.fromGps, accuracyMeters: fix.accuracyMeters }).then(async (result) => {
           const data = (result as { data?: { lng?: number; lat?: number } })?.data
           const lng = Number(data?.lng ?? fix.lng)
           const lat = Number(data?.lat ?? fix.lat)
@@ -311,12 +315,18 @@ export default function ProfilePage() {
             lat,
             source: 'browser_gps',
           }).catch(() => undefined)
-          message.success(`${result.message}（${formatAccuracyHint(fix.accuracyMeters, fix.source)}）`)
+          setLiveLocationHint(`已自动定位（${formatAccuracyHint(fix.accuracyMeters, fix.source)}）`)
+          if (!silent) message.success(`${result.message}（${formatAccuracyHint(fix.accuracyMeters, fix.source)}）`)
         }),
       )
-      .catch((err: any) => locateErrorHint(err, '当前环境无法定位，可先恢复默认位置'))
+      .catch((err: any) => {
+        setLiveLocationHint('自动定位未完成，请检查位置权限或点击重新定位')
+        if (!silent) locateErrorHint(err, '当前环境无法定位，请检查浏览器位置权限')
+      })
       .finally(() => setLocationSaving(false))
   }
+
+  const captureVolunteerLocation = () => locateVolunteer(false)
 
   const restoreVolunteerDefaultLocation = () => {
     if (!session) return
@@ -330,7 +340,7 @@ export default function ProfilePage() {
       .finally(() => setLocationSaving(false))
   }
 
-  const captureElderLocation = () => {
+  const locateElder = (silent = false) => {
     if (!session) return
     setLocationSaving(true)
     captureBrowserLocation()
@@ -346,12 +356,27 @@ export default function ProfilePage() {
           })
           setCurrentLocationSource('browser_gps')
           setLiveLocationHint(`当前服务点（实时）：${resolved.formattedAddress}`)
-          message.success(`实时位置已更新（${formatAccuracyHint(fix.accuracyMeters, fix.source)}），家属端可见；订单服务点未改变`)
+          if (!silent) message.success(`实时位置已更新（${formatAccuracyHint(fix.accuracyMeters, fix.source)}），家属端可见；订单服务点未改变`)
         }),
       )
-      .catch((err: any) => locateErrorHint(err, '当前环境无法定位，请检查浏览器位置权限'))
+      .catch((err: any) => {
+        if (!silent) locateErrorHint(err, '当前环境无法定位，请检查浏览器位置权限')
+      })
       .finally(() => setLocationSaving(false))
   }
+
+  const captureElderLocation = () => locateElder(false)
+
+  useEffect(() => {
+    if (!session || !profile || !['elder', 'volunteer'].includes(session.role)) return
+    const attemptKey = `${session.role}:${session.userId}`
+    if (autoLocationAttemptedRef.current === attemptKey) return
+    autoLocationAttemptedRef.current = attemptKey
+    if (session.role === 'volunteer') locateVolunteer(true)
+    else locateElder(true)
+    // One best-effort attempt per profile visit. Manual retry remains available.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.userId, session?.role, profile?.role])
 
   const handleSave = async () => {
     if (!session || !profile) return
@@ -437,7 +462,7 @@ export default function ProfilePage() {
               <span className="text-slate-900">{profile.email || '-'}</span>
             </div>
             {(profile.role === 'elder' || profile.role === 'volunteer') && (
-              <div className={`flex gap-3 text-sm ${profile.role === 'elder' ? '' : 'sm:col-span-2'}`}>
+              <div className="flex gap-3 text-sm">
                 <span className="w-24 shrink-0 text-slate-500">注册区县</span>
                 <span className="text-slate-900">{profile.regionName || profile.regionAdcode || '未配置'}</span>
               </div>
@@ -476,11 +501,11 @@ export default function ProfilePage() {
             )}
             {profile.role === 'volunteer' && (
               <>
-                <div className="flex gap-3 text-sm sm:col-span-2">
+                <div className="flex gap-3 text-sm">
                   <span className="w-24 shrink-0 text-slate-500">技能简介</span>
                   <span className="text-slate-900">{profile.skills || '-'}</span>
                 </div>
-                <div className="flex gap-3 text-sm sm:col-span-2">
+                <div className="flex gap-3 text-sm">
                   <span className="w-24 shrink-0 text-slate-500">认证技能</span>
                   <div>
                     {verifiedSkills.length
@@ -488,14 +513,16 @@ export default function ProfilePage() {
                       : <span className="text-slate-500">暂无认证技能，无法参与智能派单</span>}
                   </div>
                 </div>
-                <div className="flex gap-3 text-sm sm:col-span-2">
+                <div className="flex gap-3 text-sm">
                   <span className="w-24 shrink-0 text-slate-500">实时位置</span>
                   <div className="min-w-0 space-y-2">
                     <Space wrap>
                       <Button icon={<AimOutlined />} loading={locationSaving} onClick={captureVolunteerLocation}>重新精确定位</Button>
                       <Button loading={locationSaving} onClick={restoreVolunteerDefaultLocation}>恢复默认位置</Button>
                     </Space>
-                    <div className="text-xs leading-5 text-slate-500">偏差大可重试或恢复默认位置</div>
+                    <div className="text-xs leading-5 text-slate-500">
+                      {liveLocationHint || '进入页面后会自动获取位置；也可手动重新定位或恢复常驻位置'}
+                    </div>
                   </div>
                 </div>
                 <div className="flex gap-3 text-sm">

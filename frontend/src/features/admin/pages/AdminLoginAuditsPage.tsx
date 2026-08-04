@@ -45,7 +45,7 @@ export default function AdminLoginAuditsPage() {
       <Alert
         showIcon
         type="info"
-        message="连续失败记录可作为账号异常提醒；本页面不保存密码、令牌或完整 IP。"
+        message="连续失败记录可作为账号异常提醒；本地 Docker 访问会显示 172.* 容器网关，上线经 Nginx 后显示真实客户端公网 IP 的脱敏结果。"
       />
       <Card className="!rounded-2xl">
         <Table<LoginAuditItem>
@@ -57,7 +57,7 @@ export default function AdminLoginAuditsPage() {
             { title: '登录时间', dataIndex: 'createdAt', width: 190 },
             { title: '账号', dataIndex: 'username' },
             { title: '角色', dataIndex: 'role', render: (value?: string) => roleLabels[value || ''] || '未知' },
-            { title: '脱敏 IP', dataIndex: 'maskedIp' },
+            { title: '脱敏 IP', dataIndex: 'maskedIp', render: (value: string) => <span>{value}{value.startsWith('172.') ? <Tag className="ml-2">本地 Docker</Tag> : null}</span> },
             {
               title: '结果',
               dataIndex: 'loginSuccess',

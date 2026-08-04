@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { useSession } from '@/features/auth/useSession'
 import { createEmergencyIncident, fetchEmergencyIncidents, type EmergencyIncident } from '@/services/adapters/elder-adapter'
-import { fetchDispatchTracking } from '@/services/adapters/dispatch-adapter'
+import { fetchDispatchTracking, updateElderDispatchLocation } from '@/services/adapters/dispatch-adapter'
 import { resolveBrowserLocation, type ResolvedLiveLocation } from '@/services/adapters/profile-adapter'
 import { captureBrowserLocation, formatAccuracyHint, type BrowserGeoFix } from '@/utils/browser-geolocation'
 
@@ -90,26 +90,40 @@ export default function ElderSosPage() {
     }
   }
 
-  const captureLiveLocation = () => {
+  const locateLive = (interactive: boolean) => {
     if (!session) return
-    setLocating(true)
+    if (interactive) setLocating(true)
     captureBrowserLocation()
       .then((fix) =>
-        resolveBrowserLocation(session.userId, 'elder', fix.lng, fix.lat, { fromGps: fix.fromGps }).then((resolved) => {
+        resolveBrowserLocation(session.userId, 'elder', fix.lng, fix.lat, { fromGps: fix.fromGps }).then(async (resolved) => {
+          await updateElderDispatchLocation({
+            userId: session.userId,
+            lng: resolved.lng,
+            lat: resolved.lat,
+            address: resolved.formattedAddress,
+            source: 'browser_gps',
+            syncDisplay: false,
+          })
           setDraftLive(resolved)
           setLocationAccuracy(fix.accuracyMeters)
           setLocationSource(fix.source)
-          setLocationMode('live')
-          if (confirmedMode === 'live') {
+          if (interactive) setLocationMode('live')
+          if (interactive && confirmedMode === 'live') {
             setConfirmedMode(null)
             setConfirmedLive(null)
           }
-          message.success(`${formatAccuracyHint(fix.accuracyMeters, fix.source)}，请点确认`)
+          if (interactive) message.success(`${formatAccuracyHint(fix.accuracyMeters, fix.source)}，请点确认`)
         }),
       )
-      .catch((err: any) => message.warning(err?.message || '定位失败，可改用默认地址'))
-      .finally(() => setLocating(false))
+      .catch((err: any) => { if (interactive) message.warning(err?.message || '定位失败，可改用默认地址') })
+      .finally(() => { if (interactive) setLocating(false) })
   }
+
+  const captureLiveLocation = () => locateLive(true)
+
+  useEffect(() => {
+    locateLive(false)
+  }, [session?.userId])
 
   const confirmLocation = async () => {
     if (locationMode === 'address') {

@@ -423,7 +423,8 @@ def update_order_status():
                 if cursor.fetchone():
                     from routes.dispatch import _create_return_route, _record_completed_service_fatigue, _simulation_enabled
                     cursor.execute("UPDATE dispatch_orders SET dispatch_state = 'completed' WHERE order_id = %s", (order_id,))
-                    cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order_id,))
+                    if _simulation_enabled():
+                        cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order_id,))
                     return_route = _create_return_route(cursor, int(volunteer_id)) if _simulation_enabled() else None
                     _record_completed_service_fatigue(cursor, int(volunteer_id), float(order.get('service_hours') or 1))
                     cursor.execute("UPDATE volunteer_location_state SET availability = %s WHERE volunteer_id = %s",

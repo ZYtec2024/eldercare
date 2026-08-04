@@ -123,7 +123,7 @@ export default function VolunteerDispatchPage() {
           session.userId,
           position.coords.longitude,
           position.coords.latitude,
-          { fromGps: true },
+          { fromGps: true, accuracyMeters: position.coords.accuracy },
         ).catch(() => undefined)
       },
       () => undefined,
@@ -512,16 +512,10 @@ export default function VolunteerDispatchPage() {
         </>
       ) : null}
       {(task.response_status === 'accepted' || task.response_status === 'forced') && task.status === 'accepted' ? (
-        <>
-          <span className="text-sm text-emerald-700">已接单出发：系统正在前往服务点。接单后不可取消，如需结束请由老人取消。</span>
-          <Button type="primary" loading={working === task.order_id} onClick={() => respond(task, 'start')}>定位验证并开始服务</Button>
-        </>
+        <Button type="primary" loading={working === task.order_id} onClick={() => respond(task, 'start')}>确认到达并开始服务</Button>
       ) : null}
       {task.status === 'in_progress' && state.availability !== 'serving' ? (
-        <>
-          <span className="text-sm text-amber-700">已接近服务点时可手动确认到达。</span>
-          <Button type="primary" loading={working === task.order_id} onClick={() => respond(task, 'start')}>定位验证并开始服务</Button>
-        </>
+        <Button type="primary" loading={working === task.order_id} onClick={() => respond(task, 'start')}>确认到达并开始服务</Button>
       ) : null}
       {task.status === 'in_progress' && state.availability === 'serving' ? (
         <Button type="primary" size="large" loading={working === task.order_id} onClick={() => respond(task, 'complete')}>
@@ -626,31 +620,35 @@ export default function VolunteerDispatchPage() {
           {activeTasks.length ? activeTasks.map((task) => (
             <Card
               key={task.order_id}
-              className="!rounded-2xl !border-emerald-300"
-              title={<Space><Tag color="green">{task.status === 'in_progress' ? (state.availability === 'serving' ? '正在服务' : '前往中') : '已接单'}</Tag><span>{task.service_type}</span></Space>}
+              className="!overflow-hidden !rounded-2xl !border-emerald-200"
+              title={<div className="flex flex-wrap items-center gap-2"><span className="text-lg font-semibold text-slate-900">{task.service_type}</span><Tag color="green">{task.status === 'in_progress' ? (state.availability === 'serving' ? '正在服务' : '前往中') : '已接单'}</Tag></div>}
               extra={<Tag color={task.urgency === 'sos' ? 'red' : 'blue'}>{task.urgency === 'sos' ? 'SOS' : '普通'}</Tag>}
             >
-              <div className="space-y-3">
-                <div className="text-sm text-slate-600">服务对象：{task.elder_name}{task.distance_km != null ? ` · ${task.distance_km} km` : ''}{task.eta_minutes != null ? ` · 预计 ${task.eta_minutes} 分钟` : ''}</div>
+              <div className="space-y-4">
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="rounded-xl bg-slate-50 p-3"><div className="text-xs text-slate-500">服务对象</div><div className="mt-1 font-semibold text-slate-900">{task.elder_name}</div></div>
+                  <div className="rounded-xl bg-slate-50 p-3"><div className="text-xs text-slate-500">距离</div><div className="mt-1 font-semibold text-slate-900">{task.distance_km == null ? '-' : `${task.distance_km} km`}</div></div>
+                  <div className="rounded-xl bg-slate-50 p-3"><div className="text-xs text-slate-500">预计到达</div><div className="mt-1 font-semibold text-slate-900">{task.eta_minutes == null ? '-' : `${task.eta_minutes} 分钟`}</div></div>
+                </div>
                 {task.notes ? (
                   <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
-                    <b>老人说明：</b>{task.notes}
+                    <div className="mb-1 text-xs font-medium text-amber-700">老人说明</div>{task.notes}
                   </div>
                 ) : null}
                 {task.personality_bio ? (
-                  <div className="text-xs text-gray-500">📝 {task.personality_bio}</div>
+                  <div className="rounded-xl bg-slate-50 p-3 text-sm leading-6 text-slate-600"><div className="mb-1 text-xs font-medium text-slate-500">沟通提示</div>{task.personality_bio}</div>
                 ) : null}
-                <div className="rounded-xl bg-slate-50 p-2 text-sm">
+                <div className="rounded-xl border border-blue-100 bg-blue-50/70 p-3 text-sm">
+                  <div className="mb-1 text-xs font-medium text-blue-700">订单服务地点</div>
                   <EnvironmentOutlined className="mr-1" />
                   服务点：{task.address || '老人固定住址'}
-                  {task.location_unlocked && task.lng != null && task.lat != null ? `（${task.lng.toFixed(5)}, ${task.lat.toFixed(5)}）` : ''}
                 </div>
                 {state.availability === 'serving' ? (
                   <Alert type="success" showIcon message="已到达：可点击下方完成服务并返家" />
                 ) : (
-                  <Alert type="info" showIcon message="行程自动推进中；也可手动「确认到达并开始服务」后完成服务" />
+                  <Alert type="info" showIcon message="路线已按您的实时位置规划；到达服务点附近后可确认开始服务" />
                 )}
-                {renderTaskActions(task)}
+                <div className="border-t border-slate-100 pt-4">{renderTaskActions(task)}</div>
               </div>
             </Card>
           )) : (
@@ -680,7 +678,7 @@ export default function VolunteerDispatchPage() {
                 {task.personality_bio ? (
                   <div className="text-xs text-gray-500">📝 {task.personality_bio}</div>
                 ) : null}
-                <div className="rounded-xl bg-slate-50 p-2 text-sm"><EnvironmentOutlined className="mr-1" />服务点：{task.address || '老人固定住址'} · 接单后解锁精确坐标</div>
+                <div className="rounded-xl bg-slate-50 p-2 text-sm"><EnvironmentOutlined className="mr-1" />服务点：{task.address || '老人固定住址'} · 接单后开放路线导航</div>
                 <div className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800"><SafetyCertificateOutlined className="mr-2" />技能验证：{task.required_skill_labels.join('、')} <b>已精准匹配</b></div>
                 <div className="grid grid-cols-4 gap-2 text-center text-xs"><div>距离<b className="block text-base">{task.distance_score}</b></div><div>路况<b className="block text-base">{task.traffic_score}</b></div><div>公平<b className="block text-base">{task.fatigue_score}</b></div><div>评分<b className="block text-base">{task.rating_score}</b></div></div>
                 <div className="rounded-lg bg-slate-100 p-2 text-sm">综合适配：<b>{task.total_score}</b>（距离40% · 路况25% · 疲劳10% · 评分25%）</div>

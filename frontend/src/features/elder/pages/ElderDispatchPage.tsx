@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Alert, App, Button, Card, DatePicker, Form, Input, InputNumber, Segmented, Select, Space, Tag, Typography } from 'antd'
 import { ClockCircleOutlined } from '@ant-design/icons'
 import { AimOutlined, EnvironmentOutlined, ThunderboltOutlined } from '@ant-design/icons'
@@ -9,7 +9,7 @@ import { DispatchMap } from '@/features/dispatch/components/DispatchMap'
 import { LiveArrivalEstimate } from '@/features/dispatch/components/LiveArrivalEstimate'
 import type { DispatchTracking } from '@/features/dispatch/dispatch-types'
 import { useSession } from '@/features/auth/useSession'
-import { cancelElderDispatchOrder, completeElderDispatchOrder, createDispatchOrder, fetchDispatchTracking, redispatchDispatchOrder, requestAdminForDispatchOrder } from '@/services/adapters/dispatch-adapter'
+import { cancelElderDispatchOrder, completeElderDispatchOrder, createDispatchOrder, fetchDispatchTracking, redispatchDispatchOrder, requestAdminForDispatchOrder, updateElderDispatchLocation } from '@/services/adapters/dispatch-adapter'
 import { resolveBrowserLocation, type ResolvedLiveLocation } from '@/services/adapters/profile-adapter'
 import { captureBrowserLocation, formatAccuracyHint, type BrowserGeoFix } from '@/utils/browser-geolocation'
 import { proxyActorName, proxyOrderAlertTitle, proxyOrderTag } from '@/features/elder/proxy-order-labels'
@@ -55,33 +55,9 @@ export default function ElderDispatchPage() {
   const locationConfirmed = confirmedMode === locationMode
     && (locationMode === 'address' || (locationMode === 'live' && !!confirmedLive && confirmedLive.lng === draftLive?.lng && confirmedLive.lat === draftLive?.lat))
 
-  const mapOverview = useMemo(() => {
-    if (!tracking) return null
-    if (locationMode === 'live' && draftLive) {
-      const elders = tracking.elders.map((item, index) => (
-        index === 0
-          ? { ...item, lng: draftLive.lng, lat: draftLive.lat, address: draftLive.formattedAddress, location_source: 'browser_gps', is_home_fixed: false }
-          : item
-      ))
-      return { ...tracking, elders }
-    }
-    if (locationMode === 'address' && elderProfile?.default_lng != null && elderProfile?.default_lat != null) {
-      const elders = tracking.elders.map((item, index) => (
-        index === 0
-          ? {
-              ...item,
-              lng: Number(elderProfile.default_lng),
-              lat: Number(elderProfile.default_lat),
-              address: defaultAddress,
-              location_source: 'address_book',
-              is_home_fixed: true,
-            }
-          : item
-      ))
-      return { ...tracking, elders }
-    }
-    return tracking
-  }, [tracking, locationMode, draftLive, elderProfile, defaultAddress])
+  // Address selection only changes the future order point.  The map always
+  // renders the persisted person location returned by tracking.
+  const mapOverview = tracking
 
   const proxyOrders = (tracking?.orders ?? []).filter(
     (order) => order.proxy_created_by && ['pending', 'accepted', 'in_progress'].includes(order.status),
@@ -94,25 +70,34 @@ export default function ElderDispatchPage() {
     }
   }
 
-  const captureLiveLocation = () => {
+  const locateLive = (interactive: boolean) => {
     if (!session) return
-    setLocating(true)
+    if (interactive) setLocating(true)
     captureBrowserLocation()
       .then((fix) =>
-        resolveBrowserLocation(session.userId, 'elder', fix.lng, fix.lat, { fromGps: fix.fromGps }).then((resolved) => {
-          // Preview only — do not persist into default address / elders.address.
+        resolveBrowserLocation(session.userId, 'elder', fix.lng, fix.lat, { fromGps: fix.fromGps }).then(async (resolved) => {
+          await updateElderDispatchLocation({
+            userId: session.userId,
+            lng: resolved.lng,
+            lat: resolved.lat,
+            address: resolved.formattedAddress,
+            source: 'browser_gps',
+            syncDisplay: false,
+          })
           setDraftLive(resolved)
           setLocationAccuracy(fix.accuracyMeters)
           setLocationSource(fix.source)
-          setLocationMode('live')
-          if (confirmedMode === 'live') {
+          if (interactive) setLocationMode('live')
+          if (interactive && confirmedMode === 'live') {
             setConfirmedMode(null)
             setConfirmedLive(null)
           }
-          message.success(`${formatAccuracyHint(fix.accuracyMeters, fix.source)}，请点确认`)
+          if (interactive) message.success(`${formatAccuracyHint(fix.accuracyMeters, fix.source)}，请点确认`)
+          void load()
         }),
       )
       .catch((err: any) => {
+        if (!interactive) return
         const text = String(err?.message || '')
         if (
           text.includes('安全环境')
@@ -129,8 +114,16 @@ export default function ElderDispatchPage() {
           message.error(text || '该区域尚未开通服务，无法使用实时位置')
         }
       })
-      .finally(() => setLocating(false))
+      .finally(() => { if (interactive) setLocating(false) })
   }
+
+  const captureLiveLocation = () => locateLive(true)
+
+  useEffect(() => {
+    // Best-effort automatic GPS refresh. Browsers remember the permission;
+    // denial stays silent and the manual retry button remains available.
+    locateLive(false)
+  }, [session?.userId])
 
   const confirmLocation = () => {
     if (locationMode === 'address') {
@@ -362,36 +355,49 @@ export default function ElderDispatchPage() {
         {activeOrders.length ? activeOrders.map((order) => (
           <Card
             key={order.order_id}
-            className="!rounded-2xl"
-            title={<Space><Tag color={order.urgency === 'sos' ? 'red' : 'blue'}>{order.urgency === 'sos' ? '紧急' : '普通'}</Tag>{order.proxy_created_by ? <Tag color="gold">{proxyOrderTag(order.proxy_creator_role)}</Tag> : null}<span>{order.service_type}</span></Space>}
-            extra={<Tag color={order.status === 'accepted' || order.status === 'in_progress' ? 'green' : 'orange'}>{stateLabel[order.dispatch_state] || order.dispatch_state}</Tag>}
+            className="!overflow-hidden !rounded-2xl !border-slate-200"
+            title={<div className="flex flex-wrap items-center gap-2"><span className="text-lg font-semibold text-slate-900">{order.service_type}</span><Tag color={order.urgency === 'sos' ? 'red' : 'blue'}>{order.urgency === 'sos' ? '紧急' : '普通'}</Tag>{order.proxy_created_by ? <Tag color="gold">{proxyOrderTag(order.proxy_creator_role)}</Tag> : null}</div>}
+            extra={<Tag color={order.status === 'accepted' || order.status === 'in_progress' ? 'green' : 'orange'} className="!m-0">{stateLabel[order.dispatch_state] || order.dispatch_state}</Tag>}
           >
-            <div className="space-y-2 text-base text-slate-600">
+            <div className="space-y-4 text-base text-slate-600">
               {order.proxy_created_by ? (
                 <div className="rounded-xl bg-amber-50 p-3 text-amber-900">
                   {proxyActorName(order.proxy_creator_name, order.proxy_creator_role)}已为您代下此单
                 </div>
               ) : null}
-              <div>地点：{order.address || '家里地址'}</div>
-              {order.service_time ? <div>约定时间：{order.service_time}</div> : null}
-              <div>进度：{phaseLabel[order.dispatch_phase || ''] || '正在安排'}</div>
-              <div>来帮忙的人：{order.volunteer_name || '还在寻找中'}</div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl bg-slate-50 p-3 sm:col-span-2">
+                  <div className="mb-1 text-xs font-medium text-slate-500"><EnvironmentOutlined className="mr-1" />订单服务地点</div>
+                  <div className="font-medium leading-6 text-slate-900">{order.address || '家里地址'}</div>
+                </div>
+                <div className="rounded-xl bg-slate-50 p-3">
+                  <div className="mb-1 text-xs font-medium text-slate-500"><ClockCircleOutlined className="mr-1" />约定时间</div>
+                  <div className="font-medium text-slate-900">{order.service_time || '尽快上门'}</div>
+                </div>
+                <div className="rounded-xl bg-slate-50 p-3">
+                  <div className="mb-1 text-xs font-medium text-slate-500">当前安排进度</div>
+                  <div className="font-medium text-slate-900">{phaseLabel[order.dispatch_phase || ''] || '正在安排'}</div>
+                </div>
+              </div>
               {order.volunteer_name ? (
-                <div className="rounded-xl bg-emerald-50 p-3">
-                  <div className="font-medium text-emerald-900">{order.volunteer_name} · 评分 {Number(order.volunteer_rating || 0).toFixed(1)}</div>
-                  <Space className="mt-2" wrap>{(order.volunteer_skills || []).map((skill) => <Tag color="green" key={skill}>{skillLabel[skill] || skill}</Tag>)}</Space>
+                <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div><div className="text-xs text-emerald-700">本次服务志愿者</div><div className="mt-1 text-lg font-semibold text-emerald-950">{order.volunteer_name}</div></div>
+                    <Tag color="green">评分 {Number(order.volunteer_rating || 0).toFixed(1)}</Tag>
+                  </div>
+                  <Space className="mt-3" wrap>{(order.volunteer_skills || []).map((skill) => <Tag color="green" key={skill}>{skillLabel[skill] || skill}</Tag>)}</Space>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {order.volunteer_availability && ['en_route', 'serving'].includes(order.volunteer_availability) ? (
+                      <Tag color={volunteerStateColor[order.volunteer_availability] || 'blue'}>{volunteerStateLabel[order.volunteer_availability] || order.volunteer_availability}</Tag>
+                    ) : null}
+                    {order.location_sharing_active ? <Tag color="cyan">位置共享中</Tag> : null}
+                  </div>
                 </div>
               ) : null}
-              {order.volunteer_availability && ['en_route', 'serving'].includes(order.volunteer_availability) ? (
-                <Tag color={volunteerStateColor[order.volunteer_availability] || 'blue'}>
-                  {volunteerStateLabel[order.volunteer_availability] || order.volunteer_availability}
-                </Tag>
-              ) : null}
-              {order.location_sharing_active ? <Tag color="green">正在共享位置</Tag> : null}
               {order.location_sharing_active ? (
                 <LiveArrivalEstimate route={tracking?.routes.find((route) => route.order_id === order.order_id)} />
               ) : null}
-              <Space wrap>
+              <Space wrap className="border-t border-slate-100 pt-4">
                 {order.amap_navigation_url ? <Button size="large" onClick={() => window.open(order.amap_navigation_url, '_blank', 'noopener,noreferrer')}>查看路线</Button> : null}
                 {['accepted', 'in_progress'].includes(order.status) ? (
                   <>

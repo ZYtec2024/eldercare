@@ -444,27 +444,8 @@ def select_family_elder_address(elder_id: int):
                 "UPDATE elders SET address = %s WHERE elder_id = %s",
                 (address['full_address'], elder_id),
             )
-            cursor.execute(
-                "SELECT elder_id FROM elder_location_state WHERE elder_id = %s",
-                (elder_id,),
-            )
-            if cursor.fetchone():
-                cursor.execute(
-                    """UPDATE elder_location_state SET lng = %s, lat = %s,
-                              location_source = 'address_book', is_home_fixed = TRUE,
-                              updated_at = CURRENT_TIMESTAMP
-                       WHERE elder_id = %s""",
-                    (address['lng'], address['lat'], elder_id),
-                )
-            else:
-                cursor.execute(
-                    """INSERT INTO elder_location_state
-                       (elder_id, lng, lat, location_source, is_home_fixed)
-                       VALUES (%s, %s, %s, 'address_book', TRUE)""",
-                    (elder_id, address['lng'], address['lat']),
-                )
             conn.commit()
-            return jsonify({"code": 200, "message": "长辈当前服务点已切换，老人端同步可见"})
+            return jsonify({"code": 200, "message": "长辈默认地址已切换，实时位置保持不变"})
     except Exception as exc:
         conn.rollback()
         return jsonify({"code": 500, "message": f"切换地址失败: {exc}"}), 500

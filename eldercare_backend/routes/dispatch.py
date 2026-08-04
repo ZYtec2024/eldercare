@@ -2849,6 +2849,13 @@ def _create_route(cursor: Any, order: dict[str, Any], volunteer_id: int) -> dict
     cursor.execute("SELECT lng, lat FROM volunteer_location_state WHERE volunteer_id = %s", (volunteer_id,))
     volunteer = cursor.fetchone()
     route = route_endpoints(float(volunteer["lng"]), float(volunteer["lat"]), float(order["elder_lng"]), float(order["elder_lat"]), _traffic_version(cursor))
+    route["start_lng"] = float(volunteer["lng"])
+    route["start_lat"] = float(volunteer["lat"])
+    try:
+        start_place = reverse_geocode(float(volunteer["lng"]), float(volunteer["lat"]), from_gps=False)
+        route["start_address"] = str(start_place.get("formatted_address") or "").strip()
+    except Exception:  # AMap outage must not block accepting an order.
+        route["start_address"] = ""
     route["progress"] = 0
     route_values = (volunteer_id, json.dumps(route, ensure_ascii=False), route["eta_minutes"], route["traffic_version"], order["order_id"])
     cursor.execute("SELECT order_id FROM dispatch_routes WHERE order_id = %s", (order["order_id"],))
@@ -4735,24 +4742,12 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
         standing_region = _region_for_point(elder.get("lng"), elder.get("lat"))
         _set_tracking_region(payload, standing_region or elder.get("region_adcode"))
         default_address = elder.get("default_address") or elder.get("address")
+        # A person's live point and an order's service point are independent
+        # domain objects.  Never replace the elder's live position with an
+        # order snapshot, including in the local sandbox.
         map_lng = float(elder["lng"])
         map_lat = float(elder["lat"])
         map_address = default_address
-        # While an order is open, pin the elder on the confirmed service point
-        # (same place they ordered), not a later live GPS move.
-        cursor.execute("""
-            SELECT address, service_lng, service_lat
-            FROM orders
-            WHERE elder_id = %s AND status IN ('pending', 'accepted', 'in_progress')
-              AND service_lng IS NOT NULL AND service_lat IS NOT NULL
-            ORDER BY order_id DESC
-            LIMIT 1
-        """, (elder["elder_id"],))
-        active_service = cursor.fetchone()
-        if active_service and _simulation_enabled():
-            map_lng = float(active_service["service_lng"])
-            map_lat = float(active_service["service_lat"])
-            map_address = str(active_service.get("address") or default_address)
         payload["elders"] = [{
             "elder_id": int(elder["elder_id"]), "name": elder["name"],
             "address": map_address,
@@ -4784,6 +4779,7 @@ def _tracking_payload(cursor: Any, role: str, user_id: int) -> dict[str, Any] | 
             service_lat = float(row["service_lat"]) if row.get("service_lat") is not None else map_lat
             item = {
                 "order_id": int(row["order_id"]), "service_type": row["service_type"], "status": row["status"],
+                "elder_name": elder["name"],
                 "service_time": _service_time_text(row.get("service_time")),
                 "volunteer_id": int(row["volunteer_id"]) if row["volunteer_id"] else None,
                 "volunteer_name": row["volunteer_name"], "urgency": row["urgency"],
@@ -5266,7 +5262,6 @@ def _build_live_notices(
             JOIN dispatch_orders d ON d.order_id = o.order_id
             LEFT JOIN dispatch_candidates c ON c.order_id = o.order_id AND c.volunteer_id = %s
             WHERE o.status IN ('pending', 'accepted', 'in_progress')
-              AND d.urgency = 'sos'
               AND (
                     o.volunteer_id = %s
                     OR c.response_status IN ('invited', 'forced', 'accepted')
@@ -5278,21 +5273,30 @@ def _build_live_notices(
         )
         for row in cursor.fetchall():
             is_mine = row.get("volunteer_id") and int(row["volunteer_id"]) == user_id
-            if is_mine:
+            is_sos = str(row.get("urgency") or "") == "sos"
+            if is_mine and is_sos:
                 title = f"SOS 已派给您 · {row['elder_name']}"
                 body = f"请尽快前往处理：{row['service_type']}（#{row['order_id']}）"
                 level = "error"
-            else:
+            elif is_mine:
+                title = f"订单已分配给您 · {row['elder_name']}"
+                body = f"您已接下「{row['service_type']}」（#{row['order_id']}），请查看服务地点并开始导航"
+                level = "success"
+            elif is_sos:
                 title = f"SOS 邀请 · {row['elder_name']}"
                 body = f"系统邀请您响应紧急求助：{row['service_type']}（#{row['order_id']}）"
                 level = "warning"
+            else:
+                title = f"新的服务请求 · {row['elder_name']}"
+                body = f"系统向您推荐「{row['service_type']}」订单（#{row['order_id']}），请及时确认是否接单"
+                level = "warning"
             conv = int(row["conversation_id"]) if row.get("conversation_id") else None
             _push(
-                notice_key=f"volunteer-sos-{row['order_id']}-{row['status']}-{row.get('response_status')}",
+                notice_key=f"volunteer-order-{row['order_id']}-{row['status']}-{row.get('response_status')}",
                 title=title,
                 body=body,
                 level=level,
-                action_path=f"/conversations?id={conv}" if conv else "/volunteer/dispatch",
+                action_path=f"/conversations?id={conv}" if is_sos and conv else "/volunteer/dispatch",
             )
 
     elif role == "admin":
@@ -6020,7 +6024,9 @@ def create_smart_order_for_elder(
         lng=lng,
         lat=lat,
         address=address,
-        sync_pin=_simulation_enabled(),
+        # The order point is only a snapshot for this service.  It must never
+        # rewrite the elder's live point, even in the local sandbox.
+        sync_pin=False,
     )
     region_adcode = str(point["region_adcode"])
     service_lng = float(point["lng"])
@@ -6747,7 +6753,8 @@ def respond_dispatch_order(order_id: int):
                 # The inbound route has reached its endpoint. Remove it before
                 # publishing the return route so the map keeps one continuous
                 # marker at the elder's location instead of two stale markers.
-                cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order_id,))
+                if _simulation_enabled():
+                    cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order_id,))
                 return_route = _create_return_route(cursor, int(volunteer_id)) if _simulation_enabled() else None
                 _record_completed_service_fatigue(cursor, int(volunteer_id), hours)
                 cursor.execute("UPDATE volunteer_location_state SET availability = %s WHERE volunteer_id = %s",
@@ -7097,7 +7104,8 @@ def elder_complete_dispatch_order(order_id: int):
                                   (order_id, volunteer_id, expected_hours, declared_hours, max_auto_hours, review_status, approved_hours)
                                   VALUES (%s, %s, %s, %s, %s, 'pending_family', NULL)""",
                                (order_id, volunteer_id, hours, hours, hours * 1.5))
-            cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order_id,))
+            if _simulation_enabled():
+                cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order_id,))
             return_route = _create_return_route(cursor, volunteer_id) if _simulation_enabled() else None
             _record_completed_service_fatigue(cursor, volunteer_id, hours)
             cursor.execute("UPDATE volunteer_location_state SET availability = %s WHERE volunteer_id = %s",
@@ -7156,7 +7164,8 @@ def family_complete_dispatch_order(order_id: int):
                                   (order_id, volunteer_id, expected_hours, declared_hours, max_auto_hours, review_status, approved_hours)
                                   VALUES (%s, %s, %s, %s, %s, 'pending_family', NULL)""",
                                (order_id, volunteer_id, hours, hours, hours * 1.5))
-            cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order_id,))
+            if _simulation_enabled():
+                cursor.execute("DELETE FROM dispatch_routes WHERE order_id = %s", (order_id,))
             return_route = _create_return_route(cursor, volunteer_id) if _simulation_enabled() else None
             _record_completed_service_fatigue(cursor, volunteer_id, hours)
             cursor.execute("UPDATE volunteer_location_state SET availability = %s WHERE volunteer_id = %s",
