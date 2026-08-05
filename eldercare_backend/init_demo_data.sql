@@ -151,6 +151,8 @@ CREATE TABLE login_audit_logs (
     username VARCHAR(50) NOT NULL,
     role VARCHAR(20) NULL,
     masked_ip VARCHAR(64) NOT NULL,
+    raw_ip VARCHAR(128) NULL,
+    ip_source VARCHAR(32) NULL,
     login_success BOOLEAN NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

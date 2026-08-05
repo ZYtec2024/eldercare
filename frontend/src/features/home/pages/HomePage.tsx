@@ -27,15 +27,15 @@ export default function HomePage() {
   const navigate = useNavigate()
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-blue-50 via-white to-sky-50">
+    <div className="public-home min-h-screen bg-[#f4f8ff]">
       {/* Top Bar */}
       <div className="max-w-6xl mx-auto px-4 md:px-6 py-4 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center shadow-md">
+          <div className="w-10 h-10 rounded-xl bg-[#3b82f6] flex items-center justify-center shadow-sm">
             <ElderLogo className="w-6 h-6 text-white" />
           </div>
           <Typography.Text className="!text-lg !font-bold text-gray-900 block leading-tight">
-            智慧伴老平台
+            银铃智配
           </Typography.Text>
         </div>
         <div className="flex gap-2">
@@ -50,38 +50,35 @@ export default function HomePage() {
 
       {/* Hero */}
       <div className="max-w-6xl mx-auto px-4 md:px-6 py-12 md:py-20">
-        <div className="rounded-2xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-800 p-8 md:p-14 text-white shadow-xl">
-          <Typography.Title level={1} className="!text-white !text-3xl md:!text-5xl !font-extrabold !mb-4 !leading-tight">
+        <div className="public-home-hero p-8 md:p-14">
+          <div className="role-home-kicker">社区智慧养老服务平台</div>
+          <Typography.Title level={1} className="!text-slate-900 !text-3xl md:!text-5xl !font-extrabold !mb-4 !leading-tight">
             让每一位老人
             <br />
             都被温暖守护
           </Typography.Title>
-          <Typography.Paragraph className="!text-blue-100 !text-base md:!text-lg max-w-xl !mb-8">
+          <Typography.Paragraph className="!text-slate-600 !text-base md:!text-lg max-w-xl !mb-8">
             家属远程监护、老人一键求助、志愿者爱心接单、社区统一管理 —— 四方协同，构建有温度的照护网络。
           </Typography.Paragraph>
           <div className="flex flex-wrap gap-3">
             <Button
               type="primary"
               size="large"
-              className="!bg-white !text-blue-700 !border-white hover:!bg-blue-50 !font-semibold !shadow-md"
+              className="!font-semibold"
               onClick={() => navigate('/register')}
             >
               立即加入
             </Button>
             <Button
               size="large"
-              ghost
               icon={<ArrowRightOutlined />}
-              className="!border-blue-300 !text-blue-100"
               onClick={() => navigate('/task-hall')}
             >
               任务大厅
             </Button>
             <Button
               size="large"
-              ghost
               icon={<ReadOutlined />}
-              className="!border-blue-300 !text-blue-100"
               onClick={() => navigate('/health-knowledge')}
             >
               健康知识手册
@@ -90,17 +87,17 @@ export default function HomePage() {
 
           {/* Stats */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-10">
-            <div className="bg-white/15 backdrop-blur rounded-xl p-5">
+            <div className="public-home-stat">
               <div className="text-3xl font-bold">350+</div>
-              <div className="text-blue-200 text-sm mt-1">注册用户</div>
+              <div className="text-slate-500 text-sm mt-1">注册用户</div>
             </div>
-            <div className="bg-white/15 backdrop-blur rounded-xl p-5">
+            <div className="public-home-stat">
               <div className="text-3xl font-bold">1,200+</div>
-              <div className="text-blue-200 text-sm mt-1">累计服务时长(小时)</div>
+              <div className="text-slate-500 text-sm mt-1">累计服务时长(小时)</div>
             </div>
-            <div className="bg-white/15 backdrop-blur rounded-xl p-5">
+            <div className="public-home-stat">
               <div className="text-3xl font-bold">98%</div>
-              <div className="text-blue-200 text-sm mt-1">服务好评率</div>
+              <div className="text-slate-500 text-sm mt-1">服务好评率</div>
             </div>
           </div>
         </div>
@@ -161,7 +158,7 @@ export default function HomePage() {
       {/* Footer */}
       <div className="bg-gray-50 border-t border-gray-100 py-8 text-center">
         <Typography.Text className="text-gray-400 text-sm">
-          智慧伴老平台
+          银铃智配 · 社区照护平台
         </Typography.Text>
       </div>
     </div>

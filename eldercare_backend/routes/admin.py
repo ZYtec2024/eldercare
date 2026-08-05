@@ -156,7 +156,7 @@ def list_login_audits():
             cursor.execute(
                 """
                 SELECT audit_id, user_id, username, role, masked_ip,
-                       login_success, created_at
+                       raw_ip, ip_source, login_success, created_at
                 FROM login_audit_logs
                 ORDER BY created_at DESC, audit_id DESC
                 LIMIT %s OFFSET %s
@@ -171,6 +171,8 @@ def list_login_audits():
                     "username": row['username'],
                     "role": row.get('role'),
                     "masked_ip": row['masked_ip'],
+                    "raw_ip": row.get('raw_ip'),
+                    "ip_source": row.get('ip_source') or 'remote',
                     "login_success": bool(row['login_success']),
                     "created_at": format_datetime(row.get('created_at')),
                 })

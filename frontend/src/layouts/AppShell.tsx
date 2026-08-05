@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   HomeOutlined,
   LogoutOutlined,
@@ -55,6 +55,7 @@ export function AppShell() {
   const { session, logout, updateLastVisitedRoute } = useSession()
   const [collapsed, setCollapsed] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(false)
+  const activeMobileNavRef = useRef<HTMLButtonElement | null>(null)
 
   const navigationItems = useMemo(() => {
     if (!session) return []
@@ -62,13 +63,40 @@ export function AppShell() {
   }, [session])
 
   const selectedKeys = useMemo(() => {
-    const active = navigationItems.find((item) =>
-      location.pathname.startsWith(item.path),
-    )
+    const active = [...navigationItems]
+      .sort((left, right) => right.path.length - left.path.length)
+      .find((item) =>
+        location.pathname === item.path || location.pathname.startsWith(`${item.path}/`),
+      )
     return active ? [active.key] : []
   }, [location.pathname, navigationItems])
 
+  const mobileNavigationItems = useMemo(() => {
+    if (!session) return []
+    const priorities: Partial<Record<typeof session.role, string[]>> = {
+      elder: ['/elder/dashboard', '/elder/services', '/conversations', '/profile'],
+      family: ['/family/dashboard', '/family/live-tracking', '/conversations', '/profile'],
+      volunteer: ['/volunteer', '/volunteer/dispatch', '/volunteer/tasks', '/conversations', '/profile'],
+    }
+    const preferred = priorities[session.role] ?? []
+    return navigationItems
+      .map((item, originalIndex) => {
+        const priorityIndex = preferred.indexOf(item.path)
+        return { item, order: priorityIndex >= 0 ? priorityIndex : preferred.length + originalIndex }
+      })
+      .sort((left, right) => left.order - right.order)
+      .map(({ item }) => item)
+  }, [navigationItems, session])
+
   const activeRoute = getRouteDefinition(location.pathname)
+
+  useEffect(() => {
+    activeMobileNavRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'nearest',
+      inline: 'center',
+    })
+  }, [location.pathname])
 
   useEffect(() => {
     if (
@@ -151,8 +179,10 @@ export function AppShell() {
 
   if (!session) return null
 
+  const usesMobileBottomNavigation = ['elder', 'family', 'volunteer'].includes(session.role)
+
   return (
-    <Layout className="min-h-screen">
+    <Layout className={`app-shell role-${session.role} min-h-screen`}>
       <Sider
         breakpoint="lg"
         collapsedWidth="0"
@@ -160,36 +190,35 @@ export function AppShell() {
         collapsed={collapsed}
         onCollapse={setCollapsed}
         trigger={null}
-        className="!bg-gradient-to-b !from-slate-900 !via-blue-950 !to-slate-900 shadow-xl"
-        style={{ backgroundImage: 'radial-gradient(ellipse at 50% 0%, rgba(37,99,235,.12) 0%, transparent 60%)' }}
+        className="app-desktop-sider !bg-[#f7fafb]"
       >
-        <div className={`px-5 py-5 border-b border-white/10 ${collapsed ? 'flex justify-center' : ''}`}>
+        <div className={`app-brand-block px-5 py-5 ${collapsed ? 'flex justify-center' : ''}`}>
           {collapsed ? (
-            <div className="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center">
+            <div className="w-9 h-9 rounded-lg bg-[#3b82f6] flex items-center justify-center">
               <ElderLogo className="w-5 h-5 text-white" />
             </div>
           ) : (
             <>
               <div className="flex items-center gap-3 mb-3">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center shadow-lg shadow-blue-500/30">
+                <div className="w-10 h-10 rounded-xl bg-[#3b82f6] flex items-center justify-center shadow-sm">
                   <ElderLogo className="w-5 h-5 text-white" />
                 </div>
                 <div>
-                  <Typography.Text className="!text-white !text-base !font-semibold block leading-tight">
-                    智慧伴老
+                  <Typography.Text className="!text-slate-900 !text-base !font-semibold block leading-tight">
+                    银铃智配
                   </Typography.Text>
-                  <Typography.Text className="!text-blue-300/80 !text-xs">
+                  <Typography.Text className="!text-slate-500 !text-xs">
                     社区照护平台
                   </Typography.Text>
                 </div>
               </div>
-              <div className="flex items-center gap-2 mt-3 px-1 py-2 rounded-xl bg-white/5">
-                <Avatar size={30} className="bg-blue-600 flex-shrink-0" icon={<UserOutlined />} />
+              <div className="app-sidebar-user flex items-center gap-2 mt-3 px-3 py-2.5 rounded-xl">
+                <Avatar size={30} className="!bg-[#eaf3ff] !text-[#2563eb] flex-shrink-0" icon={<UserOutlined />} />
                 <div className="min-w-0">
-                  <Typography.Text className="!text-blue-100 !text-sm block truncate">
+                  <Typography.Text className="!text-slate-800 !text-sm !font-medium block truncate">
                     {session.displayName}
                   </Typography.Text>
-                  <Typography.Text className="!text-blue-400/80 !text-xs">
+                  <Typography.Text className="!text-slate-500 !text-xs">
                     {session.isRoot ? '系统管理员' : roleLabels[session.role]}
                   </Typography.Text>
                 </div>
@@ -198,10 +227,10 @@ export function AppShell() {
           )}
         </div>
         <Menu
-          theme="dark"
+          theme="light"
           mode="inline"
           selectedKeys={selectedKeys}
-          className="!bg-transparent !border-none mt-2 [&_.ant-menu-item]:!text-base [&_.ant-menu-item]:!h-12 [&_.ant-menu-item]:!leading-[48px] [&_.ant-menu-item]:!rounded-xl [&_.ant-menu-item]:!mx-2 [&_.ant-menu-item-selected]:!bg-blue-600/40 [&_.ant-menu-item]:!transition-colors [&_.anticon]:!text-lg"
+          className="app-sidebar-menu !bg-transparent !border-none mt-2 [&_.ant-menu-item]:!text-[15px] [&_.ant-menu-item]:!h-11 [&_.ant-menu-item]:!leading-[44px] [&_.ant-menu-item]:!rounded-lg [&_.ant-menu-item]:!mx-2 [&_.ant-menu-item]:!transition-colors [&_.anticon]:!text-lg"
           items={navigationItems.map((item) => ({
             key: item.key,
             icon: item.icon,
@@ -210,14 +239,14 @@ export function AppShell() {
           }))}
         />
       </Sider>
-      <Layout>
-        <Header className="!bg-white !px-4 md:!px-6 !h-16 flex items-center justify-between border-b border-slate-100 shadow-[0_1px_3px_rgba(0,0,0,.04)]">
+      <Layout className="app-main-layout">
+        <Header className="app-header !bg-white !px-4 md:!px-6 !h-16 flex items-center justify-between">
           <div className="flex items-center gap-4 min-w-0">
             <Button
               type="text"
               icon={collapsed ? <MenuUnfoldOutlined className="!text-xl" /> : <MenuFoldOutlined className="!text-xl" />}
               onClick={() => setCollapsed(!collapsed)}
-              className="lg:hidden !text-slate-500 !flex-shrink-0"
+              className={`${usesMobileBottomNavigation ? '!hidden' : 'lg:hidden'} !text-slate-500 !flex-shrink-0`}
             />
             <Breadcrumb
               className="hidden sm:block"
@@ -231,12 +260,19 @@ export function AppShell() {
             </Typography.Text>
           </div>
           <Space size={4} className="flex-shrink-0">
+            <div className="hidden md:flex items-center gap-2 pr-2">
+              <Avatar size={30} className="!bg-[#eaf3ff] !text-[#2563eb]" icon={<UserOutlined />} />
+              <div className="leading-tight">
+                <div className="max-w-32 truncate text-sm font-medium text-slate-800">{session.displayName}</div>
+                <div className="text-[11px] text-slate-500">{session.isRoot ? '系统管理员' : roleLabels[session.role]}</div>
+              </div>
+            </div>
             {!session.isRoot && (
               <Tooltip title="新手引导">
                 <Button
                   type="text"
                   icon={<QuestionCircleOutlined className="!text-xl" />}
-                  className="!w-10 !h-10 flex items-center justify-center !text-slate-500 hover:!bg-slate-100"
+                  className="app-header-action !w-10 !h-10 flex items-center justify-center !text-slate-500"
                   onClick={() => setOnboardingOpen(true)}
                 />
               </Tooltip>
@@ -245,7 +281,7 @@ export function AppShell() {
               <Button
                 type="text"
                 icon={<HomeOutlined className="!text-xl" />}
-                className="!w-10 !h-10 flex items-center justify-center !text-slate-500 hover:!bg-slate-100"
+                className="app-header-action !w-10 !h-10 flex items-center justify-center !text-slate-500"
                 onClick={() => navigate(getDefaultRoute(session.role))}
               />
             </Tooltip>
@@ -253,7 +289,7 @@ export function AppShell() {
               <Button
                 type="text"
                 icon={<UserOutlined className="!text-xl" />}
-                className="!w-10 !h-10 flex items-center justify-center !text-slate-500 hover:!bg-slate-100"
+                className="app-header-action !w-10 !h-10 flex items-center justify-center !text-slate-500"
                 onClick={() => navigate('/profile')}
               />
             </Tooltip>
@@ -268,16 +304,38 @@ export function AppShell() {
             </Tooltip>
           </Space>
         </Header>
-        <Content className={`p-4 md:p-6 ${session.role === 'elder' ? 'elder-mode' : ''}`}>
+        <Content className={`app-content p-4 md:p-6 ${session.role === 'elder' ? 'elder-mode' : ''} ${usesMobileBottomNavigation ? 'has-mobile-role-nav' : ''}`}>
           <LiveNoticeHost />
-          <div className="max-w-6xl mx-auto page-fade-in">
+          <div className="app-page max-w-[1440px] mx-auto page-fade-in">
             <Outlet />
           </div>
         </Content>
-        <Footer className="!bg-transparent !py-4 text-center text-xs text-slate-400 border-t border-slate-100">
-          智慧伴老 · 社区照护平台 &copy; {new Date().getFullYear()} — 纯公益项目
+        <Footer className="app-footer !bg-transparent !py-4 text-center text-xs text-slate-400">
+          银铃智配 · 社区照护平台 &copy; {new Date().getFullYear()} — 纯公益项目
         </Footer>
       </Layout>
+      {usesMobileBottomNavigation ? (
+        <nav className="mobile-role-nav" aria-label={`${roleLabels[session.role]}功能导航`}>
+          <div className="mobile-role-nav-track">
+            {mobileNavigationItems.map((item) => {
+              const active = selectedKeys.includes(item.key)
+              return (
+                <button
+                  key={item.key}
+                  ref={active ? activeMobileNavRef : undefined}
+                  type="button"
+                  className={`mobile-role-nav-item ${active ? 'is-active' : ''}`}
+                  aria-current={active ? 'page' : undefined}
+                  onClick={() => navigate(item.path)}
+                >
+                  <span className="mobile-role-nav-icon">{item.icon}</span>
+                  <span>{item.label.replace('我的', '').replace('志愿者', '') || item.label}</span>
+                </button>
+              )
+            })}
+          </div>
+        </nav>
+      ) : null}
       <OnboardingGuide
         open={onboardingOpen}
         role={session.role}

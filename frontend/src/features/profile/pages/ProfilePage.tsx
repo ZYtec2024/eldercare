@@ -424,8 +424,8 @@ export default function ProfilePage() {
   if (!profile) return <Typography.Text>无法加载个人信息</Typography.Text>
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="profile-page space-y-6">
+      <div className="profile-page-header flex items-center justify-between gap-4">
         <div>
           <Typography.Title level={3} className="!mb-1">
             <UserOutlined className="mr-2" />个人信息
@@ -443,7 +443,7 @@ export default function ProfilePage() {
       </div>
 
       {!editing ? (
-        <Card className="!rounded-2xl">
+        <Card className="profile-overview-card !rounded-2xl">
           <div className="grid gap-x-10 gap-y-4 sm:grid-cols-2">
             <div className="flex gap-3 text-sm">
               <span className="w-24 shrink-0 text-slate-500">姓名</span>
@@ -494,7 +494,6 @@ export default function ProfilePage() {
                         ? '订单服务地点已锁定，但仍可更新老人实时位置供绑定家属查看。'
                         : (liveLocationHint || '切换后家属端可看到当前服务点变化')}
                     </div>
-                    <div className="text-xs leading-5 text-slate-500">请用 http://localhost:3000 打开并允许位置权限。地址簿不会被覆盖。</div>
                   </div>
                 </div>
               </>

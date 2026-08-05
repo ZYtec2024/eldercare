@@ -9,7 +9,7 @@ from auth_security import (
     PORTAL_SESSION_HEADER,
     hash_password,
     issue_portal_session_token,
-    mask_client_ip,
+    resolve_client_ip,
     validate_new_password,
     verify_password,
     verify_portal_session_token,
@@ -286,9 +286,7 @@ def login():
             sql = "SELECT user_id, username, password_hash, role, real_name, email FROM users WHERE username = %s"
             cursor.execute(sql, (username,))
             user = cursor.fetchone()
-            masked_ip = mask_client_ip(
-                request.headers.get('X-Forwarded-For') or request.remote_addr
-            )
+            raw_ip, masked_ip, ip_source = resolve_client_ip(request.headers, request.remote_addr)
 
             if user and verify_password(user.get('password_hash'), password):
                 # Compatibility for an old volume that was not reached by the
@@ -300,9 +298,9 @@ def login():
                     )
                 cursor.execute(
                     """INSERT INTO login_audit_logs
-                       (user_id, username, role, masked_ip, login_success)
-                       VALUES (%s, %s, %s, %s, TRUE)""",
-                    (user['user_id'], username, user['role'], masked_ip),
+                       (user_id, username, role, masked_ip, raw_ip, ip_source, login_success)
+                       VALUES (%s, %s, %s, %s, %s, %s, TRUE)""",
+                    (user['user_id'], username, user['role'], masked_ip, raw_ip, ip_source),
                 )
                 conn.commit()
                 session.clear()
@@ -322,13 +320,15 @@ def login():
             else:
                 cursor.execute(
                     """INSERT INTO login_audit_logs
-                       (user_id, username, role, masked_ip, login_success)
-                       VALUES (%s, %s, %s, %s, FALSE)""",
+                       (user_id, username, role, masked_ip, raw_ip, ip_source, login_success)
+                       VALUES (%s, %s, %s, %s, %s, %s, FALSE)""",
                     (
                         user.get('user_id') if user else None,
                         str(username)[:50],
                         user.get('role') if user else None,
                         masked_ip,
+                        raw_ip,
+                        ip_source,
                     ),
                 )
                 conn.commit()

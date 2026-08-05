@@ -86,24 +86,43 @@ export default function ElderDashboardPage() {
   }, [session?.userId])
 
   return (
-    <div className="space-y-8">
-      <div className="rounded-2xl bg-gradient-to-r from-blue-600 via-blue-700 to-indigo-800 p-8 md:p-10 text-white shadow-lg">
-        <Typography.Title level={1} className="!text-white !mb-2 !text-3xl md:!text-4xl">
-          您好，{session?.displayName}
-        </Typography.Title>
-        <Typography.Paragraph className="!text-blue-100 !text-lg !mb-6 max-w-2xl">
-          有事找家人、找志愿者，或先做今天的健康打卡。着急时请用下面的红色按钮。
-        </Typography.Paragraph>
+    <div className="role-home elder-commercial-page space-y-6 md:space-y-8">
+      <div className="elder-commercial-hero">
+        <div className="elder-commercial-hero-copy">
+          <div className="role-home-kicker">银龄智配 · 长辈服务台</div>
+          <Typography.Title level={1} className="!mb-2 !text-3xl md:!text-4xl !text-slate-950">
+            {session?.displayName}，今天需要什么帮助？
+          </Typography.Title>
+          <Typography.Paragraph className="!text-slate-600 !text-base md:!text-lg !mb-0 max-w-2xl">
+            常用服务放在下面。身体不舒服或遇到危险，请直接点红色按钮。
+          </Typography.Paragraph>
+        </div>
         <Button
           danger
           type="primary"
           size="large"
           icon={<AlertOutlined />}
-          className="!h-14 !px-8 !text-xl !font-semibold"
+          className="elder-sos-primary-btn"
           onClick={() => navigate('/elder/sos')}
         >
-          我需要紧急帮助
+          紧急求助
         </Button>
+      </div>
+
+      <div className="elder-trust-strip">
+        {[
+          ['家人可见', '服务进度会同步给家属'],
+          ['社区响应', '异常情况可联系管理员'],
+          ['位置分离', '实时位置和订单地址分开保护'],
+        ].map(([title, desc]) => (
+          <div key={title} className="elder-trust-item">
+            <div className="elder-trust-dot" />
+            <div>
+              <div className="elder-trust-title">{title}</div>
+              <div className="elder-trust-desc">{desc}</div>
+            </div>
+          </div>
+        ))}
       </div>
 
       {proxyOrders.length ? (
@@ -126,23 +145,23 @@ export default function ElderDashboardPage() {
         />
       ) : null}
 
-      <div className="space-y-4">
+      <div className="elder-feature-grid">
         {orderedFeatures.map((f) => (
           <Card
             key={f.path}
             hoverable
-            className={`!rounded-2xl !border-2 ${f.color} cursor-pointer transition-shadow`}
+            className="elder-feature-card cursor-pointer"
             onClick={() => navigate(f.path)}
           >
-            <div className="flex items-start gap-5 py-1">
-              <div className="flex-shrink-0 w-16 h-16 rounded-2xl bg-white shadow-sm flex items-center justify-center">
+            <div className="flex items-start gap-4">
+              <div className="role-home-feature-icon">
                 {f.icon}
               </div>
               <div className="flex-1 min-w-0">
-                <Typography.Title level={3} className="!mb-1 !text-gray-800">
+                <Typography.Title level={3} className="!mb-1 !text-slate-800">
                   {f.title}
                 </Typography.Title>
-                <Typography.Paragraph className="!text-gray-600 !text-base !mb-0 leading-relaxed">
+                <Typography.Paragraph className="!text-slate-600 !text-base !mb-0 leading-relaxed">
                   {f.desc}
                 </Typography.Paragraph>
               </div>

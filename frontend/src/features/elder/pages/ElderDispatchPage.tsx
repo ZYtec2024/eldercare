@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Alert, App, Button, Card, DatePicker, Form, Input, InputNumber, Segmented, Select, Space, Tag, Typography } from 'antd'
+import { Alert, App, Button, Card, DatePicker, Form, Input, InputNumber, Modal, Segmented, Select, Space, Tag, Typography } from 'antd'
 import { ClockCircleOutlined } from '@ant-design/icons'
 import { AimOutlined, EnvironmentOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
@@ -42,6 +42,7 @@ export default function ElderDispatchPage() {
   const [confirmedMode, setConfirmedMode] = useState<'address' | 'live' | null>(null)
   const [confirmedLive, setConfirmedLive] = useState<ResolvedLiveLocation | null>(null)
   const [locating, setLocating] = useState(false)
+  const [mapExpanded, setMapExpanded] = useState(false)
 
   const load = async () => {
     if (!session) return
@@ -235,13 +236,26 @@ export default function ElderDispatchPage() {
   const orders = tracking?.orders ?? []
   const activeOrders = orders.filter((order) => ['pending', 'accepted', 'in_progress'].includes(order.status))
 
-  return <div className="space-y-6">
-    <div className="rounded-3xl bg-gradient-to-r from-indigo-700 via-blue-700 to-cyan-700 p-6 text-white shadow-xl">
-      <Typography.Title level={2} className="!mb-2 !text-white">请人帮忙</Typography.Title>
-      <Typography.Paragraph className="!text-blue-100 !mb-4 !text-base">
-        先确认服务地址，再说需要什么帮助。着急时请去「紧急求助」。
-      </Typography.Paragraph>
-      <Button danger size="large" onClick={() => navigate('/elder/sos')}>我很着急，去紧急求助</Button>
+  return <div className="mobile-compact-page space-y-6">
+    <div className="section-page-hero">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <div className="role-home-kicker">社区服务申请</div>
+          <Typography.Title level={2} className="!mb-2 !text-slate-900">请人帮忙</Typography.Title>
+          <Typography.Paragraph className="!mb-0 !max-w-2xl !text-base !text-slate-600">
+            先确认这次上门地点，再说明需要什么帮助。提交后可在下方查看接单和到达进度。
+          </Typography.Paragraph>
+        </div>
+        <Button danger size="large" onClick={() => navigate('/elder/sos')}>我很着急，去紧急求助</Button>
+      </div>
+      <div className="mt-5 grid gap-3 md:grid-cols-3">
+        {['确认服务地点', '说明帮助内容', '等待志愿者接单'].map((item, index) => (
+          <div key={item} className="rounded-xl border border-blue-100 bg-white/75 px-4 py-3">
+            <div className="text-xs font-medium text-blue-600">步骤 {index + 1}</div>
+            <div className="mt-1 font-semibold text-slate-900">{item}</div>
+          </div>
+        ))}
+      </div>
     </div>
     {proxyOrders.length ? (
       <Alert
@@ -253,10 +267,9 @@ export default function ElderDispatchPage() {
         )).join('；') + '。可在下方查看进度，也可取消。'}
       />
     ) : null}
-    <Alert showIcon type="info" message="大概会怎样" description="系统会先找附近合适的志愿者。有人答应后，您可以在下面看到谁正在赶来；赶来途中可取消，也可确认完成；开始服务后请确认完成。" />
-    <div className="grid gap-6 xl:grid-cols-[380px_1fr]">
-      <div className="space-y-6">
-        <Card className="!rounded-2xl" title={<Space><EnvironmentOutlined />本次派单位置</Space>}>
+    <div className="dispatch-request-grid grid gap-5">
+      <div>
+        <Card className="!rounded-2xl !border-blue-100" title={<Space><EnvironmentOutlined />1. 服务地点</Space>}>
           <Segmented
             block
             value={locationMode}
@@ -266,7 +279,7 @@ export default function ElderDispatchPage() {
             ]}
             onChange={(value) => switchMode(value as 'address' | 'live')}
           />
-          <div className="mt-3 rounded-xl bg-slate-50 p-4 text-base text-slate-700">
+          <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50 p-4 text-base text-slate-700">
             {locationMode === 'live'
               ? (draftLive?.formattedAddress || '尚未获取实时位置')
               : defaultAddress}
@@ -276,7 +289,7 @@ export default function ElderDispatchPage() {
             <div className="mt-2 text-sm text-slate-500">
               {locationConfirmed
                 ? (locationMode === 'live' ? '已确认实时位置' : '已确认默认地址')
-                : (locationMode === 'live' ? '定位后请点确认' : '请确认后开始找人')}
+                : (locationMode === 'live' ? '定位后请点确认' : '确认后才能提交需求')}
             </div>
           </div>
           {locationMode === 'live' ? (
@@ -294,10 +307,12 @@ export default function ElderDispatchPage() {
             </Button>
           )}
           <Button className="mt-3" type="primary" block size="large" onClick={confirmLocation}>
-            确认本次地址
+            确认服务地点
           </Button>
         </Card>
-        <Card className="!rounded-2xl"><Typography.Title level={4}>我要什么帮助</Typography.Title><Form form={form} layout="vertical" onFinish={submit} initialValues={{ serviceHours: 1, serviceTime: dayjs() }}>
+      </div>
+      <div>
+        <Card className="!rounded-2xl !border-blue-100"><Typography.Title level={4}>2. 需要什么帮助</Typography.Title><Form form={form} layout="vertical" onFinish={submit} initialValues={{ serviceHours: 1, serviceTime: dayjs() }}>
           <Form.Item name="serviceType" label="帮助类型" rules={[{ required: true, message: '请选择' }]}><Select size="large" placeholder="请选择" options={tracking?.service_catalog.filter((item) => !item.urgent).map((item) => ({ value: item.code, label: item.label }))} onChange={(code) => {
             const selected = tracking?.service_catalog.find((item) => item.code === code)
             if (selected?.skills?.length) form.setFieldsValue({ requiredSkills: selected.skills })
@@ -314,12 +329,12 @@ export default function ElderDispatchPage() {
             />
           </Form.Item>
           <Form.Item noStyle shouldUpdate>{() => { const selected = tracking?.service_catalog.find((item) => item.code === form.getFieldValue('serviceType')); return selected ? <div className="mb-4 rounded-xl bg-indigo-50 p-3 text-sm text-indigo-800"><AimOutlined className="mr-2" />这类帮助通常需要：{selected.skill_labels.map((skill) => <Tag color="blue" key={skill}>{skill}</Tag>)}，您也可以按上面自己改</div> : null }}</Form.Item>
-          <Form.Item label="希望什么时候开始" extra="选现在（或约1分钟内）：立刻找人。选任意更晚时间（10分钟后、1小时后都行）：到那个点才开始找志愿者。">
-            <div className="flex gap-2">
+          <Form.Item label="希望什么时候开始" extra="选“现在”会马上找人；选晚一点，系统会到点再安排。">
+            <div className="service-time-row">
               <Form.Item name="serviceTime" noStyle rules={[{ required: true, message: '请选择时间' }]}>
                 <DatePicker showTime className="!w-full" size="large" format="YYYY-MM-DD HH:mm" disabledDate={(current) => !!current && current.isBefore(dayjs().startOf('day'))} />
               </Form.Item>
-              <Button size="large" icon={<ClockCircleOutlined />} onClick={() => form.setFieldValue('serviceTime', dayjs())}>现在</Button>
+              <Button className="service-now-button" size="large" icon={<ClockCircleOutlined />} onClick={() => form.setFieldValue('serviceTime', dayjs())}>现在</Button>
             </div>
           </Form.Item>
           <Form.Item name="serviceHours" label="大概多久"><InputNumber min={0.5} max={8} step={0.5} className="!w-full" addonAfter="小时" /></Form.Item>
@@ -343,19 +358,29 @@ export default function ElderDispatchPage() {
             开始找人
           </Button>
           {!locationConfirmed ? (
-            <div className="mt-2 text-center text-sm text-amber-700">开始找人前，请先上方确认服务地址</div>
+            <div className="mt-2 text-center text-sm text-amber-700">请先确认服务地点，再开始找人</div>
           ) : null}
         </Form></Card>
       </div>
-      <div><DispatchMap overview={mapOverview} height={440} /><div className="mt-3 rounded-xl bg-sky-50 p-3 text-sm text-sky-900">{tracking?.privacy_message || '正在载入位置说明…'}<div className="mt-2"><Tag color="green">绿色：路况好</Tag><Tag color="gold">黄色：有点堵</Tag><Tag color="red">红色：很堵</Tag></div></div></div>
     </div>
+    <Card className="dispatch-centered-map mobile-map-card !overflow-hidden !rounded-2xl !border-blue-100" title="地图预览" extra={<Button size="small" onClick={() => setMapExpanded(true)}>展开地图</Button>}>
+        <DispatchMap overview={mapOverview} height={460} />
+        <div className="mt-3 rounded-xl bg-sky-50 p-3 text-sm text-sky-900">
+          {tracking?.privacy_message || '正在载入位置说明…'}
+          <div className="mt-2">
+            <Tag color="blue">老人实时位置</Tag>
+            <Tag color="orange">订单服务位置</Tag>
+            <Tag color="cyan">志愿者实时位置</Tag>
+          </div>
+        </div>
+      </Card>
     <div>
       <Typography.Title level={3}>进行中的帮助</Typography.Title>
       <div className="grid gap-4 md:grid-cols-2">
         {activeOrders.length ? activeOrders.map((order) => (
           <Card
             key={order.order_id}
-            className="!overflow-hidden !rounded-2xl !border-slate-200"
+            className="mobile-progress-card !overflow-hidden !rounded-2xl !border-slate-200"
             title={<div className="flex flex-wrap items-center gap-2"><span className="text-lg font-semibold text-slate-900">{order.service_type}</span><Tag color={order.urgency === 'sos' ? 'red' : 'blue'}>{order.urgency === 'sos' ? '紧急' : '普通'}</Tag>{order.proxy_created_by ? <Tag color="gold">{proxyOrderTag(order.proxy_creator_role)}</Tag> : null}</div>}
             extra={<Tag color={order.status === 'accepted' || order.status === 'in_progress' ? 'green' : 'orange'} className="!m-0">{stateLabel[order.dispatch_state] || order.dispatch_state}</Tag>}
           >
@@ -380,12 +405,12 @@ export default function ElderDispatchPage() {
                 </div>
               </div>
               {order.volunteer_name ? (
-                <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
+                <div className="rounded-2xl border border-blue-100 bg-blue-50/70 p-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div><div className="text-xs text-emerald-700">本次服务志愿者</div><div className="mt-1 text-lg font-semibold text-emerald-950">{order.volunteer_name}</div></div>
-                    <Tag color="green">评分 {Number(order.volunteer_rating || 0).toFixed(1)}</Tag>
+                    <div><div className="text-xs text-blue-700">本次服务志愿者</div><div className="mt-1 text-lg font-semibold text-blue-950">{order.volunteer_name}</div></div>
+                    <Tag color="blue">评分 {Number(order.volunteer_rating || 0).toFixed(1)}</Tag>
                   </div>
-                  <Space className="mt-3" wrap>{(order.volunteer_skills || []).map((skill) => <Tag color="green" key={skill}>{skillLabel[skill] || skill}</Tag>)}</Space>
+                  <Space className="mt-3" wrap>{(order.volunteer_skills || []).map((skill) => <Tag color="blue" key={skill}>{skillLabel[skill] || skill}</Tag>)}</Space>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {order.volunteer_availability && ['en_route', 'serving'].includes(order.volunteer_availability) ? (
                       <Tag color={volunteerStateColor[order.volunteer_availability] || 'blue'}>{volunteerStateLabel[order.volunteer_availability] || order.volunteer_availability}</Tag>
@@ -421,5 +446,15 @@ export default function ElderDispatchPage() {
         )) : <Card className="!rounded-2xl text-slate-500 text-base">还没有进行中的帮助。提交需求后，进度会出现在这里。</Card>}
       </div>
     </div>
+    <Modal
+      open={mapExpanded}
+      onCancel={() => setMapExpanded(false)}
+      footer={null}
+      width="min(1100px, 96vw)"
+      title="服务地图"
+      destroyOnClose
+    >
+      <DispatchMap overview={mapOverview} height={Math.min(680, typeof window !== 'undefined' ? window.innerHeight - 190 : 560)} />
+    </Modal>
   </div>
 }

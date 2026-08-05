@@ -64,6 +64,8 @@ export interface LoginAuditItem {
   username: string
   role?: Role
   maskedIp: string
+  rawIp?: string
+  ipSource?: string
   loginSuccess: boolean
   createdAt: string
 }
@@ -82,6 +84,8 @@ export async function fetchLoginAudits(adminUserId: number, page = 1, pageSize =
       username: String(row.username ?? ''),
       role: row.role ? String(row.role) as Role : undefined,
       maskedIp: String(row.masked_ip ?? row.maskedIp ?? 'unknown'),
+      rawIp: row.raw_ip || row.rawIp ? String(row.raw_ip ?? row.rawIp) : undefined,
+      ipSource: row.ip_source || row.ipSource ? String(row.ip_source ?? row.ipSource) : undefined,
       loginSuccess: Boolean(row.login_success ?? row.loginSuccess),
       createdAt: String(row.created_at ?? row.createdAt ?? ''),
     })),

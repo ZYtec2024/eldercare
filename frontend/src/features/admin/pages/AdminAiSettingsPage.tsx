@@ -138,27 +138,27 @@ export default function AdminAiSettingsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="rounded-3xl bg-gradient-to-r from-slate-900 via-slate-800 to-sky-900 px-6 py-7 text-white shadow-xl">
+      <div className="section-page-hero px-6 py-7">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
           <div>
-            <Typography.Title level={2} className="!mb-2 !text-white">
+            <Typography.Title level={2} className="!mb-2 !text-slate-900">
               AI 模型配置
             </Typography.Title>
-            <Typography.Paragraph className="!mb-0 !max-w-3xl !text-slate-200 leading-relaxed">
+            <Typography.Paragraph className="!mb-0 !max-w-3xl !text-slate-600 leading-relaxed">
               管理陪聊及周报的默认模型、自定义模型以及 Edge TTS 朗读参数。
             </Typography.Paragraph>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
-            <div className="rounded-2xl bg-white/10 px-4 py-3 backdrop-blur-sm">
-              <div className="text-sm text-slate-200">当前陪聊对话模型</div>
+            <div className="section-page-metric">
+              <div className="text-sm text-slate-500">当前陪聊对话模型</div>
               <div className="mt-1 whitespace-nowrap text-base font-semibold">{companionModel}</div>
             </div>
-            <div className="rounded-2xl bg-white/10 px-4 py-3 backdrop-blur-sm">
-              <div className="text-sm text-slate-200">当前语音转文字</div>
+            <div className="section-page-metric">
+              <div className="text-sm text-slate-500">当前语音转文字</div>
               <div className="mt-1 whitespace-nowrap text-base font-semibold">{transcribeService}</div>
             </div>
-            <div className="rounded-2xl bg-white/10 px-4 py-3 backdrop-blur-sm">
-              <div className="text-sm text-slate-200">当前周报模型</div>
+            <div className="section-page-metric">
+              <div className="text-sm text-slate-500">当前周报模型</div>
               <div className="mt-1 whitespace-nowrap text-base font-semibold">{reportModel}</div>
             </div>
           </div>

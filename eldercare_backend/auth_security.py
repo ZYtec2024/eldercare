@@ -38,11 +38,26 @@ def ensure_login_audit_schema() -> None:
                     username VARCHAR(50) NOT NULL,
                     role VARCHAR(20) NULL,
                     masked_ip VARCHAR(64) NOT NULL,
+                    raw_ip VARCHAR(128) NULL,
+                    ip_source VARCHAR(32) NULL,
                     login_success BOOLEAN NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
+            cursor.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'login_audit_logs'
+                  AND column_name IN ('raw_ip', 'ip_source')
+                """
+            )
+            existing_columns = {row["column_name"] for row in cursor.fetchall() or []}
+            if "raw_ip" not in existing_columns:
+                cursor.execute("ALTER TABLE login_audit_logs ADD COLUMN raw_ip VARCHAR(128) NULL")
+            if "ip_source" not in existing_columns:
+                cursor.execute("ALTER TABLE login_audit_logs ADD COLUMN ip_source VARCHAR(32) NULL")
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_login_audit_created_at ON login_audit_logs(created_at DESC)"
             )
@@ -71,6 +86,23 @@ def mask_client_ip(value: Any) -> str:
         return f"{first}.***.***.{last}"
     groups = parsed.exploded.split(":")
     return f"{groups[0]}:{groups[1]}:****:****"
+
+
+def resolve_client_ip(headers: Any, remote_addr: Any) -> tuple[str, str, str]:
+    """Return (raw_ip, masked_ip, source) for login risk review.
+
+    Prefer proxy headers in production, but keep the source explicit so local
+    Docker / reverse-proxy cases are visible in the audit page.
+    """
+    forwarded = str(headers.get("X-Forwarded-For") or "").strip()
+    real_ip = str(headers.get("X-Real-IP") or "").strip()
+    remote = str(remote_addr or "").strip()
+    if forwarded:
+        raw = forwarded.split(",", 1)[0].strip()
+        return raw, mask_client_ip(raw), "forwarded"
+    if real_ip:
+        return real_ip, mask_client_ip(real_ip), "real-ip"
+    return remote or "unknown", mask_client_ip(remote), "remote"
 
 
 def _portal_session_serializer() -> URLSafeTimedSerializer:

@@ -220,12 +220,13 @@ export default function ElderWeeklyReportPage() {
 
   return (
     <div className="space-y-6">
-      <div className="rounded-2xl bg-gradient-to-r from-violet-600 via-purple-600 to-fuchsia-700 p-8 md:p-10 text-white shadow-lg">
-        <Typography.Title level={1} className="!text-white !mb-2 !text-3xl md:!text-4xl">
+      <div className="section-page-hero compact-ai-hero">
+        <div className="role-home-kicker">近 7 天健康总结</div>
+        <Typography.Title level={1} className="!text-slate-900 !mb-1 !text-2xl md:!text-3xl">
           智能周报
         </Typography.Title>
-        <Typography.Paragraph className="!text-purple-100 !text-lg !mb-1 max-w-2xl">
-          AI 根据您近7天的健康数据和服务记录，自动生成一份专属周报。
+        <Typography.Paragraph className="!text-slate-600 !text-base !mb-1 max-w-2xl">
+          汇总近 7 天健康数据和服务记录，生成一份易读周报。
         </Typography.Paragraph>
         {weekLabel && (
           <Tag color="purple" className="!text-base !px-3 !py-1 !mt-2">

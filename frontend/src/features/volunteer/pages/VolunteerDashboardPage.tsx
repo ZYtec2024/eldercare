@@ -50,35 +50,50 @@ export default function VolunteerDashboardPage() {
   const orderedFeatures = orderHomeFeatures('volunteer', features)
 
   return (
-    <div className="space-y-8">
-      {/* Banner */}
-      <div className="rounded-2xl bg-gradient-to-r from-blue-600 via-blue-700 to-indigo-800 p-10 md:p-12 text-white shadow-lg">
-        <Typography.Title level={1} className="!text-white !mb-3 !text-3xl md:!text-4xl">
+    <div className="role-home mobile-compact-page space-y-6 md:space-y-8">
+      <div className="role-home-hero">
+        <div className="role-home-kicker">志愿服务中心</div>
+        <Typography.Title level={1} className="!mb-3 !text-3xl md:!text-4xl !text-slate-900">
           志愿服务，温暖社区
         </Typography.Title>
-        <Typography.Paragraph className="!text-blue-100 !text-lg md:!text-xl !mb-0 max-w-2xl">
+        <Typography.Paragraph className="!text-slate-600 !text-lg md:!text-xl !mb-0 max-w-2xl">
           欢迎回来，{session?.displayName}。感谢您的每一次付出，每一份服务都是对社区老人的温暖守护。
         </Typography.Paragraph>
       </div>
 
-      {/* Feature Cards */}
-      <div className="space-y-5">
+      <div className="elder-trust-strip">
+        {[
+          ['智能匹配', '按技能、距离、路况综合推荐'],
+          ['路线导航', '接单后查看服务点与路线'],
+          ['服务成长', '时长、评分、荣誉持续沉淀'],
+        ].map(([title, desc]) => (
+          <div key={title} className="elder-trust-item">
+            <div className="elder-trust-dot" />
+            <div>
+              <div className="elder-trust-title">{title}</div>
+              <div className="elder-trust-desc">{desc}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="role-home-features">
         {orderedFeatures.map((f) => (
           <Card
             key={f.path}
             hoverable
-            className={`!rounded-2xl !border-2 ${f.color} cursor-pointer transition-shadow`}
+            className="role-home-feature cursor-pointer"
             onClick={() => navigate(f.path)}
           >
-            <div className="flex items-start gap-6 py-2">
-              <div className="flex-shrink-0 w-20 h-20 rounded-2xl bg-white shadow-sm flex items-center justify-center">
+            <div className="flex items-start gap-5">
+              <div className="role-home-feature-icon">
                 {f.icon}
               </div>
               <div className="flex-1 min-w-0">
-                <Typography.Title level={2} className="!mb-2 !text-gray-800">
+                <Typography.Title level={3} className="!mb-1 !text-slate-800">
                   {f.title}
                 </Typography.Title>
-                <Typography.Paragraph className="!text-gray-600 !text-lg !mb-0 leading-relaxed">
+                <Typography.Paragraph className="!text-slate-600 !text-base !mb-0 leading-relaxed">
                   {f.desc}
                 </Typography.Paragraph>
               </div>

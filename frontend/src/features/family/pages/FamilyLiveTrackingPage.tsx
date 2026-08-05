@@ -23,7 +23,7 @@ export default function FamilyLiveTrackingPage() {
   }
   useEffect(() => { load().catch(() => {}); const timer = window.setInterval(() => load().catch(() => {}), 1200); return () => window.clearInterval(timer) }, [session?.userId])
 
-  return <div className="space-y-6"><div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl bg-gradient-to-r from-violet-700 via-indigo-700 to-blue-700 p-6 text-white shadow-xl"><Typography.Title level={2} className="!m-0 !text-white">家属实时守护</Typography.Title><Button icon={<SyncOutlined />} loading={loading} onClick={() => load().catch(() => {})}>刷新</Button></div>
+  return <div className="space-y-6"><div className="section-page-hero flex flex-wrap items-center justify-between gap-3 p-6"><div><div className="role-home-kicker">老人位置与服务进度</div><Typography.Title level={2} className="!m-0 !text-slate-900">家属实时守护</Typography.Title></div><Button icon={<SyncOutlined />} loading={loading} onClick={() => load().catch(() => {})}>刷新</Button></div>
     <Alert showIcon type="info" icon={<LockOutlined />} message={tracking?.privacy_message || '可一直查看绑定老人的固定或授权位置；当前无进行中服务时，地图不显示志愿者。'} />
     <DispatchMap overview={tracking} height={440} />
     <div className="rounded-xl bg-sky-50 p-3 text-sm text-sky-900"><Tag color="green">绿色：畅通</Tag><Tag color="gold">黄色：缓行</Tag><Tag color="red">红色：拥堵</Tag><span className="ml-2">有进行中服务时，路线颜色与志愿者状态与老人端同步。</span></div>

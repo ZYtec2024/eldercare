@@ -11,6 +11,7 @@ DB_CONFIG = {
     'dbname': os.getenv('DB_NAME', 'omm'),
 }
 
+
 try:
     conn = psycopg2.connect(**DB_CONFIG)
     cursor = conn.cursor()

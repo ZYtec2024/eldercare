@@ -321,19 +321,19 @@ export default function ElderCompanionPage() {
   return (
     <div className="mx-auto max-w-4xl space-y-5">
       <Card className="!overflow-hidden !rounded-3xl !border-0 !shadow-[0_18px_60px_rgba(37,99,235,.14)]" bodyStyle={{ padding: 0 }}>
-        <div className="relative overflow-hidden bg-gradient-to-r from-sky-700 via-cyan-600 to-emerald-500 px-6 py-7 text-white md:px-8 md:py-8">
+        <div className="compact-companion-hero relative overflow-hidden bg-gradient-to-r from-sky-700 via-cyan-600 to-blue-500 px-5 py-5 text-white md:px-6 md:py-6">
           <div className="absolute inset-0 opacity-20" style={{ backgroundImage: 'radial-gradient(circle at 20% 20%, rgba(255,255,255,.45) 0, rgba(255,255,255,0) 35%), radial-gradient(circle at 80% 0%, rgba(255,255,255,.35) 0, rgba(255,255,255,0) 28%)' }} />
           <div className="relative flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div className="space-y-2">
               <Tag color="cyan" className="!border-0 !px-3 !py-1 !text-xs !font-medium">老人端智能陪聊</Tag>
-              <Typography.Title level={2} className="!mb-0 !text-white">
+              <Typography.Title level={2} className="!mb-0 !text-white !text-2xl md:!text-3xl">
                 想说什么，就直接说出来
               </Typography.Title>
-              <Typography.Paragraph className="!mb-0 !max-w-2xl !text-white/90 !text-base leading-relaxed">
-                语音会先转成文字，再发送给智能助手回复。回复可以自动朗读，也可以手动点播。
+              <Typography.Paragraph className="!mb-0 !max-w-2xl !text-white/90 !text-sm md:!text-base leading-relaxed">
+                说话或打字都可以，助手会回复，也可以朗读给您听。
               </Typography.Paragraph>
             </div>
-            <div className="rounded-2xl bg-white/15 px-4 py-3 backdrop-blur-sm">
+            <div className="rounded-2xl bg-white/15 px-4 py-2.5 backdrop-blur-sm">
               <div className="flex items-center justify-between gap-4 text-sm">
                 <span className="text-white/80">自动朗读</span>
                 <Switch checked={autoSpeak} onChange={setAutoSpeak} />

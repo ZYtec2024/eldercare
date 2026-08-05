@@ -2,30 +2,33 @@ import type { ThemeConfig } from 'antd'
 
 export const appTheme: ThemeConfig = {
   token: {
-    colorPrimary: '#2563eb',
-    colorSuccess: '#10b981',
-    colorWarning: '#f59e0b',
-    colorError: '#ef4444',
+    colorPrimary: '#3b82f6',
+    colorSuccess: '#2563eb',
+    colorWarning: '#c27a20',
+    colorError: '#c6534d',
     colorInfo: '#3b82f6',
-    colorText: '#1e293b',
-    colorBgLayout: '#f1f5f9',
+    colorText: '#172431',
+    colorTextSecondary: '#687887',
+    colorBorder: '#d9e3e8',
+    colorBorderSecondary: '#e4ebef',
+    colorBgLayout: '#eef3f6',
     colorBgContainer: '#ffffff',
     fontFamily:
       '"PingFang SC", "Microsoft YaHei", "Source Han Sans SC", "Noto Sans SC", system-ui, sans-serif',
-    borderRadius: 12,
-    borderRadiusLG: 16,
+    borderRadius: 10,
+    borderRadiusLG: 12,
     borderRadiusSM: 8,
     fontSize: 14,
     lineHeight: 1.6,
     boxShadow:
-      '0 1px 3px rgba(15, 23, 42, .06), 0 1px 2px rgba(15, 23, 42, .04)',
+      '0 1px 3px rgba(25, 48, 60, .05)',
     boxShadowSecondary:
-      '0 4px 16px rgba(15, 23, 42, .08)',
+      '0 10px 28px rgba(25, 48, 60, .09)',
   },
   components: {
     Layout: {
-      bodyBg: '#f1f5f9',
-      siderBg: '#0f172a',
+      bodyBg: '#eef3f6',
+      siderBg: '#f7fafb',
       headerBg: '#ffffff',
     },
     Button: {
@@ -35,13 +38,17 @@ export const appTheme: ThemeConfig = {
       borderRadiusLG: 12,
     },
     Card: {
-      borderRadiusLG: 16,
-      paddingLG: 24,
+      borderRadiusLG: 12,
+      paddingLG: 20,
     },
     Menu: {
-      darkItemBg: 'transparent',
-      darkSubMenuItemBg: '#1e293b',
-      itemBorderRadius: 10,
+      itemBg: 'transparent',
+      itemColor: '#647482',
+      itemHoverColor: '#2563eb',
+      itemHoverBg: '#eff6ff',
+      itemSelectedColor: '#1d4ed8',
+      itemSelectedBg: '#dbeafe',
+      itemBorderRadius: 8,
     },
     Breadcrumb: {
       lastItemColor: '#64748b',

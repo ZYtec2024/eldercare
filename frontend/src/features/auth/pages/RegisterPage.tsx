@@ -103,17 +103,17 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-sky-50 p-4">
+    <div className="auth-page min-h-screen flex items-center justify-center p-4">
       <div className="w-full max-w-lg">
         <div className="text-center mb-8">
-          <div className="w-14 h-14 rounded-2xl bg-blue-600 flex items-center justify-center mx-auto mb-4 shadow-lg">
+          <div className="auth-logo w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-sm">
             <ElderLogo className="w-8 h-8 text-white" />
           </div>
           <Typography.Title level={2} className="!mb-1 !text-gray-800">
             注册账号
           </Typography.Title>
           <Typography.Text className="text-gray-500">
-            选择您的角色，加入智慧伴老平台
+            选择您的角色，加入银铃智配
           </Typography.Text>
         </div>
 
@@ -123,7 +123,7 @@ export default function RegisterPage() {
               <Select options={roleOptions} />
             </Form.Item>
 
-            <div className="grid grid-cols-2 gap-x-4">
+            <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
               <Form.Item name="username" label="用户名" rules={[{ required: true, message: '请输入用户名' }]}>
                 <Input placeholder="请输入用户名" />
               </Form.Item>
@@ -140,7 +140,7 @@ export default function RegisterPage() {
               </Form.Item>
             </div>
 
-            <div className="grid grid-cols-2 gap-x-4">
+            <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
               <Form.Item name="realName" label="真实姓名" rules={[{ required: true, message: '请输入姓名' }]}>
                 <Input placeholder="请输入真实姓名" />
               </Form.Item>
@@ -162,7 +162,7 @@ export default function RegisterPage() {
 
             {selectedRole === 'elder' && (
               <>
-                <div className="grid grid-cols-2 gap-x-4">
+                <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
                   <Form.Item
                     name="age"
                     label="年龄"

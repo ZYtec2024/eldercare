@@ -57,8 +57,8 @@ export default function AdminDispatchBoardPage() {
     { title: '综合分', dataIndex: 'total_score', render: (value: number | null) => value == null ? '-' : <b>{value}</b> },
   ], [])
   return <div className="space-y-6">
-    <div className="rounded-3xl bg-gradient-to-r from-slate-900 via-indigo-900 to-blue-900 p-6 text-white shadow-xl">
-      <div className="flex flex-wrap items-start justify-between gap-4"><div><Typography.Title level={2} className="!mb-1 !text-white">高德实时调度指挥台</Typography.Title><Typography.Text className="!text-indigo-200">仅展示待调度或服务中的订单位置与执行路线；订单结束后从实时地图撤下。</Typography.Text></div><Button icon={<ReloadOutlined />} loading={loading} onClick={() => load().catch(() => {})}>刷新真实订单数据</Button></div>
+    <div className="section-page-hero p-6">
+      <div className="flex flex-wrap items-start justify-between gap-4"><div><div className="role-home-kicker">区域实时调度</div><Typography.Title level={2} className="!mb-1 !text-slate-900">高德实时调度指挥台</Typography.Title><Typography.Text className="!text-slate-600">仅展示待调度或服务中的订单位置与执行路线；订单结束后从实时地图撤下。</Typography.Text></div><Button icon={<ReloadOutlined />} loading={loading} onClick={() => load().catch(() => {})}>刷新真实订单数据</Button></div>
     </div>
     <div className="grid gap-4 md:grid-cols-5">{[['待调度', overview?.summary.pending ?? 0, '#f59e0b'], ['服务中', overview?.summary.assigned ?? 0, '#2563eb'], ['SOS', overview?.summary.sos ?? 0, '#ef4444'], ['等待容量', overview?.summary.admin_watch ?? 0, '#7c3aed'], ['空闲志愿者', overview?.summary.idle_volunteers ?? 0, '#10b981']].map(([name, value, color]) => <Card key={String(name)} className="!rounded-2xl"><div className="text-sm text-slate-500">{name}</div><div className="text-3xl font-bold" style={{ color: String(color) }}>{value}</div></Card>)}</div>
     <Card className="!rounded-2xl" size="small"><div className="flex flex-wrap items-center gap-3"><b>当前管理区县</b><AdminGeoScopeFilters className="min-w-72" value={geoScope} onChange={setGeoScope} leafOnly /><span className="text-slate-500">按“全国 → 省 → 市 → 区县”选择；候选、订单、SOS 和路线均严格限制在所选区县内。</span></div></Card>
