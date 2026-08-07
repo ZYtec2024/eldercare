@@ -101,7 +101,7 @@ export function LiveNoticeHost() {
             ) : null}
           </div>
         ),
-        closeIcon: <span style={{ color: '#64748b', fontSize: 16, lineHeight: 1 }}>×</span>,
+        closeIcon: <span className="live-notice-close-x" style={{ color: '#0f172a', fontSize: 18, fontWeight: 700, lineHeight: 1 }}>×</span>,
         placement: 'topRight',
         duration: 0,
         onClose: () => {

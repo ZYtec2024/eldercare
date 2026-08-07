@@ -495,9 +495,9 @@ export default function VolunteerDispatchPage() {
     return index >= 0 ? catalog?.skill_labels[index] ?? skill : skill
   }
   const renderTaskActions = (task: VolunteerDispatchTask) => (
-    <Space wrap>
-      {task.amap_marker_url ? <Button size="small" onClick={() => window.open(task.amap_marker_url, '_blank', 'noopener,noreferrer')}>高德查看服务点</Button> : null}
-      {task.amap_navigation_url ? <Button size="small" type="primary" ghost onClick={() => window.open(task.amap_navigation_url, '_blank', 'noopener,noreferrer')}>打开高德导航</Button> : null}
+    <div className="volunteer-task-actions">
+      {task.amap_marker_url ? <Button onClick={() => window.open(task.amap_marker_url, '_blank', 'noopener,noreferrer')}>高德查看服务点</Button> : null}
+      {task.amap_navigation_url ? <Button type="primary" ghost onClick={() => window.open(task.amap_navigation_url, '_blank', 'noopener,noreferrer')}>打开高德导航</Button> : null}
       {task.response_status === 'invited' ? (
         <>
           <Button type="primary" icon={<CheckCircleOutlined />} loading={working === task.order_id} onClick={() => respond(task, 'accept')}>
@@ -513,17 +513,17 @@ export default function VolunteerDispatchPage() {
         <Button type="primary" loading={working === task.order_id} onClick={() => respond(task, 'start')}>确认到达并开始服务</Button>
       ) : null}
       {task.status === 'in_progress' && state.availability === 'serving' ? (
-        <Button type="primary" size="large" loading={working === task.order_id} onClick={() => respond(task, 'complete')}>
+        <Button type="primary" loading={working === task.order_id} onClick={() => respond(task, 'complete')}>
           完成服务并返家
         </Button>
       ) : null}
       {['accepted', 'in_progress'].includes(task.status) ? (
         <>
-          <Button danger size="small" loading={issueWorking === task.order_id} onClick={() => reportIssueRedispatch(task)}>服务异常·换人重派</Button>
-          <Button size="small" loading={issueWorking === task.order_id} onClick={() => reportIssueAdmin(task)}>联系管理员</Button>
+          <Button danger loading={issueWorking === task.order_id} onClick={() => reportIssueRedispatch(task)}>服务异常·换人重派</Button>
+          <Button loading={issueWorking === task.order_id} onClick={() => reportIssueAdmin(task)}>联系管理员</Button>
         </>
       ) : null}
-    </Space>
+    </div>
   )
   return (
     <div className="mobile-compact-page space-y-6">
@@ -533,6 +533,7 @@ export default function VolunteerDispatchPage() {
         <Typography.Text className="!text-slate-600">接单后共享本人实时位置并根据当前位置规划路线；到达服务点 100 米范围内才能开始服务。</Typography.Text>
       </div>
       <Alert
+        className="volunteer-dispatch-rules-alert"
         showIcon
         type="info"
         message="抢单与自动分配说明"
@@ -609,8 +610,8 @@ export default function VolunteerDispatchPage() {
             <Card
               key={task.order_id}
               className="mobile-progress-card !overflow-hidden !rounded-2xl !border-blue-200"
-              title={<div className="flex flex-wrap items-center gap-2"><span className="text-lg font-semibold text-slate-900">{task.service_type}</span><Tag color="green">{task.status === 'in_progress' ? (state.availability === 'serving' ? '正在服务' : '前往中') : '已接单'}</Tag></div>}
-              extra={<Tag color={task.urgency === 'sos' ? 'red' : 'blue'}>{task.urgency === 'sos' ? 'SOS' : '普通'}</Tag>}
+              title={<div className="flex flex-nowrap items-center gap-2 overflow-x-auto"><span className="text-lg font-semibold text-slate-900 mobile-single-line">{task.service_type}</span><Tag color="green" className="!m-0 shrink-0">{task.status === 'in_progress' ? (state.availability === 'serving' ? '正在服务' : '前往中') : '已接单'}</Tag></div>}
+              extra={<Tag color={task.urgency === 'sos' ? 'red' : 'blue'} className="!m-0 mobile-single-line">{task.urgency === 'sos' ? 'SOS请求' : '普通'}</Tag>}
             >
               <div className="space-y-4">
                 <div className="grid grid-cols-3 gap-2">
@@ -681,7 +682,7 @@ export default function VolunteerDispatchPage() {
       <Card
         className="mobile-map-card !overflow-hidden !rounded-2xl !border-blue-100"
         title="服务地图"
-        extra={<Button size="small" type="primary" onClick={() => setMapExpanded(true)}>{canOpenNavigation ? '展开导航' : '展开地图'}</Button>}
+        extra={<Button size="small" type="primary" className="map-expand-btn" onClick={() => setMapExpanded(true)}>{canOpenNavigation ? '展开导航' : '展开地图'}</Button>}
       >
         <DispatchMap overview={tracking} height={440} />
       </Card>
@@ -710,12 +711,25 @@ export default function VolunteerDispatchPage() {
               onNavigationModeChange={(mode) => void changeNavigationMode(mode)}
             />
             <div className="space-y-3">
-              <Alert
-                type="info"
-                showIcon
-                message="按实时位置规划路线"
-                description="去程可切换驾车、骑行或步行；位置变化后系统会重新计算。拖动地图可暂时取消跟随。"
-              />
+              <div className="volunteer-nav-side-meta rounded-2xl border border-slate-200 bg-white p-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                    <div className="text-[11px] font-medium text-slate-500">剩余距离</div>
+                    <div className="mt-1 text-lg font-bold tabular-nums leading-tight text-slate-900">
+                      {navMeta.distanceKm != null ? formatNavDistance(navMeta.distanceKm * 1000) : '--'}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                    <div className="text-[11px] font-medium text-slate-500">预计时间</div>
+                    <div className="mt-1 text-lg font-bold tabular-nums leading-tight text-emerald-600">
+                      {navMeta.etaMinutes != null ? `${Math.max(1, Math.ceil(navMeta.etaMinutes))} 分钟` : '--'}
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-2 text-[11px] leading-relaxed text-slate-500">
+                  去程可切换驾车、骑行或步行；位置变化后系统会重新计算。拖动地图可暂时取消跟随。
+                </div>
+              </div>
               {upcomingHint ? (
                 <Alert
                   type="success"

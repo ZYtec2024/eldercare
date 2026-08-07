@@ -38,7 +38,10 @@ export default function HomePage() {
             银铃智配
           </Typography.Text>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 public-home-top-actions">
+          <Button onClick={() => navigate('/guide')}>
+            新手指引
+          </Button>
           <Button onClick={() => navigate('/login')} icon={<LoginOutlined />}>
             登录
           </Button>
@@ -60,7 +63,7 @@ export default function HomePage() {
           <Typography.Paragraph className="!text-slate-600 !text-base md:!text-lg max-w-xl !mb-8">
             家属远程监护、老人一键求助、志愿者爱心接单、社区统一管理 —— 四方协同，构建有温度的照护网络。
           </Typography.Paragraph>
-          <div className="flex flex-wrap gap-3">
+          <div className="public-home-cta-row flex flex-wrap gap-3">
             <Button
               type="primary"
               size="large"
@@ -68,6 +71,12 @@ export default function HomePage() {
               onClick={() => navigate('/register')}
             >
               立即加入
+            </Button>
+            <Button
+              size="large"
+              onClick={() => navigate('/guide')}
+            >
+              新手指引
             </Button>
             <Button
               size="large"

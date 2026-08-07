@@ -46,3 +46,4 @@ export const AdminLoginAuditsPage = lazy(() => import('@/features/admin/pages/Ad
 export const HealthKnowledgePage = lazy(() => import('@/features/home/pages/HealthKnowledgePage'))
 
 export const PublicTaskHallPage = lazy(() => import('@/features/public/pages/PublicTaskHallPage'))
+export const PublicOnboardingPage = lazy(() => import('@/features/onboarding/pages/PublicOnboardingPage'))

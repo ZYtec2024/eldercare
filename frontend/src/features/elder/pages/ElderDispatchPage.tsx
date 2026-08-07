@@ -363,7 +363,7 @@ export default function ElderDispatchPage() {
         </Form></Card>
       </div>
     </div>
-    <Card className="dispatch-centered-map mobile-map-card !overflow-hidden !rounded-2xl !border-blue-100" title="地图预览" extra={<Button size="small" onClick={() => setMapExpanded(true)}>展开地图</Button>}>
+    <Card className="dispatch-centered-map mobile-map-card !overflow-hidden !rounded-2xl !border-blue-100" title="地图预览" extra={<Button type="primary" size="small" className="map-expand-btn" onClick={() => setMapExpanded(true)}>展开地图</Button>}>
         <DispatchMap overview={mapOverview} height={460} />
         <div className="mt-3 rounded-xl bg-sky-50 p-3 text-sm text-sky-900">
           {tracking?.privacy_message || '正在载入位置说明…'}
@@ -381,7 +381,7 @@ export default function ElderDispatchPage() {
           <Card
             key={order.order_id}
             className="mobile-progress-card !overflow-hidden !rounded-2xl !border-slate-200"
-            title={<div className="flex flex-wrap items-center gap-2"><span className="text-lg font-semibold text-slate-900">{order.service_type}</span><Tag color={order.urgency === 'sos' ? 'red' : 'blue'}>{order.urgency === 'sos' ? '紧急' : '普通'}</Tag>{order.proxy_created_by ? <Tag color="gold">{proxyOrderTag(order.proxy_creator_role)}</Tag> : null}</div>}
+            title={<div className="flex flex-nowrap items-center gap-2 overflow-x-auto"><span className="text-lg font-semibold text-slate-900 mobile-single-line">{order.service_type}</span><Tag color={order.urgency === 'sos' ? 'red' : 'blue'} className="!m-0 shrink-0 mobile-single-line">{order.urgency === 'sos' ? 'SOS请求' : '普通'}</Tag>{order.proxy_created_by ? <Tag color="gold" className="!m-0 shrink-0">{proxyOrderTag(order.proxy_creator_role)}</Tag> : null}</div>}
             extra={<Tag color={order.status === 'accepted' || order.status === 'in_progress' ? 'green' : 'orange'} className="!m-0">{stateLabel[order.dispatch_state] || order.dispatch_state}</Tag>}
           >
             <div className="space-y-4 text-base text-slate-600">
@@ -393,7 +393,7 @@ export default function ElderDispatchPage() {
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="rounded-xl bg-slate-50 p-3 sm:col-span-2">
                   <div className="mb-1 text-xs font-medium text-slate-500"><EnvironmentOutlined className="mr-1" />订单服务地点</div>
-                  <div className="font-medium leading-6 text-slate-900">{order.address || '家里地址'}</div>
+                  <div className="font-medium leading-6 text-slate-900 service-address-line overflow-x-auto"><span className="inline-block whitespace-nowrap">{order.address || '家里地址'}</span></div>
                 </div>
                 <div className="rounded-xl bg-slate-50 p-3">
                   <div className="mb-1 text-xs font-medium text-slate-500"><ClockCircleOutlined className="mr-1" />约定时间</div>
@@ -422,25 +422,25 @@ export default function ElderDispatchPage() {
               {order.location_sharing_active ? (
                 <LiveArrivalEstimate route={tracking?.routes.find((route) => route.order_id === order.order_id)} />
               ) : null}
-              <Space wrap className="border-t border-slate-100 pt-4">
-                {order.amap_navigation_url ? <Button size="large" onClick={() => window.open(order.amap_navigation_url, '_blank', 'noopener,noreferrer')}>查看路线</Button> : null}
+              <div className="elder-help-actions border-t border-slate-100 pt-4">
+                {order.amap_navigation_url ? <Button onClick={() => window.open(order.amap_navigation_url, '_blank', 'noopener,noreferrer')}>查看路线</Button> : null}
                 {['accepted', 'in_progress'].includes(order.status) ? (
                   <>
-                    <Button size="large" danger loading={redispatchingOrder === order.order_id} onClick={() => redispatchOrder(order.order_id)}>换人重派</Button>
-                    <Button size="large" loading={requestingAdminOrder === order.order_id} onClick={() => requestAdmin(order.order_id)}>联系管理员</Button>
+                    <Button danger loading={redispatchingOrder === order.order_id} onClick={() => redispatchOrder(order.order_id)}>换人重派</Button>
+                    <Button loading={requestingAdminOrder === order.order_id} onClick={() => requestAdmin(order.order_id)}>联系管理员</Button>
                   </>
                 ) : null}
                 {['pending', 'accepted'].includes(order.status) ? (
-                  <Button size="large" danger type={order.status === 'accepted' ? 'primary' : 'default'} loading={cancellingOrder === order.order_id} onClick={() => cancelOrder(order.order_id)}>
+                  <Button danger type={order.status === 'accepted' ? 'primary' : 'default'} loading={cancellingOrder === order.order_id} onClick={() => cancelOrder(order.order_id)}>
                     {order.status === 'accepted' ? '取消这次帮助' : '取消'}
                   </Button>
                 ) : null}
                 {['accepted', 'in_progress'].includes(order.status) && order.volunteer_id ? (
-                  <Button size="large" type="primary" loading={completingOrder === order.order_id} onClick={() => completeOrder(order.order_id)}>
+                  <Button type="primary" loading={completingOrder === order.order_id} onClick={() => completeOrder(order.order_id)}>
                     确认完成服务
                   </Button>
                 ) : null}
-              </Space>
+              </div>
             </div>
           </Card>
         )) : <Card className="!rounded-2xl text-slate-500 text-base">还没有进行中的帮助。提交需求后，进度会出现在这里。</Card>}

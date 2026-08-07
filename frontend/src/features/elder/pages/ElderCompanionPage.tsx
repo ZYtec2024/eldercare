@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type MouseEvent, type TouchEvent } from 'react'
 import { App, Button, Card, Empty, Input, Space, Switch, Tag, Typography } from 'antd'
 import {
   AudioOutlined,
   BulbOutlined,
+  DeleteOutlined,
   EditOutlined,
   LoadingOutlined,
   PauseCircleOutlined,
@@ -318,16 +319,33 @@ export default function ElderCompanionPage() {
     recorderRef.current?.stop()
   }
 
+  const clearChat = () => {
+    setMessages([{ id: 1, role: 'assistant', content: introMessage }])
+    nextIdRef.current = 2
+    if (session) clearCompanionHistory(session.userId).catch(() => {})
+  }
+
+  const startHoldRecording = (event: TouchEvent | MouseEvent) => {
+    event.preventDefault()
+    if (!recording && !sending) void startRecording()
+  }
+
+  const stopHoldRecording = (event: TouchEvent | MouseEvent) => {
+    event.preventDefault()
+    if (recording) stopRecording()
+  }
+
   return (
-    <div className="mx-auto max-w-4xl space-y-5">
-      <Card className="!overflow-hidden !rounded-3xl !border-0 !shadow-[0_18px_60px_rgba(37,99,235,.14)]" bodyStyle={{ padding: 0 }}>
+    <div className="companion-page mx-auto max-w-4xl space-y-5">
+      <Card className="companion-hero-card !overflow-hidden !rounded-3xl !border-0 !shadow-[0_18px_60px_rgba(37,99,235,.14)]" bodyStyle={{ padding: 0 }}>
         <div className="compact-companion-hero relative overflow-hidden bg-gradient-to-r from-sky-700 via-cyan-600 to-blue-500 px-5 py-5 text-white md:px-6 md:py-6">
           <div className="absolute inset-0 opacity-20" style={{ backgroundImage: 'radial-gradient(circle at 20% 20%, rgba(255,255,255,.45) 0, rgba(255,255,255,0) 35%), radial-gradient(circle at 80% 0%, rgba(255,255,255,.35) 0, rgba(255,255,255,0) 28%)' }} />
           <div className="relative flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div className="space-y-2">
               <Tag color="cyan" className="!border-0 !px-3 !py-1 !text-xs !font-medium">老人端智能陪聊</Tag>
               <Typography.Title level={2} className="!mb-0 !text-white !text-2xl md:!text-3xl">
-                想说什么，就直接说出来
+                <span className="companion-title-short md:hidden">想说什么</span>
+                <span className="companion-title-full hidden md:inline">想说什么，就直接说出来</span>
               </Typography.Title>
               <Typography.Paragraph className="!mb-0 !max-w-2xl !text-white/90 !text-sm md:!text-base leading-relaxed">
                 说话或打字都可以，助手会回复，也可以朗读给您听。
@@ -347,7 +365,7 @@ export default function ElderCompanionPage() {
         </div>
       </Card>
 
-      <Card className="!rounded-3xl !border-slate-200 !shadow-[0_12px_40px_rgba(15,23,42,.08)]" styles={{ body: { padding: 18 } }}>
+      <Card className="companion-toolbar-card !rounded-3xl !border-slate-200 !shadow-[0_12px_40px_rgba(15,23,42,.08)]" styles={{ body: { padding: 18 } }}>
         <Space wrap className="w-full justify-between gap-3">
           <Space wrap>
             <Button
@@ -369,11 +387,7 @@ export default function ElderCompanionPage() {
             </Button>
             <Button
               icon={<PauseCircleOutlined />}
-              onClick={() => {
-                setMessages([{ id: 1, role: 'assistant', content: introMessage }])
-                nextIdRef.current = 2
-                if (session) clearCompanionHistory(session.userId).catch(() => {})
-              }}
+              onClick={clearChat}
             >
               清空聊天
             </Button>
@@ -384,8 +398,8 @@ export default function ElderCompanionPage() {
         </Space>
       </Card>
 
-      <Card className="!rounded-3xl !border-slate-200 !shadow-[0_12px_40px_rgba(15,23,42,.08)]" styles={{ body: { padding: 0 } }}>
-        <div className="max-h-[58vh] space-y-4 overflow-y-auto bg-[#eef4f8] px-4 py-5 md:px-6">
+      <Card className="companion-chat-card !rounded-3xl !border-slate-200 !shadow-[0_12px_40px_rgba(15,23,42,.08)]" styles={{ body: { padding: 0 } }}>
+        <div className="companion-chat-window max-h-[58vh] space-y-4 overflow-y-auto bg-[#eef4f8] px-4 py-5 md:px-6">
           {messages.length === 0 ? (
             <div className="flex min-h-64 items-center justify-center">
               <Empty description="还没有开始聊天" />
@@ -467,12 +481,27 @@ export default function ElderCompanionPage() {
         </div>
       </Card>
 
-      <Card className="!rounded-3xl !border-slate-200 !shadow-[0_12px_40px_rgba(15,23,42,.08)]" styles={{ body: { padding: 16 } }}>
-        <div className="flex items-end gap-3">
+      <Card className="companion-input-card !rounded-3xl !border-slate-200 !shadow-[0_12px_40px_rgba(15,23,42,.08)]" styles={{ body: { padding: 16 } }}>
+        <div className="companion-input-row flex items-end gap-3">
+          <Button
+            className={`companion-mobile-voice-btn ${recording ? 'is-recording' : ''}`}
+            shape="circle"
+            size="large"
+            icon={recording ? <StopOutlined /> : <AudioOutlined />}
+            disabled={!session || !canRecord || sending}
+            onTouchStart={startHoldRecording}
+            onTouchEnd={stopHoldRecording}
+            onTouchCancel={stopHoldRecording}
+            onMouseDown={startHoldRecording}
+            onMouseUp={stopHoldRecording}
+            onMouseLeave={stopHoldRecording}
+            onContextMenu={(event) => event.preventDefault()}
+            aria-label={recording ? '松开结束录音' : '按住说话'}
+          />
           <Input.TextArea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
-            placeholder="您可以直接输入，也可以先按录音再说话"
+            placeholder="输入消息"
             autoSize={{ minRows: 2, maxRows: 5 }}
             maxLength={1000}
             className="!rounded-2xl !border-slate-200 !bg-slate-50 !px-4 !py-3"
@@ -495,10 +524,17 @@ export default function ElderCompanionPage() {
           >
             发送
           </Button>
+          <Button
+            className="companion-mobile-clear-btn"
+            shape="circle"
+            icon={<DeleteOutlined />}
+            onClick={clearChat}
+            aria-label="清空聊天"
+          />
         </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        <div className="companion-input-hint mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
           <BulbOutlined />
-          <span>如果识别有误，可以先修改文字再发送。</span>
+          <span>{recording ? '正在录音，松开后自动识别。' : '按住麦克风说话，也可以直接输入文字。'}</span>
         </div>
       </Card>
     </div>

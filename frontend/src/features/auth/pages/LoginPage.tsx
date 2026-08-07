@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Button, Card, Form, Input, Typography, App } from 'antd'
-import { HeartFilled, LockOutlined, UserOutlined } from '@ant-design/icons'
+import { LockOutlined, UserOutlined } from '@ant-design/icons'
 import { Link, useNavigate } from 'react-router-dom'
 
 import { useSession } from '@/features/auth/useSession'
@@ -92,11 +92,20 @@ export default function LoginPage() {
               没有账号？去注册
             </Link>
           </div>
+          <div className="mt-4 text-center">
+            <Link to="/guide" className="text-sm font-medium text-sky-700 hover:text-sky-800">
+              了解角色功能
+            </Link>
+          </div>
         </Card>
 
         <Link to="/donate" className="mt-5 block">
-          <Button block size="large" className="!h-12 !rounded-2xl !border-rose-200 !bg-white !text-rose-600 shadow-sm">
-            <HeartFilled /> 爱心捐款沙盘
+          <Button
+            block
+            size="large"
+            className="donate-entry-btn !h-12 !rounded-2xl !border border-sky-200 !bg-sky-50 !text-sky-800 !shadow-none hover:!border-sky-300 hover:!bg-sky-100 hover:!text-sky-900"
+          >
+            守护银发，多一份安心
           </Button>
         </Link>
 

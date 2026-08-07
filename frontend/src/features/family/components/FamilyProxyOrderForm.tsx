@@ -311,15 +311,15 @@ export default function FamilyProxyOrderForm({ onPublished }: Props) {
         title={
           <div>
             <div className="text-base font-semibold text-slate-900">为长辈填写服务需求</div>
-            <div className="mt-1 text-sm font-normal text-slate-500">先选长辈和本次服务地点，再提交需要的帮助。订单地点不会改动长辈实时位置。</div>
+            <div className="proxy-order-hint mt-1 text-sm font-normal text-slate-500">先选长辈和本次服务地点，再提交需要的帮助。订单地点不会改动长辈实时位置。</div>
           </div>
         }
       >
-        <div className="mb-5 grid gap-3 md:grid-cols-3">
+        <div className="proxy-order-steps mb-5 grid gap-3 md:grid-cols-3">
           {['选择长辈', '确认服务地点', '提交帮助需求'].map((item, index) => (
             <div key={item} className="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
               <div className="text-xs font-medium text-blue-600">步骤 {index + 1}</div>
-              <div className="mt-1 font-semibold text-slate-900">{item}</div>
+              <div className="mt-1 font-semibold text-slate-900 mobile-single-line">{item}</div>
             </div>
           ))}
         </div>
@@ -328,25 +328,21 @@ export default function FamilyProxyOrderForm({ onPublished }: Props) {
           layout="vertical"
           onFinish={handlePublish}
           size="large"
-          className="max-w-4xl"
+          className="proxy-order-form max-w-5xl"
           initialValues={{ serviceHours: 1, serviceTime: dayjs(), locationMode: 'current' }}
         >
-          <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
-            <Form.Item name="elderId" label="选择长辈" rules={[{ required: true, message: '请选择长辈' }]} className="!mb-0">
+          <div className="proxy-order-fields">
+            <Form.Item name="elderId" label="选择长辈" rules={[{ required: true, message: '请选择长辈' }]}>
               <Select
-                placeholder="请先选择长辈，会显示其当前服务点或实时位置"
+                placeholder="请选择长辈"
                 options={elderOptions}
                 optionFilterProp="label"
                 showSearch
+                className="!w-full"
               />
             </Form.Item>
-          </div>
-          {selectedElder?.liveLocationHint ? (
-            <Alert className="mb-4" type={selectedElder.hasLiveLocation ? 'warning' : 'info'} showIcon message={selectedElder.liveLocationHint} />
-          ) : null}
-          <div className="mt-5 grid gap-4 md:grid-cols-2">
             <Form.Item name="serviceType" label="服务类型" rules={[{ required: true, message: '请选择服务类型' }]}>
-              <Select placeholder="请选择" options={[
+              <Select placeholder="请选择服务类型" className="!w-full" options={[
                 { value: '陪同就医', label: '陪同就医' },
                 { value: '上门陪聊', label: '上门陪聊' },
                 { value: '代买药品', label: '代买药品' },
@@ -358,10 +354,15 @@ export default function FamilyProxyOrderForm({ onPublished }: Props) {
                 { value: '智能设备协助', label: '智能设备协助' },
               ]} />
             </Form.Item>
+          </div>
+          <div className="proxy-order-fields">
             <Form.Item name="serviceHours" label="预计时长(小时)" rules={[{ required: true, message: '请输入时长' }]}>
               <InputNumber min={0.5} step={0.5} className="!w-full" placeholder="如 2" />
             </Form.Item>
-            <Form.Item label="服务时间" extra="选“现在”会马上找人；选晚一点，系统会到点再安排。">
+            <Form.Item
+              label="服务时间"
+              tooltip="选“现在”会马上找人；选晚一点，系统会到点再安排。"
+            >
               <div className="service-time-row">
                 <Form.Item name="serviceTime" noStyle rules={[{ required: true, message: '请选择时间' }]}>
                   <DatePicker showTime className="!w-full" placeholder="选择日期时间" format="YYYY-MM-DD HH:mm" />
@@ -370,6 +371,9 @@ export default function FamilyProxyOrderForm({ onPublished }: Props) {
               </div>
             </Form.Item>
           </div>
+          {selectedElder?.liveLocationHint ? (
+            <Alert className="mb-4" type={selectedElder.hasLiveLocation ? 'warning' : 'info'} showIcon message={selectedElder.liveLocationHint} />
+          ) : null}
 
           <div className="mt-2 rounded-2xl border border-blue-100 bg-blue-50/50 p-4">
             <Form.Item name="locationMode" label="服务地址" rules={[{ required: true, message: '请选择地址来源' }]}>
@@ -435,7 +439,11 @@ export default function FamilyProxyOrderForm({ onPublished }: Props) {
           <Form.Item name="notes" label="备注">
             <Input.TextArea rows={3} placeholder="如：需要带轮椅" />
           </Form.Item>
-          <Button className="mt-2 !h-11 !px-8" type="primary" htmlType="submit" loading={publishing} size="large">确认代长辈下单</Button>
+          <div className="proxy-order-submit">
+            <Button className="proxy-order-submit-btn" type="primary" htmlType="submit" loading={publishing} size="large">
+              确认代长辈下单
+            </Button>
+          </div>
         </Form>
       </Card>
 

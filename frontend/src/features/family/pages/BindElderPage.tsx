@@ -160,36 +160,7 @@ export default function BindElderPage() {
             dataSource={elders}
             locale={{ emptyText: '暂未绑定长辈' }}
             renderItem={(elder) => (
-              <List.Item
-                actions={[
-                  <Button
-                    key="view"
-                    type="link"
-                    size="small"
-                    onClick={() => navigate(`/family/elders/${elder.elderId}`)}
-                  >
-                    查看详情
-                  </Button>,
-                  <Button
-                    key="edit-relation"
-                    type="link"
-                    size="small"
-                    onClick={() => openRelationModal(elder)}
-                  >
-                    修改关系
-                  </Button>,
-                  <Popconfirm
-                    key="unbind"
-                    title="确认解绑这位长辈吗？"
-                    description="解绑后将不再在你的列表中显示"
-                    okText="确认"
-                    cancelText="取消"
-                    onConfirm={() => handleUnbind(elder.elderId)}
-                  >
-                    <Button type="link" danger size="small">解绑</Button>
-                  </Popconfirm>,
-                ]}
-              >
+              <List.Item className="bind-elder-list-item">
                 <List.Item.Meta
                   avatar={
                     <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
@@ -197,12 +168,41 @@ export default function BindElderPage() {
                     </div>
                   }
                   title={
-                    <span>
-                      {elder.name}
-                      <Tag className="ml-2" color={riskColors[elder.riskLevel]}>
-                        {riskLabels[elder.riskLevel]}
-                      </Tag>
-                    </span>
+                    <div className="bind-elder-title-row">
+                      <span className="bind-elder-name">
+                        {elder.name}
+                        <Tag className="ml-2" color={riskColors[elder.riskLevel]}>
+                          {riskLabels[elder.riskLevel]}
+                        </Tag>
+                      </span>
+                      <div className="bind-elder-inline-actions">
+                        <Button
+                          type="link"
+                          size="small"
+                          className="bind-elder-action-btn"
+                          onClick={() => navigate(`/family/elders/${elder.elderId}`)}
+                        >
+                          查看详情
+                        </Button>
+                        <Button
+                          type="link"
+                          size="small"
+                          className="bind-elder-action-btn"
+                          onClick={() => openRelationModal(elder)}
+                        >
+                          修改关系
+                        </Button>
+                        <Popconfirm
+                          title="确认解绑这位长辈吗？"
+                          description="解绑后将不再在你的列表中显示"
+                          okText="确认"
+                          cancelText="取消"
+                          onConfirm={() => handleUnbind(elder.elderId)}
+                        >
+                          <Button type="link" danger size="small" className="bind-elder-action-btn">解绑</Button>
+                        </Popconfirm>
+                      </div>
+                    </div>
                   }
                   description={
                     <span>

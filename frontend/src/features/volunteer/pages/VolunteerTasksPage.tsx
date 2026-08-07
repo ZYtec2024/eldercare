@@ -92,20 +92,31 @@ export default function VolunteerTasksPage() {
             size="small"
             dataSource={completedTasks}
             renderItem={(task) => (
-              <List.Item>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Tag color={task.close_status === 'closed' ? 'default' : 'green'}>
+              <List.Item
+                className="volunteer-completed-item"
+                actions={[
+                  <Tag key="st" color={task.close_status === 'closed' ? 'default' : 'green'} className="!m-0">
                     {task.close_status === 'closed' ? '已关闭' : '已完成'}
-                  </Tag>
-                  <Typography.Text strong>{task.service_type}</Typography.Text>
-                  <Typography.Text className="text-gray-500">{task.elder_name}</Typography.Text>
-                  <Typography.Text className="text-gray-400">#{task.order_id}</Typography.Text>
-                  {task.completed_at ? (
-                    <Typography.Text className="text-gray-400">{task.completed_at}</Typography.Text>
-                  ) : task.close_status === 'closed' ? (
-                    <Typography.Text className="text-gray-400">已换人重派</Typography.Text>
+                  </Tag>,
+                ]}
+              >
+                <List.Item.Meta
+                  title={(
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <Typography.Text strong className="whitespace-nowrap">{task.service_type}</Typography.Text>
+                      <Typography.Text type="secondary" className="whitespace-nowrap">{task.elder_name}</Typography.Text>
+                      <Typography.Text type="secondary" className="whitespace-nowrap">#{task.order_id}</Typography.Text>
+                      <Typography.Text type="secondary" className="whitespace-nowrap text-sm">
+                        {task.completed_at || (task.close_status === 'closed' ? '已换人重派' : '')}
+                      </Typography.Text>
+                    </div>
+                  )}
+                  description={task.address ? (
+                    <div className="service-address-line overflow-x-auto text-sm text-slate-500">
+                      <span className="inline-block whitespace-nowrap">{task.address}</span>
+                    </div>
                   ) : null}
-                </div>
+                />
               </List.Item>
             )}
           />

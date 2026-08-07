@@ -20,6 +20,23 @@ import {
 } from '@/services/adapters/elder-adapter'
 import type { WeeklyReport, WeeklyReportEligibility } from '@/services/adapters/elder-adapter'
 
+const TEMPLATE_LABELS: Record<string, string> = {
+  'template_1.md': '综合型',
+  'template_2.md': '陪伴型',
+  'template_3.md': '叙事型',
+  template_1: '综合型',
+  template_2: '陪伴型',
+  template_3: '叙事型',
+  '综合型·简介易读': '综合型',
+  '关爱陪伴型': '陪伴型',
+  '温暖叙事型': '叙事型',
+}
+
+function templateLabel(name?: string) {
+  if (!name) return '综合型'
+  return TEMPLATE_LABELS[name] || TEMPLATE_LABELS[name.replace(/\.md$/i, '')] || name.replace(/\.md$/i, '').replace(/温暖叙事型|关爱陪伴型|综合型·简介易读/g, (m) => TEMPLATE_LABELS[m] || m)
+}
+
 function renderMarkdown(content: string): string {
   return content
     .replace(/^### (.+)$/gm, '<h3 class="text-xl font-semibold mt-4 mb-1">$1</h3>')
@@ -219,7 +236,7 @@ export default function ElderWeeklyReportPage() {
     : ''
 
   return (
-    <div className="space-y-6">
+    <div className="weekly-report-page space-y-6">
       <div className="section-page-hero compact-ai-hero">
         <div className="role-home-kicker">近 7 天健康总结</div>
         <Typography.Title level={1} className="!text-slate-900 !mb-1 !text-2xl md:!text-3xl">
@@ -322,10 +339,10 @@ export default function ElderWeeklyReportPage() {
         <Card
           className="!rounded-2xl"
           title={
-            <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="weekly-report-card-title flex items-center justify-between flex-wrap gap-2">
               <span className="text-lg">本次周报</span>
-              <div className="flex items-center gap-3">
-                <Tag color="purple">{currentReport.templateName}</Tag>
+              <div className="weekly-report-card-actions flex items-center gap-3">
+                <Tag color="purple" className="!m-0">{templateLabel(currentReport.templateName)}</Tag>
                 {!saved && (
                   <Button
                     icon={<SaveOutlined />}
@@ -342,7 +359,7 @@ export default function ElderWeeklyReportPage() {
                   onClick={handleRegenerate}
                   loading={generating}
                 >
-                  换一种风格重新生成
+                  换一种风格
                 </Button>
               </div>
             </div>
@@ -370,29 +387,33 @@ export default function ElderWeeklyReportPage() {
         ) : (
           <Collapse
             accordion
+            className="weekly-history-collapse"
             items={history.map((item) => ({
               key: String(item.reportId),
               label: (
-                <div className="flex items-center gap-3 w-full">
-                  <span className="font-medium">
-                    {item.weekStart} — {item.weekEnd}
-                  </span>
-                  <Tag className="!text-xs">{item.templateName}</Tag>
-                  <span className="text-gray-400 text-sm flex-1">{item.generatedAt}</span>
-                  <Popconfirm
-                    title="确定删除这份周报吗？"
-                    onConfirm={() => handleDelete(item.reportId)}
-                    okText="确定"
-                    cancelText="取消"
-                  >
-                    <Button
-                      type="text"
-                      danger
-                      size="small"
-                      icon={<DeleteOutlined />}
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  </Popconfirm>
+                <div className="weekly-history-label">
+                  <div className="weekly-history-label-inner">
+                    <span className="shrink-0 whitespace-nowrap font-medium">
+                      {item.weekStart} — {item.weekEnd}
+                    </span>
+                    <Tag className="!m-0 !text-xs shrink-0 whitespace-nowrap">{templateLabel(item.templateName)}</Tag>
+                    <span className="shrink-0 whitespace-nowrap text-sm text-gray-400">{item.generatedAt}</span>
+                    <Popconfirm
+                      title="确定删除这份周报吗？"
+                      onConfirm={() => handleDelete(item.reportId)}
+                      okText="确定"
+                      cancelText="取消"
+                    >
+                      <Button
+                        type="text"
+                        danger
+                        size="small"
+                        className="shrink-0"
+                        icon={<DeleteOutlined />}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </Popconfirm>
+                  </div>
                 </div>
               ),
               children: <MarkdownPreview content={item.content} />,

@@ -10,8 +10,13 @@ def load_random_template():
         raise RuntimeError('周报模板目录为空，请检查 skills/weekly_report/')
     chosen = random.choice(templates)
     path = os.path.join(_SKILL_DIR, chosen)
+    labels = {
+        'template_1.md': '综合型',
+        'template_2.md': '陪伴型',
+        'template_3.md': '叙事型',
+    }
     with open(path, 'r', encoding='utf-8') as f:
-        return chosen, f.read()
+        return labels.get(chosen, chosen), f.read()
 
 
 def list_templates():

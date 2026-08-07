@@ -182,6 +182,14 @@ export default function ElderServicesPage() {
   const renderItem = (item: PendingService) => {
     const st = statusMap[item.status] || { color: 'default', text: item.status }
     const actions = renderActions(item)
+    const primaryActions = actions.filter((node) => {
+      const key = (node as { key?: string | null })?.key
+      return key === 'cancel' || key === 'complete'
+    })
+    const feedbackActions = actions.filter((node) => {
+      const key = (node as { key?: string | null })?.key
+      return key === 'like' || key === 'review' || key === 'done'
+    })
     return (
       <List.Item className="!block !px-0">
         <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-4">
@@ -196,11 +204,25 @@ export default function ElderServicesPage() {
               {item.address ? ` · ${item.address}` : ''}
             </div>
           ) : null}
-          <div className="mt-1 text-base text-slate-600">
-            {item.time}
-            {item.volunteerName ? ` · 志愿者：${item.volunteerName}` : ' · 还在安排志愿者'}
+          <div className="mt-1 text-base text-slate-600 service-address-line overflow-x-auto">
+            <span className="mobile-single-line inline-block min-w-0">
+              {item.time}
+              {item.volunteerName ? ` · 志愿者：${item.volunteerName}` : ' · 还在安排志愿者'}
+              {item.address ? ` · ${item.address}` : ''}
+            </span>
           </div>
-          {actions.length ? <Space direction="vertical" className="mt-3 w-full" size="small">{actions}</Space> : null}
+          {/* 桌面：纵向大按钮；手机：点赞评价同行 */}
+          {primaryActions.length ? <Space direction="vertical" className="mt-3 w-full" size="small">{primaryActions}</Space> : null}
+          {feedbackActions.length ? (
+            <>
+              <div className="mt-3 hidden w-full md:block">
+                <Space direction="vertical" className="w-full" size="small">{feedbackActions}</Space>
+              </div>
+              <div className="elder-feedback-actions mt-3 flex md:hidden flex-nowrap items-center gap-2">
+                {feedbackActions}
+              </div>
+            </>
+          ) : null}
         </div>
       </List.Item>
     )

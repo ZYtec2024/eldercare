@@ -74,9 +74,9 @@ export function AppShell() {
   const mobileNavigationItems = useMemo(() => {
     if (!session) return []
     const priorities: Partial<Record<typeof session.role, string[]>> = {
-      elder: ['/elder/dashboard', '/elder/services', '/conversations', '/profile'],
+      elder: ['/elder/dashboard', '/elder/services', '/elder/dispatch', '/conversations', '/profile'],
       family: ['/family/dashboard', '/family/live-tracking', '/conversations', '/profile'],
-      volunteer: ['/volunteer', '/volunteer/dispatch', '/volunteer/tasks', '/conversations', '/profile'],
+      volunteer: ['/volunteer/home', '/volunteer/dispatch', '/volunteer/tasks', '/conversations', '/profile'],
     }
     const preferred = priorities[session.role] ?? []
     return navigationItems
@@ -94,7 +94,7 @@ export function AppShell() {
     activeMobileNavRef.current?.scrollIntoView({
       behavior: 'smooth',
       block: 'nearest',
-      inline: 'center',
+      inline: 'nearest',
     })
   }, [location.pathname])
 

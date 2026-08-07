@@ -74,7 +74,7 @@ export default function VolunteerLeaderboardPage() {
       title: '排名',
       dataIndex: 'rank',
       key: 'rank',
-      width: 80,
+      width: 90,
       render: (rank: number) => {
         if (rank === 1) return <span className="text-2xl">🥇</span>
         if (rank === 2) return <span className="text-2xl">🥈</span>
@@ -86,45 +86,51 @@ export default function VolunteerLeaderboardPage() {
       title: '志愿者',
       dataIndex: 'realName',
       key: 'realName',
-      render: (name: string | undefined) => name || '—',
+      width: 140,
+      render: (name: string | undefined) => <span className="mobile-single-line">{name || '—'}</span>,
     },
     {
       title: '总服务时长',
       dataIndex: 'totalHours',
       key: 'totalHours',
-      render: (v: number) => <span className="font-semibold text-blue-700">{v} 小时</span>,
+      width: 130,
+      render: (v: number) => <span className="font-semibold text-blue-700 mobile-single-line">{v} 小时</span>,
     },
     {
       title: '本周时长',
       dataIndex: 'weeklyHours',
       key: 'weeklyHours',
-      render: (v: number) => `${v} 小时`,
+      width: 120,
+      render: (v: number) => <span className="mobile-single-line">{v} 小时</span>,
     },
     {
       title: <span><HeartOutlined className="mr-1" />获赞</span>,
       dataIndex: 'likesCount',
       key: 'likesCount',
+      width: 90,
     },
     {
       title: '完成任务',
       dataIndex: 'completedCount',
       key: 'completedCount',
-      render: (v: number) => `${v} 次`,
+      width: 110,
+      render: (v: number) => <span className="mobile-single-line">{v} 次</span>,
     },
     {
       title: '荣誉',
       dataIndex: 'awards',
       key: 'awards',
+      width: 220,
       render: (awards: string[]) => (
-        <div className="flex flex-wrap gap-1">
-          {awards.map((a, i) => <Tag key={i} color="gold">{a}</Tag>)}
+        <div className="flex flex-nowrap gap-1">
+          {awards.map((a, i) => <Tag key={i} color="gold" className="!m-0 mobile-single-line">{a}</Tag>)}
         </div>
       ),
     },
     {
       title: '点赞',
       key: 'actions',
-      width: 140,
+      width: 150,
       render: (_: unknown, item: VolunteerProfile) => {
         const currentUserId = typeof session?.userId === 'number' ? session.userId : Number(session?.userId)
         const targetUserId = typeof item.userId === 'number' ? item.userId : Number(item.userId)
@@ -138,6 +144,7 @@ export default function VolunteerLeaderboardPage() {
             icon={isLiked ? <HeartFilled /> : <HeartOutlined />}
             disabled={Boolean(isSelf || isLiked || !item.userId || !session)}
             onClick={() => handleLike(item)}
+            className="mobile-single-line"
           >
             {isSelf ? '不能给自己点赞' : isLiked ? '已点赞' : '点赞'}
           </Button>
@@ -166,14 +173,16 @@ export default function VolunteerLeaderboardPage() {
         ) : null}
       </div>
 
-      <Card className="!rounded-2xl">
-        <Table
-          dataSource={data}
-          columns={columns}
-          rowKey="rank"
-          pagination={false}
-          size="middle"
-        />
+      <Card className="!rounded-2xl honor-wall-card">
+        <div className="mobile-table-scroll">
+          <Table
+            dataSource={data}
+            columns={columns}
+            rowKey="rank"
+            pagination={false}
+            size="middle"
+          />
+        </div>
       </Card>
     </div>
   )

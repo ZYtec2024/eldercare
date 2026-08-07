@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ClockCircleOutlined, EnvironmentOutlined } from '@ant-design/icons'
 
 import type { DispatchRoute } from '../dispatch-types'
@@ -10,7 +10,15 @@ function routeRemainingDistance(route: DispatchRoute) {
   return Math.max(0, Number(route.distance_km || 0) * (100 - progress) / 100)
 }
 
-export function LiveArrivalEstimate({ route }: { route?: DispatchRoute | null }) {
+export function LiveArrivalEstimate({
+  route,
+  compact = false,
+  action,
+}: {
+  route?: DispatchRoute | null
+  compact?: boolean
+  action?: ReactNode
+}) {
   const targetDistanceKm = route ? routeRemainingDistance(route) : undefined
   const displayedRef = useRef<number | undefined>(targetDistanceKm)
   const [displayedDistanceKm, setDisplayedDistanceKm] = useState<number | undefined>(targetDistanceKm)
@@ -42,22 +50,26 @@ export function LiveArrivalEstimate({ route }: { route?: DispatchRoute | null })
     return () => window.cancelAnimationFrame(frame)
   }, [targetDistanceKm])
 
-  if (!route || displayedDistanceKm == null) return null
+  if (!route || displayedDistanceKm == null) {
+    if (!action) return null
+    return <div className="live-arrival-estimate live-arrival-estimate--action-only">{action}</div>
+  }
 
   const progress = Math.max(0, Number(route.progress || 0))
   const etaMinutes = Math.max(0, Number(route.remaining_eta_minutes ?? route.eta_minutes ?? 0))
   const arrived = progress >= 100 || (etaMinutes === 0 && displayedDistanceKm <= 0.02)
 
   return (
-    <div className="grid grid-cols-2 gap-3 rounded-2xl border border-blue-100 bg-gradient-to-r from-blue-50 to-cyan-50 p-3">
-      <div className="rounded-xl bg-white/85 px-3 py-2 shadow-sm">
-        <div className="text-xs font-medium text-slate-500"><ClockCircleOutlined className="mr-1 text-blue-600" />预计到达</div>
-        <div className="mt-1 text-xl font-bold tabular-nums text-blue-700">{arrived ? '已到达' : `约 ${Math.max(1, Math.ceil(etaMinutes))} 分钟`}</div>
+    <div className={`live-arrival-estimate ${compact ? 'live-arrival-estimate--compact' : ''} ${action ? 'live-arrival-estimate--triple' : ''}`}>
+      <div className="live-arrival-cell">
+        <div className="live-arrival-label"><ClockCircleOutlined className="mr-1" />预计到达</div>
+        <div className="live-arrival-value">{arrived ? '已到达' : `约 ${Math.max(1, Math.ceil(etaMinutes))} 分钟`}</div>
       </div>
-      <div className="rounded-xl bg-white/85 px-3 py-2 shadow-sm">
-        <div className="text-xs font-medium text-slate-500"><EnvironmentOutlined className="mr-1 text-cyan-600" />剩余距离</div>
-        <div className="mt-1 text-xl font-bold tabular-nums text-cyan-700">{arrived ? '0 米' : formatNavDistance(displayedDistanceKm * 1000)}</div>
+      <div className="live-arrival-cell">
+        <div className="live-arrival-label"><EnvironmentOutlined className="mr-1" />剩余距离</div>
+        <div className="live-arrival-value">{arrived ? '0 米' : formatNavDistance(displayedDistanceKm * 1000)}</div>
       </div>
+      {action ? <div className="live-arrival-cell live-arrival-action-cell">{action}</div> : null}
     </div>
   )
 }

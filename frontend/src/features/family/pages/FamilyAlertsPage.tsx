@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Alert, App, Button, Card, Empty, Spin, Table, Tag, Typography } from 'antd'
+import { Alert, App, Button, Card, Empty, Modal, Spin, Table, Tag, Typography } from 'antd'
 import { BellOutlined, WarningOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 
@@ -22,6 +22,7 @@ export default function FamilyAlertsPage() {
   const [alerts, setAlerts] = useState<FamilyAlertItem[]>([])
   const [loading, setLoading] = useState(true)
   const [ackingId, setAckingId] = useState<number | null>(null)
+  const [detailAlert, setDetailAlert] = useState<FamilyAlertItem | null>(null)
 
   const loadAlerts = async () => {
     if (!session) return
@@ -58,8 +59,16 @@ export default function FamilyAlertsPage() {
   if (loading) return <div className="flex justify-center py-20"><Spin size="large" /></div>
 
   const alertTypeConfig: Record<string, { color: string; icon: ReactNode; text: string }> = {
-    sos: { color: 'red', icon: <WarningOutlined />, text: 'SOS 求助' },
+    sos: { color: 'red', icon: <WarningOutlined />, text: 'SOS请求' },
     health_warning: { color: 'gold', icon: <BellOutlined />, text: '健康异常' },
+  }
+
+  const resolveStatusLabel = (record: FamilyAlertItem) => {
+    const healthStatus = record.category === 'health_warning'
+      ? (record.unread ? '待确认' : '已确认')
+      : (statusText[record.status] || record.status)
+    if (record.category === 'health_warning') return healthStatus
+    return `${record.unread ? '未读 · ' : ''}${healthStatus}`
   }
 
   const columns = [
@@ -67,41 +76,47 @@ export default function FamilyAlertsPage() {
       title: '告警类型',
       dataIndex: 'category',
       key: 'category',
+      width: 120,
       render: (category: FamilyAlertItem['category']) => {
         const config = alertTypeConfig[category] || { color: 'default', icon: <BellOutlined />, text: category }
-        return <Tag color={config.color} icon={config.icon}>{config.text}</Tag>
+        return <Tag color={config.color} icon={config.icon} className="!m-0 mobile-single-line">{config.text}</Tag>
       },
     },
     {
       title: '长辈',
       dataIndex: 'elderName',
       key: 'elderName',
+      width: 100,
+      render: (name: string) => <span className="mobile-single-line">{name}</span>,
     },
     {
       title: '描述',
       dataIndex: 'description',
       key: 'description',
+      ellipsis: true,
+      render: (description: string) => (
+        <Typography.Text ellipsis={{ tooltip: description }} className="max-w-full text-slate-700">
+          {description}
+        </Typography.Text>
+      ),
     },
     {
       title: '发生时间',
       dataIndex: 'createdAt',
       key: 'createdAt',
-      render: (time: string) => <span className="text-gray-500 text-sm">{time}</span>,
+      width: 170,
+      render: (time: string) => <span className="text-gray-500 text-sm whitespace-nowrap">{time}</span>,
     },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
+      width: 140,
       render: (status: string, record: FamilyAlertItem) => {
         const unreadColor = record.category === 'health_warning' ? 'gold' : 'red'
-        const healthStatus = record.category === 'health_warning'
-          ? (record.unread ? '待确认' : '已确认')
-          : (statusText[status] || status)
         return (
-          <Tag color={record.unread ? unreadColor : status === 'resolved' ? 'green' : 'blue'}>
-            {record.category === 'health_warning'
-              ? healthStatus
-              : `${record.unread ? '未读 · ' : ''}${healthStatus}`}
+          <Tag color={record.unread ? unreadColor : status === 'resolved' ? 'green' : 'blue'} className="!m-0 whitespace-nowrap">
+            {resolveStatusLabel(record)}
           </Tag>
         )
       },
@@ -109,10 +124,15 @@ export default function FamilyAlertsPage() {
     {
       title: '操作',
       key: 'action',
+      width: 300,
+      align: 'left' as const,
       render: (_: unknown, record: FamilyAlertItem) => (
-        <div className="flex flex-wrap gap-2">
+        <div className="family-alert-actions">
+          <Button size="small" type="link" className="family-alert-detail-btn !px-0 shrink-0" onClick={() => setDetailAlert(record)}>
+            查看详情
+          </Button>
           {record.conversationId ? (
-            <Button size="small" onClick={() => navigate(`/conversations?id=${record.conversationId}`)}>
+            <Button size="small" className="shrink-0" onClick={() => navigate(`/conversations?id=${record.conversationId}`)}>
               打开求助群聊
             </Button>
           ) : null}
@@ -120,6 +140,7 @@ export default function FamilyAlertsPage() {
             <Button
               type="primary"
               size="small"
+              className="shrink-0"
               loading={ackingId === record.notificationId}
               onClick={() => void handleAck(record)}
             >
@@ -166,19 +187,54 @@ export default function FamilyAlertsPage() {
         />
       ) : null}
 
-      <Card className="!rounded-2xl">
+      <Card className="!rounded-2xl family-alerts-card">
         {alerts.length === 0 ? (
           <Empty description="暂无告警" />
         ) : (
-          <Table
-            dataSource={alerts}
-            columns={columns}
-            rowKey={(record) => `${record.category}-${record.notificationId}`}
-            pagination={{ pageSize: 20 }}
-            size="middle"
-          />
+          <div className="mobile-table-scroll">
+            <Table
+              dataSource={alerts}
+              columns={columns}
+              rowKey={(record) => `${record.category}-${record.notificationId}`}
+              pagination={{ pageSize: 20 }}
+              size="middle"
+              tableLayout="fixed"
+            />
+          </div>
         )}
       </Card>
+
+      <Modal
+        title="告警详情"
+        open={!!detailAlert}
+        onCancel={() => setDetailAlert(null)}
+        footer={<Button type="primary" onClick={() => setDetailAlert(null)}>知道了</Button>}
+      >
+        {detailAlert ? (
+          <div className="space-y-3 text-sm text-slate-700">
+            <div className="mobile-single-line">
+              <Typography.Text type="secondary">类型：</Typography.Text>
+              {alertTypeConfig[detailAlert.category]?.text || detailAlert.category}
+            </div>
+            <div className="mobile-single-line">
+              <Typography.Text type="secondary">长辈：</Typography.Text>
+              {detailAlert.elderName}
+            </div>
+            <div className="mobile-single-line">
+              <Typography.Text type="secondary">状态：</Typography.Text>
+              {resolveStatusLabel(detailAlert)}
+            </div>
+            <div className="mobile-single-line">
+              <Typography.Text type="secondary">时间：</Typography.Text>
+              {detailAlert.createdAt}
+            </div>
+            <div>
+              <Typography.Text type="secondary">描述：</Typography.Text>
+              <div className="mt-1 rounded-lg bg-slate-50 p-3 leading-relaxed">{detailAlert.description}</div>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
     </div>
   )
 }

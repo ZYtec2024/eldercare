@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import {
   Alert, App, Button, Card, Empty, Form, Input, InputNumber, List, Modal, Popconfirm, Radio, Rate, Space, Tag, Typography,
 } from 'antd'
@@ -42,6 +42,7 @@ export default function FamilyOrdersPage() {
   const [reviewTarget, setReviewTarget] = useState<ServiceRequestCard | null>(null)
   const [reviewing, setReviewing] = useState(false)
   const [likedOrders, setLikedOrders] = useState<Set<number>>(new Set())
+  const [detailTarget, setDetailTarget] = useState<ServiceRequestCard | null>(null)
   const [confirmForm] = Form.useForm()
   const [reviewForm] = Form.useForm()
 
@@ -189,7 +190,7 @@ export default function FamilyOrdersPage() {
           renderItem={(item) => {
             const st = statusMap[item.status] || { color: 'default', text: item.status }
             const isLiked = likedOrders.has(item.requestId)
-            const actions: React.ReactNode[] = []
+            const actions: ReactNode[] = []
 
             if (item.status === 'pending' || item.status === 'accepted') {
               actions.push(
@@ -221,17 +222,56 @@ export default function FamilyOrdersPage() {
               }
             }
 
+            actions.push(
+              <Button key="detail" size="small" type="link" className="!px-1" onClick={() => setDetailTarget(item)}>
+                查看详情
+              </Button>,
+            )
+
             return (
-              <List.Item actions={actions}>
-                <List.Item.Meta
-                  title={<Space><span>{item.serviceType}</span><Tag color={st.color}>{st.text}</Tag></Space>}
-                  description={`${item.elderName || '长辈'} · ${item.serviceTime} · ${item.address || '已选服务点'}${item.assignedVolunteerName ? ` · ${item.assignedVolunteerName}` : ''}`}
-                />
+              <List.Item className="family-orders-list-item">
+                <div className="family-orders-card">
+                  <div className="family-orders-card-top">
+                    <div className="family-orders-title-row">
+                      <span className="family-orders-type">{item.serviceType}</span>
+                      <span className="family-orders-elder-inline">{item.elderName || '长辈'}</span>
+                      <Tag color={st.color} className="!m-0 shrink-0">{st.text}</Tag>
+                    </div>
+                    <div className="family-orders-meta-desc">
+                      <span className="family-orders-meta-scroll">
+                        {`${item.serviceTime || '时间待定'} · ${item.address || '已选服务点'}${item.assignedVolunteerName ? ` · ${item.assignedVolunteerName}` : ''}`}
+                      </span>
+                    </div>
+                  </div>
+                  {actions.length ? (
+                    <div className="family-orders-card-actions family-order-actions">
+                      {actions}
+                    </div>
+                  ) : null}
+                </div>
               </List.Item>
             )
           }}
         />
       </Card>
+
+      <Modal
+        title="服务详情"
+        open={!!detailTarget}
+        onCancel={() => setDetailTarget(null)}
+        footer={<Button type="primary" onClick={() => setDetailTarget(null)}>知道了</Button>}
+      >
+        {detailTarget ? (
+          <div className="space-y-3 text-sm text-slate-700">
+            <div className="mobile-single-line"><Typography.Text type="secondary">服务类型：</Typography.Text>{detailTarget.serviceType}</div>
+            <div className="mobile-single-line"><Typography.Text type="secondary">长辈：</Typography.Text>{detailTarget.elderName || '长辈'}</div>
+            <div className="mobile-single-line"><Typography.Text type="secondary">状态：</Typography.Text>{statusMap[detailTarget.status]?.text || detailTarget.status}</div>
+            <div className="mobile-single-line"><Typography.Text type="secondary">服务时间：</Typography.Text>{detailTarget.serviceTime || '未填写'}</div>
+            <div className="mobile-single-line overflow-x-auto"><Typography.Text type="secondary">服务地址：</Typography.Text>{detailTarget.address || '已选服务点'}</div>
+            <div className="mobile-single-line"><Typography.Text type="secondary">志愿者：</Typography.Text>{detailTarget.assignedVolunteerName || '尚未接单'}</div>
+          </div>
+        ) : null}
+      </Modal>
 
       <Modal
         title="确认服务时长"

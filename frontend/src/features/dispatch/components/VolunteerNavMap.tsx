@@ -683,7 +683,7 @@ export function VolunteerNavMap({
   }, [status, follow, navigationMode, viewMode, routeJourneyKey])
 
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-slate-950" style={{ height }}>
+    <div className="volunteer-nav-map relative overflow-hidden rounded-2xl border border-slate-200 bg-slate-950" style={{ height }}>
       <div ref={containerRef} className="h-full w-full" />
       {status !== 'ready' ? (
         <div className="absolute inset-0 flex items-center justify-center bg-slate-950/85 text-sm text-white">
@@ -691,82 +691,99 @@ export function VolunteerNavMap({
         </div>
       ) : null}
 
-      <div className="pointer-events-none absolute inset-x-3 top-3 flex min-h-[76px] items-center gap-3 rounded-2xl bg-slate-950/95 px-4 py-3 text-white shadow-2xl backdrop-blur">
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-emerald-500 text-3xl font-black">
+      {/* 顶部精简转向提示，不挡地图中部 */}
+      <div className="pointer-events-none absolute inset-x-2 top-2 flex max-w-[calc(100%-16px)] items-center gap-2 rounded-xl bg-slate-950/90 px-3 py-2 text-white shadow-lg backdrop-blur">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-500 text-xl font-black">
           {directionGlyph(upcoming?.instruction)}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium text-emerald-300">
+          <div className="truncate text-[11px] font-medium text-emerald-300">
             {upcoming ? `${formatNavDistance(upcoming.distanceMeters)}后` : '正在跟随实时位置'}
           </div>
-          <div className="truncate text-lg font-bold">
+          <div className="truncate text-sm font-bold">
             {upcoming?.instruction || (ego ? '沿当前路线继续行驶' : '接单后自动开始导航')}
           </div>
-          {upcoming?.road ? <div className="truncate text-xs text-slate-300">进入 {upcoming.road}</div> : null}
         </div>
-      </div>
-
-      <div className="pointer-events-auto absolute left-3 top-[96px] rounded-xl bg-white/95 p-1 shadow-lg backdrop-blur">
-        <Segmented
-          size="small"
-          value={navigationMode}
-          disabled={navigationModeLocked}
-          options={[
-            { label: '驾车', value: 'driving' },
-            { label: '骑行', value: 'riding' },
-            { label: '步行', value: 'walking' },
-          ]}
-          onChange={(value) => onNavigationModeChange?.(value as NavigationMode)}
-        />
-        {navigationModeLocked ? <div className="px-2 pt-1 text-[10px] text-slate-500">{navigationModeLockLabel}</div> : null}
-      </div>
-
-      <div className="pointer-events-auto absolute right-3 top-[96px] flex items-center gap-2 rounded-xl bg-slate-950/85 px-2 py-1.5 text-white shadow-lg backdrop-blur">
-        <Segmented
-          size="small"
-          value={viewMode}
-          options={[{ label: '3D', value: '3D' }, { label: '2D', value: '2D' }]}
-          onChange={(value) => setViewMode(value as '3D' | '2D')}
-        />
-        <span className="text-[11px]">跟随</span>
-        <Switch
-          size="small"
-          checked={follow}
-          onChange={(checked) => {
-            setFollow(checked)
-            if (checked) userUnlockedRef.current = false
-          }}
-        />
       </div>
 
       {ego && ego.route.order_id !== 0 && !hasRoadGeometry ? (
-        <div className="pointer-events-none absolute left-1/2 top-[142px] -translate-x-1/2 rounded-full bg-amber-500/95 px-3 py-1.5 text-xs font-semibold text-white shadow-lg">
-          正在获取高德道路路线，暂不显示直线
+        <div className="pointer-events-none absolute left-1/2 top-14 z-10 -translate-x-1/2 rounded-full bg-amber-500/95 px-3 py-1 text-[11px] font-semibold text-white shadow-lg">
+          正在获取高德道路路线…
         </div>
       ) : null}
 
-      <div className="pointer-events-none absolute inset-x-3 bottom-3 flex items-center justify-between gap-3 rounded-2xl bg-white/95 px-4 py-3 text-slate-900 shadow-2xl backdrop-blur">
-        <div>
-          <div className="text-[11px] font-medium text-slate-500">剩余距离</div>
-          <div className="text-xl font-bold tabular-nums">{displayedDistanceKm != null ? formatNavDistance(displayedDistanceKm * 1000) : '--'}</div>
+      {/* 底部控制条：模式/视角；距离已挪到侧栏「剩余距离」板块，地图上不再重复显示 */}
+      <div className="volunteer-nav-controls pointer-events-auto absolute inset-x-2 bottom-2 rounded-2xl bg-white/95 p-2.5 text-slate-900 shadow-2xl backdrop-blur">
+        <div className="volunteer-nav-distance-row mb-2 hidden items-center justify-between gap-3 px-1 md:flex">
+          <div className="min-w-0">
+            <div className="text-[10px] font-medium text-slate-500">剩余距离</div>
+            <div className="text-base font-bold tabular-nums leading-tight">{displayedDistanceKm != null ? formatNavDistance(displayedDistanceKm * 1000) : '--'}</div>
+          </div>
+          <div className="min-w-0 border-l border-slate-200 pl-3">
+            <div className="text-[10px] font-medium text-slate-500">预计时间</div>
+            <div className="text-base font-bold leading-tight text-emerald-600">{etaMinutes != null ? `${Math.max(1, Math.ceil(etaMinutes))} 分钟` : '--'}</div>
+          </div>
+          {!follow ? (
+            <Button
+              size="small"
+              type="primary"
+              className="shrink-0"
+              onClick={() => {
+                setFollow(true)
+                userUnlockedRef.current = false
+              }}
+            >
+              回到车位
+            </Button>
+          ) : (
+            <div className="shrink-0 text-right text-[10px] leading-tight text-slate-500">实时跟随<br />方向朝上</div>
+          )}
         </div>
-        <div className="border-l border-slate-200 pl-4">
-          <div className="text-[11px] font-medium text-slate-500">预计时间</div>
-          <div className="text-xl font-bold text-emerald-600">{etaMinutes != null ? `${Math.max(1, Math.ceil(etaMinutes))} 分钟` : '--'}</div>
-        </div>
-        {!follow ? (
-          <Button
-            className="pointer-events-auto"
+        <div className="flex flex-wrap items-center gap-2 md:border-t md:border-slate-100 md:pt-2">
+          <Segmented
             size="small"
-            type="primary"
-            onClick={() => {
-              setFollow(true)
-              userUnlockedRef.current = false
-            }}
-          >
-            回到车位
-          </Button>
-        ) : <div className="text-right text-[11px] text-slate-500">实时跟随<br />方向朝上</div>}
+            className="volunteer-nav-mode"
+            value={navigationMode}
+            disabled={navigationModeLocked}
+            options={[
+              { label: '驾车', value: 'driving' },
+              { label: '骑行', value: 'riding' },
+              { label: '步行', value: 'walking' },
+            ]}
+            onChange={(value) => onNavigationModeChange?.(value as NavigationMode)}
+          />
+          <Segmented
+            size="small"
+            value={viewMode}
+            options={[{ label: '3D', value: '3D' }, { label: '2D', value: '2D' }]}
+            onChange={(value) => setViewMode(value as '3D' | '2D')}
+          />
+          <div className="ml-auto flex items-center gap-1.5 text-[11px] text-slate-600">
+            {!follow ? (
+              <Button
+                size="small"
+                type="primary"
+                className="md:hidden"
+                onClick={() => {
+                  setFollow(true)
+                  userUnlockedRef.current = false
+                }}
+              >
+                回到车位
+              </Button>
+            ) : null}
+            <span>跟随</span>
+            <Switch
+              size="small"
+              checked={follow}
+              onChange={(checked) => {
+                setFollow(checked)
+                if (checked) userUnlockedRef.current = false
+              }}
+            />
+          </div>
+        </div>
+        {navigationModeLocked ? <div className="pt-1 text-[10px] text-slate-500">{navigationModeLockLabel}</div> : null}
       </div>
     </div>
   )

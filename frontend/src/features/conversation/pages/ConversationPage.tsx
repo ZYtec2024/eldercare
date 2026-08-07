@@ -243,8 +243,8 @@ export default function ConversationPage() {
     const urgent = upgraded || selected.conversation_type === 'sos'
 
     return (
-      <div className="mx-auto flex h-[min(78vh,720px)] max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_8px_30px_rgba(15,23,42,.08)]">
-        <header className="flex shrink-0 items-center gap-2 border-b border-slate-100 bg-white/95 px-3 py-2.5 backdrop-blur">
+      <div className="mx-auto flex h-[min(78vh,720px)] max-w-3xl flex-col overflow-hidden rounded-2xl border-0 bg-white">
+        <header className="flex shrink-0 items-center gap-2 border-b border-slate-100 bg-white px-3 py-2.5">
           <button
             type="button"
             className="flex h-9 w-9 items-center justify-center rounded-full text-slate-600 transition hover:bg-slate-100"
@@ -306,13 +306,13 @@ export default function ConversationPage() {
         </header>
 
         {showMembers ? (
-          <div className="shrink-0 border-b border-slate-100 bg-slate-50 px-4 py-3">
+          <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
             <div className="mb-2 text-xs font-medium text-slate-500">本群人物（{participants.length} 人）</div>
             <div className="flex flex-wrap gap-1.5">
               {participants.map((person) => (
                 <span
                   key={person.user_id}
-                  className={`rounded-full px-2.5 py-1 text-[11px] ${person.can_speak === false ? 'bg-slate-200 text-slate-400 line-through' : 'bg-white text-slate-700 shadow-sm'}`}
+                  className={`rounded-full border border-slate-200 px-2.5 py-1 text-[11px] ${person.can_speak === false ? 'bg-slate-100 text-slate-400 line-through' : 'bg-white text-slate-700'}`}
                 >
                   {person.display_label}
                 </span>
@@ -323,13 +323,7 @@ export default function ConversationPage() {
 
         <div
           ref={scrollerRef}
-          className="relative min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-4"
-          style={{
-            backgroundColor: '#e9eef3',
-            backgroundImage:
-              'radial-gradient(circle at 1px 1px, rgba(148,163,184,.18) 1px, transparent 0)',
-            backgroundSize: '18px 18px',
-          }}
+          className="relative min-h-0 flex-1 space-y-3 overflow-y-auto bg-white px-3 py-4"
         >
           {!showMembers && subtitle ? (
             <div className="mx-auto max-w-[90%] rounded-xl bg-white/70 px-3 py-2 text-center text-[11px] leading-relaxed text-slate-500 shadow-sm backdrop-blur">
@@ -405,7 +399,7 @@ export default function ConversationPage() {
                 autoSize={{ minRows: 1, maxRows: 4 }}
                 maxLength={1000}
                 placeholder="输入消息，Enter 发送"
-                className="!rounded-2xl !border-slate-200 !bg-slate-50 !px-3 !py-2"
+                className="!rounded-2xl !border-slate-200 !bg-white !px-3 !py-2"
                 onPressEnter={(event) => {
                   if (!event.shiftKey) {
                     event.preventDefault()
@@ -440,15 +434,21 @@ export default function ConversationPage() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_8px_30px_rgba(15,23,42,.06)]">
-      <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+    <div className="conversation-page mx-auto max-w-3xl overflow-hidden rounded-2xl border-0 bg-white max-md:flex max-md:min-h-[calc(100vh-180px)] max-md:flex-col">
+      <div className="conversation-header flex items-center justify-between border-b border-slate-100 bg-white px-4 py-3">
         <div>
           <h1 className="text-[18px] font-semibold text-slate-900">消息</h1>
-          <p className="text-xs text-slate-400">健康通知、服务沟通与 SOS 协同</p>
+          <p className="conversation-header-desc text-xs text-slate-500">健康通知、服务沟通与 SOS 协同</p>
         </div>
-        <div className="flex items-center gap-2">
-          {totalUnreadCount > 0 ? <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[11px] font-medium text-white">{totalUnreadCount} 条提醒</span> : null}
+        <div className="conversation-header-actions flex flex-nowrap items-center gap-2">
+          {totalUnreadCount > 0 ? (
+            <span className="conversation-unread-badge rounded-full bg-rose-500 px-2 py-0.5 text-[11px] font-medium text-white">
+              <span className="conversation-unread-number">{totalUnreadCount}</span>
+              <span className="conversation-unread-text"> 条提醒</span>
+            </span>
+          ) : null}
           <Button
+            className="conversation-mark-read-btn"
             type="text"
             size="small"
             icon={<CheckCircleOutlined />}
@@ -460,7 +460,7 @@ export default function ConversationPage() {
           </Button>
           <button
             type="button"
-            className="flex h-8 w-8 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100"
+            className="conversation-refresh-btn flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100"
             onClick={() => {
               void loadConversations()
               void loadHealthNotices()
@@ -473,12 +473,12 @@ export default function ConversationPage() {
       </div>
 
       {healthNotices.length ? (
-        <section className="border-b border-amber-100 bg-amber-50 px-4 py-3">
+        <section className="conversation-health-section border-b border-slate-100 bg-white px-4 py-3">
           <div className="space-y-2">
             {healthNotices.map((item) => (
               <div
                 key={item.notice_key}
-                className="flex w-full items-center rounded-lg border !border-blue-200 !bg-amber-50 transition-colors hover:!bg-amber-100/70"
+                className="flex w-full items-center rounded-xl bg-white transition-colors hover:bg-slate-50"
               >
                 <button
                   type="button"
@@ -504,14 +504,13 @@ export default function ConversationPage() {
                       {noticeDateTime(item.created_at)} · 系统健康提醒{item.is_read ? ' · 已读' : ''}
                     </div>
                   </div>
-                  <RightOutlined className="shrink-0 text-[12px] text-slate-300 transition-colors group-hover:text-amber-500" />
+                  <RightOutlined className="shrink-0 text-[12px] text-slate-300 transition-colors group-hover:text-slate-500" />
                 </button>
                 <Button
                   type="text"
                   size="small"
-                  danger
                   icon={<DeleteOutlined />}
-                  className="!mr-2 !bg-transparent hover:!bg-amber-200/60"
+                  className="conversation-health-delete !mr-2 !bg-transparent !text-slate-900 hover:!bg-slate-100 hover:!text-black"
                   onClick={() => void deleteHealthNotice(item)}
                 >
                   删除
@@ -523,7 +522,7 @@ export default function ConversationPage() {
       ) : null}
 
       {conversations.length === 0 ? (
-        <div className="py-14">
+        <div className="bg-white py-14">
           <Empty
             description={healthNotices.length ? '暂无服务会话' : '暂无消息'}
             image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -531,45 +530,47 @@ export default function ConversationPage() {
         </div>
       ) : (
         <div
-          className="conversation-list-scroll divide-y divide-slate-100 overflow-y-auto"
+          className="conversation-list-scroll overflow-y-auto bg-white p-3"
           style={{ maxHeight: 'min(70vh, 680px)', scrollbarGutter: 'stable' }}
         >
-          {conversations.map((item) => {
-            const unread = Number(item.unread_count || 0)
-            const upgraded = Boolean(item.upgraded_to_sos)
-            return (
-              <button
-                key={item.conversation_id}
-                type="button"
-                className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition hover:bg-slate-50 active:bg-slate-100 focus:outline-none focus-visible:bg-slate-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-200"
-                onClick={() => openConversation(item.conversation_id)}
-              >
-                <div className={`relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-[15px] font-semibold text-white shadow-sm ${avatarTone(item.conversation_type, upgraded)}`}>
-                  {avatarLabel(item)}
-                  {unread > 0 ? (
-                    <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white">
-                      {unread > 99 ? '99+' : unread}
-                    </span>
-                  ) : null}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <div className="truncate text-[15px] font-medium text-slate-900">
-                      {item.title || (item.conversation_type === 'sos' ? '紧急求助' : item.service_type || '服务沟通')}
+          <div className="flex flex-col gap-2.5">
+            {conversations.map((item) => {
+              const unread = Number(item.unread_count || 0)
+              const upgraded = Boolean(item.upgraded_to_sos)
+              return (
+                <button
+                  key={item.conversation_id}
+                  type="button"
+                  className="conversation-list-item flex w-full items-center gap-3 rounded-xl border border-transparent bg-white px-3.5 py-3 text-left transition hover:bg-slate-50 active:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-200"
+                  onClick={() => openConversation(item.conversation_id)}
+                >
+                  <div className={`relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-[15px] font-semibold text-white shadow-sm ${avatarTone(item.conversation_type, upgraded)}`}>
+                    {avatarLabel(item)}
+                    {unread > 0 ? (
+                      <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white">
+                        {unread > 99 ? '99+' : unread}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <div className="truncate text-[15px] font-medium text-slate-900">
+                        {item.title || (item.conversation_type === 'sos' ? '紧急求助' : item.service_type || '服务沟通')}
+                      </div>
+                      <span className="shrink-0 text-[11px] text-slate-400">{shortTime(item.last_message_at)}</span>
                     </div>
-                    <span className="shrink-0 text-[11px] text-slate-400">{shortTime(item.last_message_at)}</span>
+                    <div className="mt-0.5 truncate text-[12px] text-slate-400">
+                      {item.thread_code ? `${item.thread_code} · ` : ''}
+                      {item.participant_subtitle || item.elder_name || '群聊'}
+                    </div>
+                    <div className="mt-1 truncate text-[13px] text-slate-500">
+                      {item.last_message || '暂无消息'}
+                    </div>
                   </div>
-                  <div className="mt-0.5 truncate text-[12px] text-slate-400">
-                    {item.thread_code ? `${item.thread_code} · ` : ''}
-                    {item.participant_subtitle || item.elder_name || '群聊'}
-                  </div>
-                  <div className="mt-1 truncate text-[13px] text-slate-500">
-                    {item.last_message || '暂无消息'}
-                  </div>
-                </div>
-              </button>
-            )
-          })}
+                </button>
+              )
+            })}
+          </div>
         </div>
       )}
     </div>
