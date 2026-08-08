@@ -8,6 +8,7 @@ from db import get_db_connection
 from auth_security import (
     PORTAL_SESSION_HEADER,
     hash_password,
+    is_ip_blocked,
     issue_portal_session_token,
     resolve_client_ip,
     validate_new_password,
@@ -287,6 +288,22 @@ def login():
             cursor.execute(sql, (username,))
             user = cursor.fetchone()
             raw_ip, masked_ip, ip_source = resolve_client_ip(request.headers, request.remote_addr)
+            if is_ip_blocked(raw_ip):
+                cursor.execute(
+                    """INSERT INTO login_audit_logs
+                       (user_id, username, role, masked_ip, raw_ip, ip_source, login_success)
+                       VALUES (%s, %s, %s, %s, %s, %s, FALSE)""",
+                    (
+                        user.get('user_id') if user else None,
+                        str(username)[:50],
+                        user.get('role') if user else None,
+                        masked_ip,
+                        raw_ip,
+                        ip_source,
+                    ),
+                )
+                conn.commit()
+                return api_response({"code": 403, "message": "当前网络地址存在风险，已被限制登录"}, 403)
 
             if user and verify_password(user.get('password_hash'), password):
                 # Compatibility for an old volume that was not reached by the

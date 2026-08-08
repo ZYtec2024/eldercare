@@ -25,8 +25,11 @@ from routes.dispatch import dispatch_bp, ensure_dispatch_schema, run_dispatch_cl
 from routes.report import report_bp
 from auth_security import (
     PORTAL_SESSION_HEADER,
+    ensure_ip_blocklist_schema,
     ensure_login_audit_schema,
+    is_ip_blocked,
     migrate_legacy_password_hashes,
+    resolve_client_ip,
     verify_portal_session_token,
 )
 from db import get_db_connection
@@ -91,6 +94,9 @@ def require_authenticated_api_session():
     """
     if request.method == "OPTIONS" or not request.path.startswith("/api/"):
         return None
+    raw_ip, _, _ = resolve_client_ip(request.headers, request.remote_addr)
+    if is_ip_blocked(raw_ip) and request.path not in {"/api/auth/login", "/api/auth/session"}:
+        return jsonify({"code": 403, "message": "当前网络地址存在风险，已被限制访问"}), 403
     portal_token = str(request.headers.get(PORTAL_SESSION_HEADER) or "").strip()
     if portal_token:
         portal_identity = verify_portal_session_token(portal_token)
@@ -214,6 +220,7 @@ with app.app_context():
     init_db()
     ensure_dispatch_schema()
     ensure_login_audit_schema()
+    ensure_ip_blocklist_schema()
     migrated_passwords = migrate_legacy_password_hashes()
     if migrated_passwords:
         print(f"✓ 已将 {migrated_passwords} 个旧账号密码迁移为安全哈希")

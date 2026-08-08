@@ -185,6 +185,102 @@ def list_login_audits():
         conn.close()
 
 
+@admin_bp.route('/ip-blocks', methods=['GET'])
+def list_ip_blocks():
+    """List active/inactive risk IP blocks for the root administrator."""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            admin_id, is_global, _, error = _admin_regions(cursor, session.get('user_id'))
+            if error:
+                return error
+            if not is_global:
+                return jsonify({"code": 403, "message": "仅总管理员可以管理风险 IP"}), 403
+            cursor.execute(
+                """
+                SELECT block_id, ip_address, reason, created_by, is_active, created_at
+                FROM ip_blocklist
+                ORDER BY is_active DESC, created_at DESC, block_id DESC
+                LIMIT 200
+                """
+            )
+            items = [{
+                "block_id": int(row["block_id"]),
+                "ip_address": row["ip_address"],
+                "reason": row.get("reason") or "",
+                "created_by": int(row["created_by"]) if row.get("created_by") is not None else None,
+                "is_active": bool(row["is_active"]),
+                "created_at": format_datetime(row.get("created_at")),
+            } for row in cursor.fetchall()]
+            return jsonify({"code": 200, "message": "风险 IP 列表获取成功", "data": {"items": items}})
+    finally:
+        conn.close()
+
+
+@admin_bp.route('/ip-blocks', methods=['POST'])
+def create_ip_block():
+    """Block an exact client IP (root administrator only)."""
+    data = request.get_json(silent=True) or {}
+    ip_address = str(data.get("ip_address") or data.get("raw_ip") or "").strip().split(",", 1)[0].strip()
+    reason = str(data.get("reason") or "").strip()[:255]
+    if not ip_address:
+        return jsonify({"code": 400, "message": "请提供要封禁的 IP"}), 400
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            admin_id, is_global, _, error = _admin_regions(cursor, session.get('user_id'))
+            if error:
+                return error
+            if not is_global:
+                return jsonify({"code": 403, "message": "仅总管理员可以管理风险 IP"}), 403
+            cursor.execute(
+                """
+                INSERT INTO ip_blocklist (ip_address, reason, created_by, is_active)
+                VALUES (%s, %s, %s, TRUE)
+                ON CONFLICT (ip_address) DO UPDATE
+                SET reason = EXCLUDED.reason,
+                    created_by = EXCLUDED.created_by,
+                    is_active = TRUE
+                RETURNING block_id
+                """,
+                (ip_address, reason or None, admin_id),
+            )
+            block_id = int(cursor.fetchone()["block_id"])
+            conn.commit()
+            return jsonify({
+                "code": 200,
+                "message": "已封禁该 IP",
+                "data": {"block_id": block_id, "ip_address": ip_address},
+            })
+    except Exception as exc:  # noqa: BLE001
+        conn.rollback()
+        return jsonify({"code": 500, "message": str(exc)}), 500
+    finally:
+        conn.close()
+
+
+@admin_bp.route('/ip-blocks/<int:block_id>', methods=['DELETE'])
+def deactivate_ip_block(block_id: int):
+    """Deactivate a blocked IP (root administrator only)."""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            _, is_global, _, error = _admin_regions(cursor, session.get('user_id'))
+            if error:
+                return error
+            if not is_global:
+                return jsonify({"code": 403, "message": "仅总管理员可以管理风险 IP"}), 403
+            cursor.execute(
+                "UPDATE ip_blocklist SET is_active = FALSE WHERE block_id = %s",
+                (block_id,),
+            )
+            conn.commit()
+            return jsonify({"code": 200, "message": "已解除封禁"})
+    finally:
+        conn.close()
+
+
 def _admin_regions(cursor, raw_admin_user_id):
     """Return (admin_id, is_global, regions, error_response).
 

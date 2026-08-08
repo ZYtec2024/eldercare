@@ -92,6 +92,40 @@ export async function fetchLoginAudits(adminUserId: number, page = 1, pageSize =
   }
 }
 
+export interface IpBlockItem {
+  blockId: number
+  ipAddress: string
+  reason?: string
+  createdBy?: number
+  isActive: boolean
+  createdAt: string
+}
+
+export async function fetchIpBlocks() {
+  const response = await http.get<ApiEnvelope<{ items: Array<Record<string, unknown>> }>>('/admin/ip-blocks')
+  return (response.data.data?.items ?? []).map((row): IpBlockItem => ({
+    blockId: Number(row.block_id ?? row.blockId),
+    ipAddress: String(row.ip_address ?? row.ipAddress ?? ''),
+    reason: row.reason ? String(row.reason) : undefined,
+    createdBy: row.created_by == null && row.createdBy == null ? undefined : Number(row.created_by ?? row.createdBy),
+    isActive: Boolean(row.is_active ?? row.isActive),
+    createdAt: String(row.created_at ?? row.createdAt ?? ''),
+  }))
+}
+
+export async function createIpBlock(ipAddress: string, reason?: string) {
+  const response = await http.post<ApiEnvelope<{ block_id?: number; ip_address?: string }>>('/admin/ip-blocks', {
+    ip_address: ipAddress,
+    reason: reason || undefined,
+  })
+  return response.data
+}
+
+export async function deactivateIpBlock(blockId: number) {
+  const response = await http.delete<ApiEnvelope<unknown>>(`/admin/ip-blocks/${blockId}`)
+  return response.data
+}
+
 function toNumber(value: unknown, fallback = 0) {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : fallback
