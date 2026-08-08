@@ -159,6 +159,17 @@ CREATE TABLE login_audit_logs (
 CREATE INDEX idx_login_audit_created_at ON login_audit_logs(created_at DESC);
 CREATE INDEX idx_login_audit_username ON login_audit_logs(username, created_at DESC);
 
+-- 风险 IP 封禁：总管理员可封禁/解除；应用启动时也会 ensure 建表。
+CREATE TABLE ip_blocklist (
+    block_id SERIAL PRIMARY KEY,
+    ip_address VARCHAR(64) NOT NULL UNIQUE,
+    reason VARCHAR(255) NULL,
+    created_by INT NULL REFERENCES users(user_id) ON DELETE SET NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_ip_blocklist_active ON ip_blocklist(is_active, ip_address);
+
 -- 7. 订单评价表
 CREATE TABLE reviews (
     review_id SERIAL PRIMARY KEY,
