@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import ipaddress
+import os
 import secrets
 from typing import Any
 
@@ -88,21 +89,150 @@ def mask_client_ip(value: Any) -> str:
     return f"{groups[0]}:{groups[1]}:****:****"
 
 
+def _parse_ip(value: Any) -> ipaddress._BaseAddress | None:
+    raw = str(value or "").strip().split(",", 1)[0].strip()
+    if not raw:
+        return None
+    try:
+        return ipaddress.ip_address(raw)
+    except ValueError:
+        return None
+
+
+def _trusted_proxy_networks() -> list[ipaddress._BaseNetwork]:
+    """CIDRs that may set X-Forwarded-For / X-Real-IP (Docker / host nginx)."""
+    configured = os.getenv(
+        "TRUSTED_PROXY_CIDRS",
+        "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
+    )
+    networks: list[ipaddress._BaseNetwork] = []
+    for part in configured.split(","):
+        text = part.strip()
+        if not text:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(text, strict=False))
+        except ValueError:
+            continue
+    return networks
+
+
+def _is_trusted_proxy(ip_text: str) -> bool:
+    parsed = _parse_ip(ip_text)
+    if parsed is None:
+        return False
+    return any(parsed in network for network in _trusted_proxy_networks())
+
+
+def _ignore_client_ips() -> set[str]:
+    """Optional known wrong edge IPs (e.g. fixed WAN of the VM itself)."""
+    configured = os.getenv("IGNORE_CLIENT_IPS", "")
+    return {part.strip() for part in configured.split(",") if part.strip()}
+
+
 def resolve_client_ip(headers: Any, remote_addr: Any) -> tuple[str, str, str]:
     """Return (raw_ip, masked_ip, source) for login risk review.
 
-    Prefer proxy headers in production, but keep the source explicit so local
-    Docker / reverse-proxy cases are visible in the audit page.
+    Only trust proxy headers when the TCP peer is a private/trusted reverse
+    proxy. Prefer CF/True-Client/X-Real-IP, then the first public hop in
+    X-Forwarded-For that is not listed in IGNORE_CLIENT_IPS (e.g. the VM WAN).
     """
-    forwarded = str(headers.get("X-Forwarded-For") or "").strip()
-    real_ip = str(headers.get("X-Real-IP") or "").strip()
     remote = str(remote_addr or "").strip()
+    ignore = _ignore_client_ips()
+
+    def _accept(candidate: Any, source: str) -> tuple[str, str, str] | None:
+        cleaned = str(candidate or "").strip().split(",", 1)[0].strip()
+        if not cleaned or cleaned in ignore or _parse_ip(cleaned) is None:
+            return None
+        return cleaned, mask_client_ip(cleaned), source
+
+    # Direct connection (or unknown peer): do not honor spoofable headers.
+    if remote and not _is_trusted_proxy(remote):
+        hit = _accept(remote, "remote")
+        if hit:
+            return hit
+
+    for header_name, source in (
+        ("CF-Connecting-IP", "cf"),
+        ("True-Client-IP", "true-client"),
+        ("X-Real-IP", "real-ip"),
+    ):
+        hit = _accept(headers.get(header_name), source)
+        if hit:
+            return hit
+
+    forwarded = str(headers.get("X-Forwarded-For") or "").strip()
     if forwarded:
-        raw = forwarded.split(",", 1)[0].strip()
-        return raw, mask_client_ip(raw), "forwarded"
-    if real_ip:
-        return real_ip, mask_client_ip(real_ip), "real-ip"
-    return remote or "unknown", mask_client_ip(remote), "remote"
+        parts = [part.strip() for part in forwarded.split(",") if part.strip()]
+        for part in parts:
+            if _is_trusted_proxy(part) or part in ignore:
+                continue
+            hit = _accept(part, "forwarded")
+            if hit:
+                return hit
+        hit = _accept(parts[0], "forwarded")
+        if hit:
+            return hit
+
+    hit = _accept(remote, "remote")
+    if hit:
+        return hit
+    return "unknown", mask_client_ip("unknown"), "remote"
+
+
+def ensure_ip_blocklist_schema() -> None:
+    """Create the risk-IP blocklist used by login and API guards."""
+    conn = get_db_connection()
+    if conn is None:
+        return
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ip_blocklist (
+                    block_id SERIAL PRIMARY KEY,
+                    ip_address VARCHAR(64) NOT NULL UNIQUE,
+                    reason VARCHAR(255) NULL,
+                    created_by INT NULL REFERENCES users(user_id) ON DELETE SET NULL,
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ip_blocklist_active ON ip_blocklist(is_active, ip_address)"
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def is_ip_blocked(raw_ip: str) -> bool:
+    """Return True when an exact IP is currently blocked."""
+    cleaned = str(raw_ip or "").strip().split(",", 1)[0].strip()
+    if not cleaned or cleaned == "unknown":
+        return False
+    conn = get_db_connection()
+    if conn is None:
+        return False
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT 1 FROM ip_blocklist
+                WHERE is_active = TRUE AND ip_address = %s
+                LIMIT 1
+                """,
+                (cleaned,),
+            )
+            return cursor.fetchone() is not None
+    except Exception:
+        return False
+    finally:
+        conn.close()
 
 
 def _portal_session_serializer() -> URLSafeTimedSerializer:

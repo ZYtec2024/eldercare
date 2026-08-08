@@ -29,6 +29,9 @@ server {
     location /api/ {
         proxy_pass http://backend:5000;
         proxy_set_header Host $host;
+        # Must be the browser client IP. If every login audit shows the VM's own
+        # public IP, the upstream is wrong — fix this hop first, or set
+        # IGNORE_CLIENT_IPS on the backend.
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
