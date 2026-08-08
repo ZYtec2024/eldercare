@@ -140,9 +140,18 @@ def resolve_client_ip(headers: Any, remote_addr: Any) -> tuple[str, str, str]:
     remote = str(remote_addr or "").strip()
     ignore = _ignore_client_ips()
 
-    def _accept(candidate: Any, source: str) -> tuple[str, str, str] | None:
+    def _accept(
+        candidate: Any,
+        source: str,
+        *,
+        skip_trusted: bool = False,
+    ) -> tuple[str, str, str] | None:
         cleaned = str(candidate or "").strip().split(",", 1)[0].strip()
         if not cleaned or cleaned in ignore or _parse_ip(cleaned) is None:
+            return None
+        # Nested Docker proxies often put the bridge IP into X-Real-IP; skip
+        # those and keep looking (usually the public hop is still in XFF).
+        if skip_trusted and _is_trusted_proxy(cleaned):
             return None
         return cleaned, mask_client_ip(cleaned), source
 
@@ -157,7 +166,7 @@ def resolve_client_ip(headers: Any, remote_addr: Any) -> tuple[str, str, str]:
         ("True-Client-IP", "true-client"),
         ("X-Real-IP", "real-ip"),
     ):
-        hit = _accept(headers.get(header_name), source)
+        hit = _accept(headers.get(header_name), source, skip_trusted=True)
         if hit:
             return hit
 
